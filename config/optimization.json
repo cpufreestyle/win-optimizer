@@ -1,0 +1,45 @@
+﻿{
+    "version": "1.0.0",
+    "description": "7代CPU老电脑优化配置文件",
+    "services": {
+        "safe_to_disable": [
+            { "name": "DiagTrack",         "desc": "诊断跟踪服务（遥测）" },
+            { "name": "dmwappushservice",  "desc": "WAP 推送消息路由" },
+            { "name": "WerSvc",            "desc": "Windows 错误报告" },
+            { "name": "XblAuthManager",    "desc": "Xbox Live 身份验证" },
+            { "name": "XblGameSave",       "desc": "Xbox Live 游戏保存" },
+            { "name": "XboxGipSvc",        "desc": "Xbox 附件管理" },
+            { "name": "XboxNetApiSvc",     "desc": "Xbox Live 网络服务" },
+            { "name": "Fax",               "desc": "传真服务" },
+            { "name": "RemoteRegistry",    "desc": "远程注册表" },
+            { "name": "RetailDemo",        "desc": "零售演示服务" }
+        ],
+        "recommended_to_disable": [
+            { "name": "SensorService",           "desc": "传感器服务" },
+            { "name": "SensrSvc",                "desc": "传感器监控" },
+            { "name": "WMPNetworkSvc",           "desc": "WMP 网络共享" },
+            { "name": "HvHost",                  "desc": "HV 主机服务" },
+            { "name": "vmickvpexchange",         "desc": "Hyper-V 数据交换" },
+            { "name": "vmicguestinterface",      "desc": "Hyper-V 来宾接口" },
+            { "name": "vmicshutdown",            "desc": "Hyper-V 关机" },
+            { "name": "vmicheartbeat",           "desc": "Hyper-V 心跳" },
+            { "name": "vmicvmsession",           "desc": "Hyper-V PowerShell" },
+            { "name": "vmicrdv",                 "desc": "Hyper-V 远程桌面" },
+            { "name": "vmictimesync",            "desc": "Hyper-V 时间同步" }
+        ]
+    },
+    "dns_options": {
+        "aliyun":      ["223.5.5.5", "223.6.6.6"],
+        "tencent":     ["119.29.29.29", "119.28.28.28"],
+        "114":         ["114.114.114.114", "114.114.115.115"],
+        "google":      ["8.8.8.8", "8.8.4.4"],
+        "cloudflare":  ["1.1.1.1", "1.0.0.1"]
+    },
+    "telemetry_tasks": [
+        "\\Microsoft\\Windows\\Application Experience\\Microsoft Compatibility Appraiser",
+        "\\Microsoft\\Windows\\Application Experience\\ProgramDataUpdater",
+        "\\Microsoft\\Windows\\Customer Experience Improvement Program\\Consolidator",
+        "\\Microsoft\\Windows\\Customer Experience Improvement Program\\UsbCeip",
+        "\\Microsoft\\Windows\\DiskDiagnostic\\Microsoft-Windows-DiskDiagnosticDataCollector"
+    ]
+}

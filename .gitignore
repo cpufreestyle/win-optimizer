@@ -1,0 +1,26 @@
+# 编译产物
+*.exe
+
+# 日志文件
+*.log
+
+# 备份目录
+backups/
+
+# 测试文件
+test-run.ps1
+
+# 临时文件
+*.tmp
+*.bak
+*.cache
+
+# IDE
+.vs/
+.vscode/
+.idea/
+
+# 系统文件
+Thumbs.db
+Desktop.ini
+.DS_Store
