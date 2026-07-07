@@ -774,15 +774,15 @@ function Build-ServicesPage {
     $page.Controls.Add($dgv)
 
     # 遥测任务
-    $chkTelemetry = New-Object System.Windows.Forms.CheckBox
-    $chkTelemetry.Location = New-Object System.Drawing.Point(20, 366)
-    $chkTelemetry.Size = New-Object System.Drawing.Size(400, 24)
-    $chkTelemetry.Text = "同时禁用遥测相关计划任务"
-    $chkTelemetry.Checked = $true
-    $chkTelemetry.Font = $Fonts.Body
-    $chkTelemetry.ForeColor = $Theme.TextMain
-    $chkTelemetry.BackColor = $Theme.BgDark
-    $page.Controls.Add($chkTelemetry)
+    $script:chkTelemetry = New-Object System.Windows.Forms.CheckBox
+    $script:chkTelemetry.Location = New-Object System.Drawing.Point(20, 366)
+    $script:chkTelemetry.Size = New-Object System.Drawing.Size(400, 24)
+    $script:chkTelemetry.Text = "同时禁用遥测相关计划任务"
+    $script:chkTelemetry.Checked = $true
+    $script:chkTelemetry.Font = $Fonts.Body
+    $script:chkTelemetry.ForeColor = $Theme.TextMain
+    $script:chkTelemetry.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkTelemetry)
 
     # 按钮
     $btnSafe = New-Button "仅安全禁用" 20 400 140 40 $Theme.Accent 10
@@ -799,10 +799,10 @@ function Build-ServicesPage {
     })
     $page.Controls.Add($btnAll)
 
-    $btnDisable = New-Button "执行禁用" 640 400 140 40 $Theme.Success 10
-    $btnDisable.Add_Click({
-        $btnDisable.Enabled = $false
-        $btnDisable.Text = "处理中..."
+    $script:btnDisable = New-Button "执行禁用" 640 400 140 40 $Theme.Success 10
+    $script:btnDisable.Add_Click({
+        $script:btnDisable.Enabled = $false
+        $script:btnDisable.Text = "处理中..."
         $MainForm.Refresh()
 
         # 备份
@@ -842,7 +842,7 @@ function Build-ServicesPage {
         }
 
         # 遥测任务
-        if ($chkTelemetry.Checked) {
+        if ($script:chkTelemetry.Checked) {
             $telemetryTasks = @(
                 @{Path="\Microsoft\Windows\Application Experience\"; Name="Microsoft Compatibility Appraiser"},
                 @{Path="\Microsoft\Windows\Application Experience\"; Name="ProgramDataUpdater"},
@@ -861,11 +861,11 @@ function Build-ServicesPage {
         }
 
         Write-Log "服务优化完成！已禁用 $disabledCount 个服务" "SUCCESS"
-        $btnDisable.Enabled = $true
-        $btnDisable.Text = "执行禁用"
+        $script:btnDisable.Enabled = $true
+        $script:btnDisable.Text = "执行禁用"
         [System.Windows.Forms.MessageBox]::Show("服务优化完成！`n已禁用 $disabledCount 个服务`n`n备份文件: $backupFile", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
     })
-    $page.Controls.Add($btnDisable)
+    $page.Controls.Add($script:btnDisable)
 }
 
 # ============================================================
@@ -947,8 +947,8 @@ function Build-StartupPage {
     $dgvStartup.DataSource = $dtStartup
     $page.Controls.Add($dgvStartup)
 
-    $btnDisableStartup = New-Button "禁用选中项" 20 446 160 40 $Theme.Success 10
-    $btnDisableStartup.Add_Click({
+    $script:btnDisableStartup = New-Button "禁用选中项" 20 446 160 40 $Theme.Success 10
+    $script:btnDisableStartup.Add_Click({
         if ($dgvStartup.SelectedRows.Count -eq 0) {
             [System.Windows.Forms.MessageBox]::Show("请先选择要禁用的启动项（点击行左侧选择整行）", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             return
@@ -986,7 +986,7 @@ function Build-StartupPage {
         [System.Windows.Forms.MessageBox]::Show("已禁用 $count 个启动项`n`n部分项需通过任务管理器->启动 禁用", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         Build-StartupPage
     })
-    $page.Controls.Add($btnDisableStartup)
+    $page.Controls.Add($script:btnDisableStartup)
 
     $btnRefreshStartup = New-Button "刷新列表" 190 446 120 40 $Theme.AccentDark 10
     $btnRefreshStartup.Add_Click({ Build-StartupPage })
@@ -1010,16 +1010,16 @@ function Build-VisualPage {
     $page.Controls.Add($lblDesc)
 
     # 选项卡片
-    $modes = @(
+    $script:modes = @(
         @{Title="最佳性能"; Desc="关闭所有动画和特效，仅保留字体平滑`n适合老旧电脑，最大化响应速度"; Color=$Theme.Success; Value=1}
         @{Title="平衡模式"; Desc="关闭大部分动画，保留基本效果`n适合日常使用"; Color=$Theme.Accent; Value=2}
         @{Title="自定义"; Desc="逐项选择要关闭的效果`n精细控制"; Color=$Theme.Warning; Value=3}
     )
 
     $yMode = 78
-    $radioBtns = @()
+    $script:radioBtns = @()
     for ($i = 0; $i -lt 3; $i++) {
-        $m = $modes[$i]
+        $m = $script:modes[$i]
         $card = New-Object System.Windows.Forms.Panel
         $card.Location = New-Object System.Drawing.Point(20, $yMode)
         $card.Size = New-Object System.Drawing.Size(760, 64)
@@ -1033,7 +1033,7 @@ function Build-VisualPage {
         $rb.BackColor = $Theme.BgCard
         $rb.ForeColor = $m.Color
         $card.Controls.Add($rb)
-        $radioBtns += $rb
+        $script:radioBtns += $rb
 
         $lblMode = New-Label $m.Title 44 12 200 26 $Fonts.Header $m.Color
         $card.Controls.Add($lblMode)
@@ -1044,15 +1044,15 @@ function Build-VisualPage {
         $yMode += 72
     }
 
-    $btnApplyVisual = New-Button "应用视觉效果" 20 ([int]($yMode + 10)) 200 44 $Theme.Success 11
-    $btnApplyVisual.Add_Click({
+    $script:btnApplyVisual = New-Button "应用视觉效果" 20 ([int]($yMode + 10)) 200 44 $Theme.Success 11
+    $script:btnApplyVisual.Add_Click({
         $selectedMode = 1
-        for ($i = 0; $i -lt 3; $i++) { if ($radioBtns[$i].Checked) { $selectedMode = $modes[$i].Value } }
+        for ($i = 0; $i -lt 3; $i++) { if ($script:radioBtns[$i].Checked) { $selectedMode = $script:modes[$i].Value } }
 
         $backupFile = Join-Path $script:BackupDir "visual_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
 
-        $btnApplyVisual.Enabled = $false
-        $btnApplyVisual.Text = "应用中..."
+        $script:btnApplyVisual.Enabled = $false
+        $script:btnApplyVisual.Text = "应用中..."
         $MainForm.Refresh()
 
         $visualKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
@@ -1096,11 +1096,11 @@ function Build-VisualPage {
         # 重启资源管理器
         try { Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue; Start-Sleep 1; Start-Process explorer } catch {}
 
-        $btnApplyVisual.Enabled = $true
-        $btnApplyVisual.Text = "应用视觉效果"
+        $script:btnApplyVisual.Enabled = $true
+        $script:btnApplyVisual.Text = "应用视觉效果"
         [System.Windows.Forms.MessageBox]::Show("视觉效果已应用！`n资源管理器已重启。", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
     })
-    $page.Controls.Add($btnApplyVisual)
+    $page.Controls.Add($script:btnApplyVisual)
 }
 
 # ============================================================
@@ -1121,19 +1121,19 @@ function Build-PowerPage {
 
     # 当前计划
     $currentPlan = @(powercfg /getactivescheme 2>&1) -join ' '
-    $lblCurrent = New-Label "当前计划: $currentPlan" 20 78 760 24 $Fonts.Sub $Theme.Warning
-    $page.Controls.Add($lblCurrent)
+    $script:lblCurrent = New-Label "当前计划: $currentPlan" 20 78 760 24 $Fonts.Sub $Theme.Warning
+    $page.Controls.Add($script:lblCurrent)
 
-    $plans = @(
+    $script:plans = @(
         @{Title="高性能模式"; Desc="最大化 CPU 性能，CPU 始终保持最高频率`n适合台式机或插电笔记本"; GUID="8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"; Color=$Theme.Success}
         @{Title="卓越性能模式"; Desc="比高性能更高，需解锁后可用`n极限性能优先"; GUID="e9a42b02-d5df-448d-aa00-03f14749eb61"; Color=$Theme.Accent}
         @{Title="平衡优化模式"; Desc="平衡基础上优化，禁用USB挂起`n适合笔记本电池模式"; GUID="381b4222-f694-41f0-9685-ff5bb260df2e"; Color=$Theme.Warning}
     )
 
     $yPlan = 112
-    $radioPowers = @()
+    $script:radioPowers = @()
     for ($i = 0; $i -lt 3; $i++) {
-        $p = $plans[$i]
+        $p = $script:plans[$i]
         $card = New-Object System.Windows.Forms.Panel
         $card.Location = New-Object System.Drawing.Point(20, $yPlan)
         $card.Size = New-Object System.Drawing.Size(760, 68)
@@ -1147,7 +1147,7 @@ function Build-PowerPage {
         $rb.BackColor = $Theme.BgCard
         $rb.ForeColor = $p.Color
         $card.Controls.Add($rb)
-        $radioPowers += $rb
+        $script:radioPowers += $rb
 
         $lblP = New-Label $p.Title 44 14 250 26 $Fonts.Header $p.Color
         $card.Controls.Add($lblP)
@@ -1159,35 +1159,35 @@ function Build-PowerPage {
     }
 
     # 选项
-    $chkUSB = New-Object System.Windows.Forms.CheckBox
-    $chkUSB.Location = New-Object System.Drawing.Point(20, $yPlan)
-    $chkUSB.Size = New-Object System.Drawing.Size(300, 24)
-    $chkUSB.Text = "禁用 USB 选择性挂起"
-    $chkUSB.Checked = $true
-    $chkUSB.Font = $Fonts.Body
-    $chkUSB.ForeColor = $Theme.TextMain
-    $chkUSB.BackColor = $Theme.BgDark
-    $page.Controls.Add($chkUSB)
+    $script:chkUSB = New-Object System.Windows.Forms.CheckBox
+    $script:chkUSB.Location = New-Object System.Drawing.Point(20, $yPlan)
+    $script:chkUSB.Size = New-Object System.Drawing.Size(300, 24)
+    $script:chkUSB.Text = "禁用 USB 选择性挂起"
+    $script:chkUSB.Checked = $true
+    $script:chkUSB.Font = $Fonts.Body
+    $script:chkUSB.ForeColor = $Theme.TextMain
+    $script:chkUSB.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkUSB)
 
-    $chkPCI = New-Object System.Windows.Forms.CheckBox
-    $chkPCI.Location = New-Object System.Drawing.Point(330, $yPlan)
-    $chkPCI.Size = New-Object System.Drawing.Size(300, 24)
-    $chkPCI.Text = "关闭 PCI Express 电源管理"
-    $chkPCI.Checked = $true
-    $chkPCI.Font = $Fonts.Body
-    $chkPCI.ForeColor = $Theme.TextMain
-    $chkPCI.BackColor = $Theme.BgDark
-    $page.Controls.Add($chkPCI)
+    $script:chkPCI = New-Object System.Windows.Forms.CheckBox
+    $script:chkPCI.Location = New-Object System.Drawing.Point(330, $yPlan)
+    $script:chkPCI.Size = New-Object System.Drawing.Size(300, 24)
+    $script:chkPCI.Text = "关闭 PCI Express 电源管理"
+    $script:chkPCI.Checked = $true
+    $script:chkPCI.Font = $Fonts.Body
+    $script:chkPCI.ForeColor = $Theme.TextMain
+    $script:chkPCI.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkPCI)
 
     $yPlan += 32
 
-    $btnApplyPower = New-Button "应用电源计划" 20 ([int]($yPlan + 10)) 200 44 $Theme.Success 11
-    $btnApplyPower.Add_Click({
-        $selectedGUID = $plans[0].GUID
-        for ($i = 0; $i -lt 3; $i++) { if ($radioPowers[$i].Checked) { $selectedGUID = $plans[$i].GUID } }
+    $script:btnApplyPower = New-Button "应用电源计划" 20 ([int]($yPlan + 10)) 200 44 $Theme.Success 11
+    $script:btnApplyPower.Add_Click({
+        $selectedGUID = $script:plans[0].GUID
+        for ($i = 0; $i -lt 3; $i++) { if ($script:radioPowers[$i].Checked) { $selectedGUID = $script:plans[$i].GUID } }
 
-        $btnApplyPower.Enabled = $false
-        $btnApplyPower.Text = "应用中..."
+        $script:btnApplyPower.Enabled = $false
+        $script:btnApplyPower.Text = "应用中..."
         $MainForm.Refresh()
 
         # 卓越性能需要解锁
@@ -1205,26 +1205,26 @@ function Build-PowerPage {
             Write-Log "CPU 处理器状态: 最低100% / 最高100%" "SUCCESS"
         }
 
-        if ($chkUSB.Checked) {
+        if ($script:chkUSB.Checked) {
             powercfg /setacvalueindex $selectedGUID SUB_USB USBSELSUSP 0 2>&1 | Out-Null
             Write-Log "USB 选择性挂起: 已禁用" "SUCCESS"
         }
-        if ($chkPCI.Checked) {
+        if ($script:chkPCI.Checked) {
             powercfg /setacvalueindex $selectedGUID SUB_PCIEXPRESS ASPM 0 2>&1 | Out-Null
             Write-Log "PCI Express 电源管理: 已关闭" "SUCCESS"
         }
 
         powercfg /setactive $selectedGUID 2>&1 | Out-Null
 
-        $btnApplyPower.Enabled = $true
-        $btnApplyPower.Text = "应用电源计划"
+        $script:btnApplyPower.Enabled = $true
+        $script:btnApplyPower.Text = "应用电源计划"
 
         $newPlan = @(powercfg /getactivescheme 2>&1) -join ' '
-        $lblCurrent.Text = "当前计划: $newPlan"
+        $script:lblCurrent.Text = "当前计划: $newPlan"
 
         [System.Windows.Forms.MessageBox]::Show("电源计划已切换！", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
     })
-    $page.Controls.Add($btnApplyPower)
+    $page.Controls.Add($script:btnApplyPower)
 }
 
 # ============================================================
@@ -1274,57 +1274,57 @@ function Build-DiskPage {
 
     # 操作选项
     $yDisk += 10
-    $chkTRIM = New-Object System.Windows.Forms.CheckBox
-    $chkTRIM.Location = New-Object System.Drawing.Point(20, $yDisk)
-    $chkTRIM.Size = New-Object System.Drawing.Size(250, 24)
-    $chkTRIM.Text = "SSD TRIM 优化"
-    $chkTRIM.Checked = $true
-    $chkTRIM.Font = $Fonts.Body
-    $chkTRIM.ForeColor = $Theme.TextMain
-    $chkTRIM.BackColor = $Theme.BgDark
-    $page.Controls.Add($chkTRIM)
+    $script:chkTRIM = New-Object System.Windows.Forms.CheckBox
+    $script:chkTRIM.Location = New-Object System.Drawing.Point(20, $yDisk)
+    $script:chkTRIM.Size = New-Object System.Drawing.Size(250, 24)
+    $script:chkTRIM.Text = "SSD TRIM 优化"
+    $script:chkTRIM.Checked = $true
+    $script:chkTRIM.Font = $Fonts.Body
+    $script:chkTRIM.ForeColor = $Theme.TextMain
+    $script:chkTRIM.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkTRIM)
 
-    $chkDefrag = New-Object System.Windows.Forms.CheckBox
-    $chkDefrag.Location = New-Object System.Drawing.Point(280, $yDisk)
-    $chkDefrag.Size = New-Object System.Drawing.Size(250, 24)
-    $chkDefrag.Text = "HDD 碎片整理"
-    $chkDefrag.Checked = $true
-    $chkDefrag.Font = $Fonts.Body
-    $chkDefrag.ForeColor = $Theme.TextMain
-    $chkDefrag.BackColor = $Theme.BgDark
-    $page.Controls.Add($chkDefrag)
+    $script:chkDefrag = New-Object System.Windows.Forms.CheckBox
+    $script:chkDefrag.Location = New-Object System.Drawing.Point(280, $yDisk)
+    $script:chkDefrag.Size = New-Object System.Drawing.Size(250, 24)
+    $script:chkDefrag.Text = "HDD 碎片整理"
+    $script:chkDefrag.Checked = $true
+    $script:chkDefrag.Font = $Fonts.Body
+    $script:chkDefrag.ForeColor = $Theme.TextMain
+    $script:chkDefrag.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkDefrag)
 
-    $chkWinSxS = New-Object System.Windows.Forms.CheckBox
-    $chkWinSxS.Location = New-Object System.Drawing.Point(20, [int]($yDisk + 30))
-    $chkWinSxS.Size = New-Object System.Drawing.Size(250, 24)
-    $chkWinSxS.Text = "清理 WinSxS 组件存储"
-    $chkWinSxS.Checked = $true
-    $chkWinSxS.Font = $Fonts.Body
-    $chkWinSxS.ForeColor = $Theme.TextMain
-    $chkWinSxS.BackColor = $Theme.BgDark
-    $page.Controls.Add($chkWinSxS)
+    $script:chkWinSxS = New-Object System.Windows.Forms.CheckBox
+    $script:chkWinSxS.Location = New-Object System.Drawing.Point(20, [int]($yDisk + 30))
+    $script:chkWinSxS.Size = New-Object System.Drawing.Size(250, 24)
+    $script:chkWinSxS.Text = "清理 WinSxS 组件存储"
+    $script:chkWinSxS.Checked = $true
+    $script:chkWinSxS.Font = $Fonts.Body
+    $script:chkWinSxS.ForeColor = $Theme.TextMain
+    $script:chkWinSxS.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkWinSxS)
 
-    $chkCompact = New-Object System.Windows.Forms.CheckBox
-    $chkCompact.Location = New-Object System.Drawing.Point(280, [int]($yDisk + 30))
-    $chkCompact.Size = New-Object System.Drawing.Size(250, 24)
-    $chkCompact.Text = "压缩系统文件 (CompactOS)"
-    $chkCompact.Checked = $false
-    $chkCompact.Font = $Fonts.Body
-    $chkCompact.ForeColor = $Theme.TextMain
-    $chkCompact.BackColor = $Theme.BgDark
-    $page.Controls.Add($chkCompact)
+    $script:chkCompact = New-Object System.Windows.Forms.CheckBox
+    $script:chkCompact.Location = New-Object System.Drawing.Point(280, [int]($yDisk + 30))
+    $script:chkCompact.Size = New-Object System.Drawing.Size(250, 24)
+    $script:chkCompact.Text = "压缩系统文件 (CompactOS)"
+    $script:chkCompact.Checked = $false
+    $script:chkCompact.Font = $Fonts.Body
+    $script:chkCompact.ForeColor = $Theme.TextMain
+    $script:chkCompact.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkCompact)
 
     $yDisk += 70
 
-    $btnOptimize = New-Button "开始优化" 20 $yDisk 200 44 $Theme.Success 11
-    $btnOptimize.Add_Click({
-        $btnOptimize.Enabled = $false
-        $btnOptimize.Text = "优化中...(可能需要数分钟)"
+    $script:btnDiskOpt = New-Button "开始优化" 20 $yDisk 200 44 $Theme.Success 11
+    $script:btnDiskOpt.Add_Click({
+        $script:btnDiskOpt.Enabled = $false
+        $script:btnDiskOpt.Text = "优化中...(可能需要数分钟)"
         $MainForm.Refresh()
         $physicalDisks = @(Get-PhysicalDisk -ErrorAction SilentlyContinue)
         $volumes = @(Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter -and $_.DriveType -eq "Fixed" })
 
-        if ($chkTRIM.Checked -or $chkDefrag.Checked) {
+        if ($script:chkTRIM.Checked -or $script:chkDefrag.Checked) {
             foreach ($vol in $volumes) {
                 $partition = Get-Partition -DriveLetter $vol.DriveLetter -ErrorAction SilentlyContinue
                 if ($partition) {
@@ -1332,13 +1332,13 @@ function Build-DiskPage {
                     $mediaType = if ($pd) { $pd.MediaType } else { "Unknown" }
 
                     $drive = "$($vol.DriveLetter):"
-                    if ($mediaType -eq "SSD" -and $chkTRIM.Checked) {
+                    if ($mediaType -eq "SSD" -and $script:chkTRIM.Checked) {
                         try {
                             Optimize-Volume -DriveLetter $vol.DriveLetter -ReTrim -ErrorAction Stop
                             Write-Log "[优化] $drive TRIM 完成" "SUCCESS"
                         } catch { Write-Log "[跳过] $drive TRIM" "WARN" }
                     }
-                    elseif ($mediaType -eq "HDD" -and $chkDefrag.Checked) {
+                    elseif ($mediaType -eq "HDD" -and $script:chkDefrag.Checked) {
                         try {
                             Optimize-Volume -DriveLetter $vol.DriveLetter -Defrag -ErrorAction Stop
                             Write-Log "[优化] $drive 碎片整理完成" "SUCCESS"
@@ -1348,24 +1348,24 @@ function Build-DiskPage {
             }
         }
 
-        if ($chkWinSxS.Checked) {
+        if ($script:chkWinSxS.Checked) {
             Write-Log "正在清理 WinSxS 组件存储..."
             Dism.exe /Online /Cleanup-Image /StartComponentCleanup 2>&1 | Out-Null
             Write-Log "WinSxS 组件存储清理完成" "SUCCESS"
         }
 
-        if ($chkCompact.Checked) {
+        if ($script:chkCompact.Checked) {
             Write-Log "正在压缩系统文件..."
             Compact.exe /CompactOS:always 2>&1 | Out-Null
             Write-Log "系统文件压缩完成" "SUCCESS"
         }
 
         Write-Log "磁盘优化完成！" "SUCCESS"
-        $btnOptimize.Enabled = $true
-        $btnOptimize.Text = "开始优化"
+        $script:btnDiskOpt.Enabled = $true
+        $script:btnDiskOpt.Text = "开始优化"
         [System.Windows.Forms.MessageBox]::Show("磁盘优化完成！", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
     })
-    $page.Controls.Add($btnOptimize)
+    $page.Controls.Add($script:btnDiskOpt)
 }
 
 # ============================================================
@@ -1389,68 +1389,68 @@ function Build-NetworkPage {
     $lblDNS = New-Label "DNS 设置:" 20 $y 100 24 $Fonts.Body $Theme.TextBright
     $page.Controls.Add($lblDNS)
 
-    $cbDNS = New-Object System.Windows.Forms.ComboBox
-    $cbDNS.Location = New-Object System.Drawing.Point(130, [int]($y - 2))
-    $cbDNS.Size = New-Object System.Drawing.Size(300, 28)
-    $cbDNS.Font = $Fonts.Body
-    $cbDNS.BackColor = $Theme.BgInput
-    $cbDNS.ForeColor = $Theme.TextMain
-    $cbDNS.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
-    $cbDNS.Items.Add("保持当前 DNS") | Out-Null
-    $cbDNS.Items.Add("Cloudflare (1.1.1.1 / 1.0.0.1)") | Out-Null
-    $cbDNS.Items.Add("Google (8.8.8.8 / 8.8.4.4)") | Out-Null
-    $cbDNS.Items.Add("阿里 DNS (223.5.5.5 / 223.6.6.6)") | Out-Null
-    $cbDNS.Items.Add("114 DNS (114.114.114.114 / 114.114.115.115)") | Out-Null
-    $cbDNS.SelectedIndex = 0
-    $page.Controls.Add($cbDNS)
+    $script:cbDNS = New-Object System.Windows.Forms.ComboBox
+    $script:cbDNS.Location = New-Object System.Drawing.Point(130, [int]($y - 2))
+    $script:cbDNS.Size = New-Object System.Drawing.Size(300, 28)
+    $script:cbDNS.Font = $Fonts.Body
+    $script:cbDNS.BackColor = $Theme.BgInput
+    $script:cbDNS.ForeColor = $Theme.TextMain
+    $script:cbDNS.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+    $script:cbDNS.Items.Add("保持当前 DNS") | Out-Null
+    $script:cbDNS.Items.Add("Cloudflare (1.1.1.1 / 1.0.0.1)") | Out-Null
+    $script:cbDNS.Items.Add("Google (8.8.8.8 / 8.8.4.4)") | Out-Null
+    $script:cbDNS.Items.Add("阿里 DNS (223.5.5.5 / 223.6.6.6)") | Out-Null
+    $script:cbDNS.Items.Add("114 DNS (114.114.114.114 / 114.114.115.115)") | Out-Null
+    $script:cbDNS.SelectedIndex = 0
+    $page.Controls.Add($script:cbDNS)
 
     $y += 40
 
-    $chkTCP = New-Object System.Windows.Forms.CheckBox
-    $chkTCP.Location = New-Object System.Drawing.Point(20, $y)
-    $chkTCP.Size = New-Object System.Drawing.Size(300, 24)
-    $chkTCP.Text = "TCP 自动调优 (Auto Tuning)"
-    $chkTCP.Checked = $true
-    $chkTCP.Font = $Fonts.Body
-    $chkTCP.ForeColor = $Theme.TextMain
-    $chkTCP.BackColor = $Theme.BgDark
-    $page.Controls.Add($chkTCP)
+    $script:chkTCP = New-Object System.Windows.Forms.CheckBox
+    $script:chkTCP.Location = New-Object System.Drawing.Point(20, $y)
+    $script:chkTCP.Size = New-Object System.Drawing.Size(300, 24)
+    $script:chkTCP.Text = "TCP 自动调优 (Auto Tuning)"
+    $script:chkTCP.Checked = $true
+    $script:chkTCP.Font = $Fonts.Body
+    $script:chkTCP.ForeColor = $Theme.TextMain
+    $script:chkTCP.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkTCP)
 
     $y += 30
 
-    $chkRSS = New-Object System.Windows.Forms.CheckBox
-    $chkRSS.Location = New-Object System.Drawing.Point(20, $y)
-    $chkRSS.Size = New-Object System.Drawing.Size(300, 24)
-    $chkRSS.Text = "RSS 接收端缩放"
-    $chkRSS.Checked = $true
-    $chkRSS.Font = $Fonts.Body
-    $chkRSS.ForeColor = $Theme.TextMain
-    $chkRSS.BackColor = $Theme.BgDark
-    $page.Controls.Add($chkRSS)
+    $script:chkRSS = New-Object System.Windows.Forms.CheckBox
+    $script:chkRSS.Location = New-Object System.Drawing.Point(20, $y)
+    $script:chkRSS.Size = New-Object System.Drawing.Size(300, 24)
+    $script:chkRSS.Text = "RSS 接收端缩放"
+    $script:chkRSS.Checked = $true
+    $script:chkRSS.Font = $Fonts.Body
+    $script:chkRSS.ForeColor = $Theme.TextMain
+    $script:chkRSS.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkRSS)
 
     $y += 30
 
-    $chkRSC = New-Object System.Windows.Forms.CheckBox
-    $chkRSC.Location = New-Object System.Drawing.Point(20, $y)
-    $chkRSC.Size = New-Object System.Drawing.Size(300, 24)
-    $chkRSC.Text = "RSC 接收段合并"
-    $chkRSC.Checked = $true
-    $chkRSC.Font = $Fonts.Body
-    $chkRSC.ForeColor = $Theme.TextMain
-    $chkRSC.BackColor = $Theme.BgDark
-    $page.Controls.Add($chkRSC)
+    $script:chkRSC = New-Object System.Windows.Forms.CheckBox
+    $script:chkRSC.Location = New-Object System.Drawing.Point(20, $y)
+    $script:chkRSC.Size = New-Object System.Drawing.Size(300, 24)
+    $script:chkRSC.Text = "RSC 接收段合并"
+    $script:chkRSC.Checked = $true
+    $script:chkRSC.Font = $Fonts.Body
+    $script:chkRSC.ForeColor = $Theme.TextMain
+    $script:chkRSC.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkRSC)
 
     $y += 30
 
-    $chkDNSCache = New-Object System.Windows.Forms.CheckBox
-    $chkDNSCache.Location = New-Object System.Drawing.Point(20, $y)
-    $chkDNSCache.Size = New-Object System.Drawing.Size(300, 24)
-    $chkDNSCache.Text = "刷新 DNS 缓存"
-    $chkDNSCache.Checked = $true
-    $chkDNSCache.Font = $Fonts.Body
-    $chkDNSCache.ForeColor = $Theme.TextMain
-    $chkDNSCache.BackColor = $Theme.BgDark
-    $page.Controls.Add($chkDNSCache)
+    $script:chkDNSCache = New-Object System.Windows.Forms.CheckBox
+    $script:chkDNSCache.Location = New-Object System.Drawing.Point(20, $y)
+    $script:chkDNSCache.Size = New-Object System.Drawing.Size(300, 24)
+    $script:chkDNSCache.Text = "刷新 DNS 缓存"
+    $script:chkDNSCache.Checked = $true
+    $script:chkDNSCache.Font = $Fonts.Body
+    $script:chkDNSCache.ForeColor = $Theme.TextMain
+    $script:chkDNSCache.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkDNSCache)
 
     $y += 40
 
@@ -1464,13 +1464,13 @@ function Build-NetworkPage {
 
     $y += 40
 
-    $btnOptimize = New-Button "开始优化" 20 $y 200 44 $Theme.Success 11
-    $btnOptimize.Add_Click({
-        $btnOptimize.Enabled = $false
-        $btnOptimize.Text = "优化中..."
+    $script:btnNetOpt = New-Button "开始优化" 20 $y 200 44 $Theme.Success 11
+    $script:btnNetOpt.Add_Click({
+        $script:btnNetOpt.Enabled = $false
+        $script:btnNetOpt.Text = "优化中..."
         $MainForm.Refresh()
 
-        $dnsChoice = $cbDNS.SelectedIndex
+        $dnsChoice = $script:cbDNS.SelectedIndex
 
         if ($dnsChoice -gt 0) {
             $dnsServers = switch ($dnsChoice) {
@@ -1491,28 +1491,28 @@ function Build-NetworkPage {
             }
         }
 
-        if ($chkTCP.Checked) {
+        if ($script:chkTCP.Checked) {
             try {
                 netsh int tcp set global autotuninglevel=normal 2>&1 | Out-Null
                 Write-Log "[TCP] 自动调优已启用" "SUCCESS"
             } catch { Write-Log "[TCP] 设置失败" "WARN" }
         }
 
-        if ($chkRSS.Checked) {
+        if ($script:chkRSS.Checked) {
             try {
                 Enable-NetAdapterRss -Name "*" -ErrorAction SilentlyContinue
                 Write-Log "[RSS] 接收端缩放已启用" "SUCCESS"
             } catch { Write-Log "[RSS] 设置失败" "WARN" }
         }
 
-        if ($chkRSC.Checked) {
+        if ($script:chkRSC.Checked) {
             try {
                 Enable-NetAdapterRsc -Name "*" -ErrorAction SilentlyContinue
                 Write-Log "[RSC] 接收段合并已启用" "SUCCESS"
             } catch { Write-Log "[RSC] 设置失败" "WARN" }
         }
 
-        if ($chkDNSCache.Checked) {
+        if ($script:chkDNSCache.Checked) {
             try {
                 Clear-DnsClientCache
                 Write-Log "[DNS] 缓存已刷新" "SUCCESS"
@@ -1520,11 +1520,11 @@ function Build-NetworkPage {
         }
 
         Write-Log "网络优化完成！" "SUCCESS"
-        $btnOptimize.Enabled = $true
-        $btnOptimize.Text = "开始优化"
+        $script:btnNetOpt.Enabled = $true
+        $script:btnNetOpt.Text = "开始优化"
         [System.Windows.Forms.MessageBox]::Show("网络优化完成！", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
     })
-    $page.Controls.Add($btnOptimize)
+    $page.Controls.Add($script:btnNetOpt)
 }
 
 # ============================================================
