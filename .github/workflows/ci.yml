@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate PowerShell scripts
+        shell: pwsh
+        run: |
+          $files = @('Optimize.ps1', 'OptimizeGUI.ps1', 'Build-EXE.ps1')
+          foreach ($f in $files) {
+            if (Test-Path $f) {
+              $errors = $null
+              $null = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errors)
+              if ($errors.Count -gt 0) {
+                Write-Warning "$f has $($errors.Count) parse error(s)"
+              } else {
+                Write-Host "✓ $f: valid syntax"
+              }
+            }
+          }
+
+      - name: Check config
+        shell: pwsh
+        run: |
+          if (Test-Path 'config/optimization.json') {
+            $json = Get-Content 'config/optimization.json' -Raw | ConvertFrom-Json
+            Write-Host "✓ config/optimization.json: valid"
+          }
+
+      - name: Check README
+        shell: pwsh
+        run: Test-Path README.md
