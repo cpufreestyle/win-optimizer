@@ -32,9 +32,10 @@ echo     7代CPU老电脑 Windows 优化工具
 echo   ================================================================
 echo.
 
-REM 检查 EXE 是否存在（优先使用 Final 版本）
+REM 检查 EXE 是否存在（优先使用最新版本）
 set exe_path=
-if exist "%~dp0PC-Optimizer-Final.exe" set exe_path=%~dp0PC-Optimizer-Final.exe
+if exist "%~dp0PC-Optimizer-Debug.exe" set exe_path=%~dp0PC-Optimizer-Debug.exe
+if exist "%~dp0PC-Optimizer-Final.exe" if not defined exe_path set exe_path=%~dp0PC-Optimizer-Final.exe
 if exist "%~dp0PC-Optimizer-New.exe" if not defined exe_path set exe_path=%~dp0PC-Optimizer-New.exe
 if exist "%~dp0PC-Optimizer.exe" if not defined exe_path set exe_path=%~dp0PC-Optimizer.exe
 

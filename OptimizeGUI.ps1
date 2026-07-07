@@ -5,6 +5,16 @@
     基于 Windows Forms 的现代化深色主题 GUI，兼容 PowerShell 5.1。
 #>
 
+# ============================================================
+#  全局错误捕获（PS2EXE -noConsole 模式下静默崩溃的防护）
+# ============================================================
+trap {
+    $errFile = Join-Path ([System.AppDomain]::CurrentDomain.BaseDirectory.TrimEnd('\', '/')) "crash.log"
+    $errMsg = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] CRASH: $($_.Exception.Message)`r`nLine: $($_.InvocationInfo.ScriptLineNumber)`r`nText: $($_.InvocationInfo.Line)`r`n`r`n"
+    try { [System.IO.File]::AppendAllText($errFile, $errMsg, [System.Text.Encoding]::UTF8) } catch {}
+    [System.Windows.Forms.MessageBox]::Show("程序出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    break
+}
 
 # ============================================================
 #  加载程序集（PS2EXE 兼容：用 LoadWithPartialName 替代 Add-Type）
