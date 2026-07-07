@@ -83,20 +83,22 @@ function Write-Log {
     $line = "[$timestamp] [$Level] $Message"
     # PS2EXE 兼容：用 .NET 方法替代 Add-Content
     try { [System.IO.File]::AppendAllText($script:LogFile, "$line`r`n", [System.Text.Encoding]::UTF8) } catch {}
-    # 同时输出到 GUI 日志
-    if ($script:LogTextBox -and -not $script:LogTextBox.IsDisposed) {
+    # 同时输出到 GUI 日志（必须检查 IsHandleCreated，否则 PS2EXE 启动时崩溃）
+    if ($script:LogTextBox -and -not $script:LogTextBox.IsDisposed -and $script:LogTextBox.IsHandleCreated) {
         $color = switch ($Level) {
             "ERROR"   { $Theme.Error }
             "WARN"    { $Theme.Warning }
             "SUCCESS" { $Theme.Success }
             default   { $Theme.TextDim }
         }
-        $script:LogTextBox.Invoke([Action]{
-            $script:LogTextBox.SelectionStart = $script:LogTextBox.TextLength
-            $script:LogTextBox.SelectionColor = $color
-            $script:LogTextBox.AppendText("$line`n")
-            $script:LogTextBox.ScrollToCaret()
-        })
+        try {
+            $script:LogTextBox.Invoke([Action]{
+                $script:LogTextBox.SelectionStart = $script:LogTextBox.TextLength
+                $script:LogTextBox.SelectionColor = $color
+                $script:LogTextBox.AppendText("$line`n")
+                $script:LogTextBox.ScrollToCaret()
+            })
+        } catch {}
     }
 }
 
@@ -810,7 +812,7 @@ function Build-ServicesPage {
             $svcName = $dt.Rows[$i]["服务名称"]
             $service = Get-Service -Name $svcName -ErrorAction SilentlyContinue
             if ($service) {
-                $startMode = (Get-CimInstance Win32_Service -Filter "Name='$svcName'").StartMode
+                $startMode = @(Get-CimInstance Win32_Service -Filter "Name='$svcName'" -ErrorAction SilentlyContinue)[0].StartMode
                 $backupData += [PSCustomObject]@{ Name=$svcName; Status=$service.Status; StartType=$startMode; Date=(Get-Date -Format "yyyy-MM-dd HH:mm:ss") }
             }
         }
@@ -1118,10 +1120,8 @@ function Build-PowerPage {
     $page.Controls.Add($lblDesc)
 
     # 当前计划
-    $currentPlan = powercfg /getactivescheme 2>&1
+    $currentPlan = @(powercfg /getactivescheme 2>&1) -join ' '
     $lblCurrent = New-Label "当前计划: $currentPlan" 20 78 760 24 $Fonts.Sub $Theme.Warning
-    # powercfg 可能返回多行，强制取第一行
-    if ($lblCurrent.Text -is [array]) { $lblCurrent.Text = $lblCurrent.Text[0] }
     $page.Controls.Add($lblCurrent)
 
     $plans = @(
@@ -1219,7 +1219,7 @@ function Build-PowerPage {
         $btnApplyPower.Enabled = $true
         $btnApplyPower.Text = "应用电源计划"
 
-        $newPlan = powercfg /getactivescheme 2>&1
+        $newPlan = @(powercfg /getactivescheme 2>&1) -join ' '
         $lblCurrent.Text = "当前计划: $newPlan"
 
         [System.Windows.Forms.MessageBox]::Show("电源计划已切换！", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
@@ -1244,7 +1244,7 @@ function Build-DiskPage {
     $page.Controls.Add($lblDesc)
 
     # 磁盘列表
-    $physicalDisks = Get-PhysicalDisk | Select-Object DeviceId, FriendlyName, MediaType, Size
+    $physicalDisks = @(Get-PhysicalDisk -ErrorAction SilentlyContinue | Select-Object DeviceId, FriendlyName, MediaType, Size)
 
     $yDisk = 76
     $lblDiskInfo = New-Label "物理磁盘:" 20 $yDisk 760 24 $Fonts.Sub $Theme.Accent
@@ -1252,7 +1252,7 @@ function Build-DiskPage {
     $yDisk += 30
 
     foreach ($pd in $physicalDisks) {
-        $sizeGB = [math]::Round($pd.Size / 1GB, 0)
+        $sizeGB = if ($pd.Size) { [math]::Round([double]$pd.Size / 1GB, 0) } else { 0 }
         $typeColor = if ($pd.MediaType -eq "SSD") { $Theme.Success } else { $Theme.Warning }
         $card = New-Object System.Windows.Forms.Panel
         $card.Location = New-Object System.Drawing.Point(20, $yDisk)
@@ -1321,8 +1321,8 @@ function Build-DiskPage {
         $btnOptimize.Enabled = $false
         $btnOptimize.Text = "优化中...(可能需要数分钟)"
         $MainForm.Refresh()
-        $physicalDisks = Get-PhysicalDisk -ErrorAction SilentlyContinue
-        $volumes = Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveType -eq "Fixed" }
+        $physicalDisks = @(Get-PhysicalDisk -ErrorAction SilentlyContinue)
+        $volumes = @(Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter -and $_.DriveType -eq "Fixed" })
 
         if ($chkTRIM.Checked -or $chkDefrag.Checked) {
             foreach ($vol in $volumes) {
