@@ -1,12 +1,17 @@
-﻿﻿# PC-Optimizer-7thGen 🔧
+﻿# PC-Optimizer-7thGen 🔧
 
 > 专为 **7 代及更老 CPU** 的 Windows 10/11 电脑设计的系统优化工具集
+> v2.0 已合并 `windows-utils` 仓库的所有实用工具
 
 ## 📋 项目简介
 
-本项目是一个基于 PowerShell 的 Windows 系统优化工具，专为搭载 Intel 7 代及更早处理器（如 i3/i5/i7-7xxx 及更早型号）的老旧电脑打造。通过清理临时文件、禁用不必要的服务和启动项、优化视觉效果和电源计划、整理磁盘等操作，显著提升老电脑的运行速度和响应能力。
+本项目是一个基于 PowerShell + Python 的 Windows 系统优化工具，专为搭载 Intel 7 代及更早处理器（如 i3/i5/i7-7xxx 及更早型号）的老旧电脑打造。通过清理临时文件、禁用不必要的服务和启动项、优化视觉效果和电源计划、整理磁盘等操作，显著提升老电脑的运行速度和响应能力。
+
+v2.0 合并了原 `windows-utils` 仓库的 4 个实用工具（C盘清理、剪贴板修复、网络重置、移除内部标记），成为统一的 Windows 工具箱。
 
 ## ✨ 功能特性
+
+### 系统优化模块（PowerShell 脚本）
 
 | 模块 | 功能 | 预期效果 |
 |------|------|----------|
@@ -20,41 +25,48 @@
 | 🌐 网络优化 | 设置快速 DNS、优化 TCP 参数、启用 RSS/RSC | 提升网络响应速度 |
 | 💾 备份与恢复 | 所有优化前自动备份，支持一键恢复 | 安全可逆 |
 
+### 实用工具模块（Python 脚本，原 windows-utils）
+
+| 工具 | 语言 | 说明 |
+|------|------|------|
+| 💾 C盘深度清理 | Python + Tkinter GUI | 扫描并清理系统临时文件、缓存、回收站等（含 GUI 进度条） |
+| 📋 剪贴板修复 | Python + BAT | 重启剪贴板服务，修复复制粘贴失效问题 |
+| 🌐 网络重置工具 | Python GUI + BAT | 一键重置网络设置，解决网络连接问题 |
+| 🔧 移除内部标记 | HTML | 浏览器工具，移除内部标记/水印 |
+
 ## 🚀 快速开始
 
-### 方式一：EXE 可执行程序（最推荐）
+### 方式一：统一启动器（推荐）
+
+1. 双击 `StartAll.bat` 查看所有可用工具
+2. 或直接双击 `tools/` 目录下的对应 BAT 文件
+
+### 方式二：EXE 可执行程序
 
 1. 双击项目根目录下的 `PC-Optimizer.exe` 文件
-2. 系统自动弹出 UAC 请求管理员权限，点击“是”
+2. 系统自动弹出 UAC 请求管理员权限，点击"是"
 3. GUI 界面启动，在左侧导航栏选择功能，点击按钮执行优化
 
 > EXE 文件无需安装 PowerShell 执行策略设置，双击即用
 
-### 方式二：GUI 图形界面（脚本模式）
+### 方式三：GUI 图形界面（脚本模式）
 
 1. 双击项目根目录下的 `StartGUI.bat` 文件
 2. 系统自动以管理员身份启动 GUI 界面
-3. 在左侧导航栏选择功能，点击按钮执行优化
 
 或者手动启动：
 ```powershell
 # 以管理员身份打开 PowerShell
-cd C:\PC-Optimizer-7thGen
+cd C:\win-optimizer
 .\OptimizeGUI.ps1
 ```
-
-### 方式三：双击启动（选择模式）
-
-1. 双击 `Start.bat` 文件
-2. 选择 `[1]` EXE程序 / `[2]` GUI脚本 / `[3]` 命令行
-3. 系统会自动以管理员身份运行
 
 ### 方式四：命令行交互模式
 
 1. **以管理员身份**打开 PowerShell
 2. 执行以下命令：
 ```powershell
-cd C:\PC-Optimizer-7thGen
+cd C:\win-optimizer
 .\Optimize.ps1
 ```
 
@@ -63,7 +75,7 @@ cd C:\PC-Optimizer-7thGen
 如果修改了 `OptimizeGUI.ps1`，可以重新编译 EXE：
 ```powershell
 # 以管理员身份打开 PowerShell
-cd C:\PC-Optimizer-7thGen
+cd C:\win-optimizer
 .\Build-EXE.ps1
 ```
 
@@ -85,32 +97,42 @@ cd C:\PC-Optimizer-7thGen
 | `[B]` 备份 | 查看和管理备份文件 |
 | `[R]` 恢复 | 从备份恢复系统设置 |
 
+### 实用工具启动
+
+| 工具 | 启动方式 |
+|------|----------|
+| C盘深度清理 | `tools\c-drive-cleaner.bat` |
+| 剪贴板修复 | `tools\clipboard-fixer.bat` |
+| 网络重置 | `tools\network-reset.bat` |
+
 ### 推荐使用流程
 
 ```
 1. 先运行 [1] 系统信息检测，了解当前状态
 2. 运行 [B] 备份当前设置（重要！）
 3. 运行 [9] 一键全面优化
-4. 重启电脑
-5. 再次运行 [1] 对比优化效果
+4. 使用 tools/ 下的工具进行深度清理
+5. 重启电脑
+6. 再次运行 [1] 对比优化效果
 ```
 
 ## 📁 项目结构
 
 ```
-PC-Optimizer-7thGen/
+win-optimizer/
 ├── PC-Optimizer.exe          # EXE 可执行程序（双击即用，最推荐）
 ├── OptimizeGUI.ps1           # GUI 图形界面源码
 ├── Build-EXE.ps1             # EXE 编译脚本（重新编译用）
 ├── Optimize.ps1              # 命令行交互模式入口
 ├── StartGUI.bat              # GUI 快速启动（自动提权）
 ├── Start.bat                 # 启动选择菜单（EXE/GUI/CLI）
+├── StartAll.bat              # 统一工具箱启动菜单（v2.0 新增）
 ├── RestoreAll.bat            # 一键恢复所有设置
 ├── optimize.log              # 运行日志（自动生成）
 ├── README.md                 # 本说明文件
 ├── config/
 │   └── optimization.json     # 优化配置文件（服务列表、DNS 等）
-├── scripts/                  # 命令行模式脚本
+├── scripts/                  # 命令行模式脚本（系统优化）
 │   ├── 01-SystemInfo.ps1     # 系统信息检测模块
 │   ├── 02-CleanTemp.ps1      # 临时文件清理模块
 │   ├── 03-DisableServices.ps1# 服务优化模块
@@ -120,6 +142,15 @@ PC-Optimizer-7thGen/
 │   ├── 07-DiskOptimize.ps1   # 磁盘优化模块
 │   ├── 08-NetworkOptimize.ps1# 网络优化模块
 │   └── 09-BackupRestore.ps1  # 备份与恢复模块
+├── tools/                    # 实用工具（原 windows-utils 合并）
+│   ├── README.md             # 工具集说明
+│   ├── c-drive-cleaner.bat   # C盘清理启动器
+│   ├── clipboard-fixer.bat   # 剪贴板修复启动器
+│   ├── network-reset.bat     # 网络重置启动器
+│   ├── c-drive-cleaner/      # C盘清理源码
+│   ├── clipboard-fixer/      # 剪贴板修复源码
+│   ├── network-reset-tool/   # 网络重置源码
+│   └── remove-internal-tool/ # 移除内部标记
 └── backups/                  # 备份文件目录（自动生成）
     ├── services_backup_*.csv
     ├── startup_backup_*.csv
@@ -162,6 +193,7 @@ GUI 版本采用现代化深色主题设计，包含以下区域：
 6. **系统压缩** — `CompactOS` 操作会压缩系统文件，首次执行可能耗时较长
 7. **网络重置** — 如果选择重置网络栈，需要重启电脑才能生效
 8. **Windows 11 用户** — 7代 CPU 官方不支持 Win11，如已安装可能存在兼容性问题
+9. **Python 工具** — `tools/` 目录下的工具需要 Python 3.x 环境
 
 ## 🔒 安全说明
 
@@ -178,6 +210,7 @@ GUI 版本采用现代化深色主题设计，包含以下区域：
 | 操作系统 | Windows 10 (1809+) / Windows 11 |
 | CPU | Intel 7代及更早 / AMD Ryzen 1000系列及更早 |
 | PowerShell | 5.1 或更高版本 |
+| Python | 3.8+（仅 tools/ 目录下的工具需要） |
 | 权限 | 管理员权限 |
 | 内存 | 最低 4GB（推荐 8GB+） |
 
@@ -198,6 +231,12 @@ Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
 - 内存不足 8GB → 建议增加内存条
 - 运行 [1] 查看具体瓶颈所在
 
+### Q: tools/ 下的工具提示找不到 Python？
+```powershell
+# 安装 Python 3.x: https://www.python.org/downloads/
+# 安装时勾选 "Add Python to PATH"
+```
+
 ### Q: 可以在 SSD 上使用碎片整理吗？
 脚本会自动检测磁盘类型，SSD 执行 TRIM 优化，HDD 执行碎片整理，不会对 SSD 造成损害。
 
@@ -207,6 +246,15 @@ Compact.exe /CompactOS:never
 ```
 
 ## 📝 更新日志
+
+### v2.0.0 (2026-07-07)
+- **合并 windows-utils 仓库** — 4 个实用工具合并到 `tools/` 目录
+  - C盘深度清理（Python GUI）
+  - 剪贴板修复工具
+  - 网络重置工具
+  - 移除内部标记工具
+- 新增 `StartAll.bat` 统一启动菜单
+- 更新 README 文档
 
 ### v1.0.0 (2026-07-06)
 - 初始版本
