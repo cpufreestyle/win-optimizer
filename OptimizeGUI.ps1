@@ -6,44 +6,175 @@
 #>
 
 # ============================================================
-#  全局错误捕获（PS2EXE -noConsole 模式下静默崩溃的防护）
-# ============================================================
-trap {
-    $errFile = Join-Path ([System.AppDomain]::CurrentDomain.BaseDirectory.TrimEnd('\', '/')) "crash.log"
-    $errMsg = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] CRASH: $($_.Exception.Message)`r`nLine: $($_.InvocationInfo.ScriptLineNumber)`r`nText: $($_.InvocationInfo.Line)`r`n`r`n"
-    try { [System.IO.File]::AppendAllText($errFile, $errMsg, [System.Text.Encoding]::UTF8) } catch {}
-    [System.Windows.Forms.MessageBox]::Show("程序出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-    break
-}
-
-# ============================================================
-#  加载程序集（PS2EXE 兼容：用 LoadWithPartialName 替代 Add-Type）
+#  加载程序集（必须在 trap 之前，否则 trap 中无法使用 WinForms）
 # ============================================================
 [void][System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms")
 [void][System.Reflection.Assembly]::LoadWithPartialName("System.Drawing")
 [void][System.Reflection.Assembly]::LoadWithPartialName("System.Data")
 
 # ============================================================
+#  全局错误捕获（PS2EXE -noConsole 模式下静默崩溃的防护）
+# ============================================================
+trap {
+    $errFile = Join-Path ([System.AppDomain]::CurrentDomain.BaseDirectory.TrimEnd('\', '/')) "crash.log"
+    $errMsg = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] CRASH: $($_.Exception.Message)`r`nLine: $($_.InvocationInfo.ScriptLineNumber)`r`nText: $($_.InvocationInfo.Line)`r`n`r`n"
+    try { [System.IO.File]::AppendAllText($errFile, $errMsg, [System.Text.Encoding]::UTF8) } catch {}
+    try {
+        [System.Windows.Forms.MessageBox]::Show("程序出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    } catch {}
+    break
+}
+
+# ============================================================
 #  全局变量
 # ============================================================
 # PS2EXE 兼容：多级回退获取项目根目录
 if ($PSScriptRoot) {
-    $global:ProjectRoot = $PSScriptRoot
+    $script:ProjectRoot = $PSScriptRoot
 } elseif ($MyInvocation.MyCommand.Path) {
-    $global:ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $script:ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 } else {
     # PS2EXE 编译后最终回退：使用 AppDomain 基目录
-    $global:ProjectRoot = [System.AppDomain]::CurrentDomain.BaseDirectory.TrimEnd('\', '/')
+    $script:ProjectRoot = [System.AppDomain]::CurrentDomain.BaseDirectory.TrimEnd('\', '/')
 }
-$global:ScriptsDir  = Join-Path $global:ProjectRoot "scripts"
-$global:BackupDir   = Join-Path $global:ProjectRoot "backups"
-$global:LogFile     = Join-Path $global:ProjectRoot "optimize.log"
-$global:Version     = "1.0.0"
+$script:ScriptsDir  = Join-Path $script:ProjectRoot "scripts"
+$script:BackupDir   = Join-Path $script:ProjectRoot "backups"
+$script:LogFile     = Join-Path $script:ProjectRoot "optimize.log"
+$script:Version     = "2.1.0"
+
+# ============================================================
+#  Win7 兼容性检测
+# ============================================================
+$script:OSVersion = [System.Environment]::OSVersion.Version
+$script:IsWin7 = $script:OSVersion.Major -eq 6 -and $script:OSVersion.Minor -le 1
+$script:PSVersion = $PSVersionTable.PSVersion.Major
+
+# ============================================================
+#  兼容性辅助函数（Win7/PS2 回退）
+# ============================================================
+function Get-CimData {
+    param([string]$Class, [string]$Filter = $null)
+    if ($script:PSVersion -ge 3) {
+        if ($Filter) { return @(Get-CimInstance -ClassName $Class -Filter $Filter -ErrorAction SilentlyContinue) }
+        else { return @(Get-CimInstance -ClassName $Class -ErrorAction SilentlyContinue) }
+    } else {
+        if ($Filter) { return @(Get-WmiObject -Class $Class -Filter $Filter -ErrorAction SilentlyContinue) }
+        else { return @(Get-WmiObject -Class $Class -ErrorAction SilentlyContinue) }
+    }
+}
+
+function Invoke-UIRefresh {
+    # 防止 UI 卡死：在长操作中调用
+    try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+    try { Start-Sleep -Milliseconds 10 } catch {}
+}
+
+function Clear-RecycleBinCompat {
+    if ($script:PSVersion -ge 5) {
+        try { Clear-RecycleBin -Force -ErrorAction SilentlyContinue } catch {}
+    } else {
+        # Win7/PS2 回退：用 COM 对象清空回收站
+        try {
+            $shell = New-Object -ComObject Shell.Application
+            $recycleBin = $shell.Namespace(0xa)
+            if ($recycleBin) {
+                $items = $recycleBin.Items()
+                foreach ($item in $items) {
+                    try { Remove-Item -Path $item.Path -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+                }
+            }
+            [System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null
+        } catch {}
+    }
+}
+
+function Get-ScheduledTaskCompat {
+    param([string]$TaskPath, [string]$TaskName)
+    # Win7 回退：用 schtasks.exe 查询
+    $output = schtasks /Query /TN "$($TaskPath)$($TaskName)" 2>&1
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Disable-ScheduledTaskCompat {
+    param([string]$TaskPath, [string]$TaskName)
+    if ($script:PSVersion -ge 3 -and -not $script:IsWin7) {
+        try { Disable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null; return $true } catch { return $false }
+    } else {
+        try { schtasks /Change /TN "$($TaskPath)$($TaskName)" /DISABLE 2>&1 | Out-Null; return ($LASTEXITCODE -eq 0) } catch { return $false }
+    }
+}
+
+function Get-PhysicalDiskCompat {
+    # Win7 回退：用 WMI
+    return @(Get-CimData Win32_DiskDrive | Select-Object @{N='DeviceId';E={$_.Index}}, @{N='FriendlyName';E={$_.Model}}, @{N='MediaType';E={ if($_.MediaType -like '*Fixed*' -or $_.MediaType -like '*Hard*') { 'HDD' } else { 'Unknown' } }}, @{N='Size';E={$_.Size}})
+}
+
+function Get-VolumeCompat {
+    return @(Get-CimData Win32_LogicalDisk -Filter "DriveType=3" | Select-Object @{N='DriveLetter';E={$_.DeviceID.Substring(0,1)}}, @{N='DriveType';E={'Fixed'}}, @{N='Size';E={$_.Size}}, @{N='SizeRemaining';E={$_.FreeSpace}})
+}
+
+function Optimize-VolumeCompat {
+    param([string]$DriveLetter, [switch]$ReTrim, [switch]$Defrag)
+    $drive = "$($DriveLetter):"
+    if ($ReTrim) {
+        # SSD TRIM - 用 defrag /L (Win7 不支持，静默跳过)
+        if (-not $script:IsWin7) {
+            try { defrag $drive /L /O 2>&1 | Out-Null } catch {}
+        }
+    }
+    if ($Defrag) {
+        try { defrag $drive /D 2>&1 | Out-Null } catch {}
+    }
+}
+
+function Get-NetAdapterCompat {
+    return @(Get-CimData Win32_NetworkAdapter -Filter "NetEnabled=True" | Select-Object @{N='Name';E={$_.NetConnectionID}}, @{N='ifIndex';E={$_.InterfaceIndex}}, @{N='InterfaceDescription';E={$_.Description}})
+}
+
+function Set-DnsCompat {
+    param([string]$InterfaceName, [string[]]$DnsServers)
+    if ($DnsServers -and $DnsServers.Count -gt 0) {
+        $dnsStr = $DnsServers -join ','
+        # 用 netsh 设置 DNS（Win7 兼容）
+        netsh interface ip set dns name="$InterfaceName" static $DnsServers[0] 2>&1 | Out-Null
+        if ($DnsServers.Count -gt 1) {
+            netsh interface ip add dns name="$InterfaceName" $DnsServers[1] index=2 2>&1 | Out-Null
+        }
+    }
+}
+
+function Get-DnsClientServerAddressCompat {
+    $result = @()
+    $adapters = Get-CimData Win32_NetworkAdapterConfiguration -Filter "IPEnabled=True"
+    foreach ($adapter in $adapters) {
+        if ($adapter.DNSServerSearchOrder -and $adapter.DNSServerSearchOrder.Count -gt 0) {
+            $result += [PSCustomObject]@{
+                InterfaceAlias = $adapter.Description
+                ServerAddresses = $adapter.DNSServerSearchOrder
+            }
+        }
+    }
+    return $result
+}
+
+function Enable-NetAdapterRssCompat {
+    # Win7 回退：用 netsh
+    try { netsh int tcp set global rss=enabled 2>&1 | Out-Null } catch {}
+}
+
+function Enable-NetAdapterRscCompat {
+    # Win7 回退：用 netsh
+    try { netsh int tcp set global rsc=enabled 2>&1 | Out-Null } catch {}
+}
+
+function Clear-DnsClientCacheCompat {
+    try { ipconfig /flushdns 2>&1 | Out-Null } catch {}
+}
 
 # ============================================================
 #  颜色主题（深色主题）
 # ============================================================
-$global:Theme = @{
+$script:Theme = @{
     BgDark       = [System.Drawing.Color]::FromArgb(30, 30, 40)
     BgPanel      = [System.Drawing.Color]::FromArgb(45, 45, 58)
     BgCard       = [System.Drawing.Color]::FromArgb(52, 52, 68)
@@ -64,7 +195,7 @@ $global:Theme = @{
 # ============================================================
 #  字体
 # ============================================================
-$global:Fonts = @{
+$script:Fonts = @{
     Title   = New-Object System.Drawing.Font("Microsoft YaHei UI", 20, [System.Drawing.FontStyle]::Bold)
     Header  = New-Object System.Drawing.Font("Microsoft YaHei UI", 14, [System.Drawing.FontStyle]::Bold)
     Sub     = New-Object System.Drawing.Font("Microsoft YaHei UI", 11, [System.Drawing.FontStyle]::Regular)
@@ -82,9 +213,9 @@ function Write-Log {
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $line = "[$timestamp] [$Level] $Message"
     # PS2EXE 兼容：用 .NET 方法替代 Add-Content
-    try { [System.IO.File]::AppendAllText($global:LogFile, "$line`r`n", [System.Text.Encoding]::UTF8) } catch {}
+    try { [System.IO.File]::AppendAllText($script:LogFile, "$line`r`n", [System.Text.Encoding]::UTF8) } catch {}
     # 同时输出到 GUI 日志（必须检查 IsHandleCreated，否则 PS2EXE 启动时崩溃）
-    if ($global:LogTextBox -and -not $global:LogTextBox.IsDisposed -and $global:LogTextBox.IsHandleCreated) {
+    if ($script:LogTextBox -and -not $script:LogTextBox.IsDisposed -and $script:LogTextBox.IsHandleCreated) {
         $color = switch ($Level) {
             "ERROR"   { $Theme.Error }
             "WARN"    { $Theme.Warning }
@@ -92,11 +223,11 @@ function Write-Log {
             default   { $Theme.TextDim }
         }
         try {
-            $global:LogTextBox.Invoke([Action]{
-                $global:LogTextBox.SelectionStart = $global:LogTextBox.TextLength
-                $global:LogTextBox.SelectionColor = $color
-                $global:LogTextBox.AppendText("$line`n")
-                $global:LogTextBox.ScrollToCaret()
+            $script:LogTextBox.Invoke([Action]{
+                $script:LogTextBox.SelectionStart = $script:LogTextBox.TextLength
+                $script:LogTextBox.SelectionColor = $color
+                $script:LogTextBox.AppendText("$line`n")
+                $script:LogTextBox.ScrollToCaret()
             })
         } catch {}
     }
@@ -122,7 +253,7 @@ function Get-FolderSize {
 
 function Invoke-ScriptModule {
     param([string]$ScriptName)
-    $scriptPath = Join-Path $global:ScriptsDir $ScriptName
+    $scriptPath = Join-Path $script:ScriptsDir $ScriptName
     if (Test-Path $scriptPath) {
         Write-Log "执行模块: $ScriptName"
         & $scriptPath
@@ -288,7 +419,7 @@ $sepLine.BackColor = $Theme.BgPanel
 $sidePanel.Controls.Add($sepLine)
 
 # 侧边栏按钮（高度46，间距4，共10个按钮=500px，从Y=88到Y=588）
-$global:NavButtons = @{}
+$script:NavButtons = @{}
 $btnY = 88
 $btnH = 46
 $btnGap = 4
@@ -314,29 +445,29 @@ foreach ($item in $navItems) {
     $btn.Tag = $item.Key
     $btn.Add_Click({
         param($s, $e)
-        foreach ($k in $global:NavButtons.Keys) {
-            $global:NavButtons[$k].BackColor = $Theme.BgDark
-            $global:NavButtons[$k].ForeColor = $Theme.TextDim
+        foreach ($k in $script:NavButtons.Keys) {
+            $script:NavButtons[$k].BackColor = $Theme.BgDark
+            $script:NavButtons[$k].ForeColor = $Theme.TextDim
         }
         $s.BackColor = $Theme.Accent
         $s.ForeColor = $Theme.TextBright
         $key = $s.Tag
-        foreach ($pn in $global:Pages.Keys) {
-            $global:Pages[$pn].Visible = ($pn -eq $key)
+        foreach ($pn in $script:Pages.Keys) {
+            $script:Pages[$pn].Visible = ($pn -eq $key)
         }
-        $global:CurrentPage = $key
+        $script:CurrentPage = $key
         # 更新顶部标题
-        if ($global:HeaderTitles.ContainsKey($key)) {
-            $global:HeaderLabel.Text = $global:HeaderTitles[$key]
+        if ($script:HeaderTitles.ContainsKey($key)) {
+            $script:HeaderLabel.Text = $script:HeaderTitles[$key]
         }
     })
-    $global:NavButtons[$item.Key] = $btn
+    $script:NavButtons[$item.Key] = $btn
     $sidePanel.Controls.Add($btn)
 }
 
 # 默认选中仪表盘
-$global:NavButtons["Dashboard"].BackColor = $Theme.Accent
-$global:NavButtons["Dashboard"].ForeColor = $Theme.TextBright
+$script:NavButtons["Dashboard"].BackColor = $Theme.Accent
+$script:NavButtons["Dashboard"].ForeColor = $Theme.TextBright
 
 # ============================================================
 #  内容区域（右侧主面板）
@@ -375,7 +506,7 @@ $contentPanel.Controls.Add($pageContainer)
 # ============================================================
 #  页面集合
 # ============================================================
-$global:Pages = @{}
+$script:Pages = @{}
 
 # --- 辅助：创建页面面板 ---
 function New-Page {
@@ -391,20 +522,23 @@ function New-Page {
 #  页面 1: 系统仪表盘
 # ============================================================
 $pageDash = New-Page "Dashboard"
-$global:Pages["Dashboard"] = $pageDash
+$script:Pages["Dashboard"] = $pageDash
 
 function Build-Dashboard {
-    $page = $global:Pages["Dashboard"]
+    $page = $script:Pages["Dashboard"]
     $page.Controls.Clear()
 
-    # 获取系统信息（强制取单个值，避免多CPU/多OS返回数组）
-    $os = @(Get-CimInstance Win32_OperatingSystem)[0]
-    $cpu = @(Get-CimInstance Win32_Processor)[0]
+    # 获取系统信息（使用兼容函数，避免多CPU/多OS返回数组）
+    $os = @(Get-CimData Win32_OperatingSystem)[0]
+    $cpu = @(Get-CimData Win32_Processor)[0]
     $totalMem = [math]::Round([double]$os.TotalVisibleMemorySize / 1MB, 1)
     $freeMem  = [math]::Round([double]$os.FreePhysicalMemory / 1MB, 1)
     $usedMem  = [math]::Round($totalMem - $freeMem, 1)
-    $memPct   = [math]::Round(($usedMem / $totalMem) * 100, 0)
-    $uptime   = (Get-Date) - $os.LastBootUpTime
+    $memPct   = if ($totalMem -gt 0) { [math]::Round(($usedMem / $totalMem) * 100, 0) } else { 0 }
+    # Win7 WMI LastBootUpTime 是字符串，需转换
+    $bootTime = $os.LastBootUpTime
+    if ($bootTime -is [string]) { $bootTime = [System.Management.ManagementDateTimeConverter]::ToDateTime($bootTime) }
+    $uptime   = (Get-Date) - $bootTime
 
     # CPU 代数检测
     $cpuGen = ""
@@ -462,7 +596,7 @@ function Build-Dashboard {
     $cardMem.Controls.Add($lblMemFree)
 
     # --- 磁盘卡片 ---
-    $disks = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3"
+    $disks = @(Get-CimData Win32_LogicalDisk -Filter "DriveType=3")
     $yDisk = 150
     foreach ($disk in $disks) {
         $total = [math]::Round([double]$disk.Size / 1GB, 1)
@@ -507,7 +641,7 @@ function Build-Dashboard {
     $sysInfo += "运行时间: $($uptime.Days) 天 $($uptime.Hours) 小时 $($uptime.Minutes) 分钟`n"
 
     # 显卡
-    $gpus = Get-CimInstance Win32_VideoController | Select-Object -First 2
+    $gpus = @(Get-CimData Win32_VideoController) | Select-Object -First 2
     foreach ($gpu in $gpus) {
         if ($gpu.Name) { $sysInfo += "显卡: $($gpu.Name)`n" }
     }
@@ -548,10 +682,10 @@ function Build-Dashboard {
 #  页面 2: 垃圾清理
 # ============================================================
 $pageClean = New-Page "Clean"
-$global:Pages["Clean"] = $pageClean
+$script:Pages["Clean"] = $pageClean
 
 function Build-CleanPage {
-    $page = $global:Pages["Clean"]
+    $page = $script:Pages["Clean"]
     $page.Controls.Clear()
 
     $lblTitle = New-Label "垃圾文件清理" 20 10 500 30 $Fonts.Header $Theme.TextBright
@@ -564,7 +698,8 @@ function Build-CleanPage {
     $lblScan = New-Label "可清理项目:" 20 78 760 24 $Fonts.Sub $Theme.Accent
     $page.Controls.Add($lblScan)
 
-    $cleanItems = @(
+    # 用 script 作用域保存变量供事件处理器使用
+    $script:CleanItems = @(
         @{Path="C:\Windows\Temp";                    Name="Windows 系统临时文件"}
         @{Path=$env:TEMP;                             Name="用户临时文件"}
         @{Path="C:\Windows\Prefetch";                Name="预读取文件"}
@@ -573,67 +708,67 @@ function Build-CleanPage {
         @{Path="$env:PROGRAMDATA\Microsoft\Windows\WER"; Name="Windows 错误报告"}
     )
 
-    $listBox = New-Object System.Windows.Forms.CheckedListBox
-    $listBox.Location = New-Object System.Drawing.Point(20, 108)
-    $listBox.Size = New-Object System.Drawing.Size(760, 200)
-    $listBox.BackColor = $Theme.BgInput
-    $listBox.ForeColor = $Theme.TextMain
-    $listBox.Font = $Fonts.Body
-    $listBox.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
-    $listBox.CheckOnClick = $true
-    foreach ($item in $cleanItems) {
+    $script:CleanListBox = New-Object System.Windows.Forms.CheckedListBox
+    $script:CleanListBox.Location = New-Object System.Drawing.Point(20, 108)
+    $script:CleanListBox.Size = New-Object System.Drawing.Size(760, 200)
+    $script:CleanListBox.BackColor = $Theme.BgInput
+    $script:CleanListBox.ForeColor = $Theme.TextMain
+    $script:CleanListBox.Font = $Fonts.Body
+    $script:CleanListBox.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+    $script:CleanListBox.CheckOnClick = $true
+    foreach ($item in $script:CleanItems) {
         $size = Get-FolderSize $item.Path
         $sizeMB = [math]::Round($size / 1MB, 2)
         $display = "$($item.Name) — ${sizeMB} MB"
-        $listBox.Items.Add($display, $true) | Out-Null
+        $script:CleanListBox.Items.Add($display, $true) | Out-Null
     }
-    $page.Controls.Add($listBox)
+    $page.Controls.Add($script:CleanListBox)
 
     # 额外选项
-    $chkRecycle = New-Object System.Windows.Forms.CheckBox
-    $chkRecycle.Location = New-Object System.Drawing.Point(20, 318)
-    $chkRecycle.Size = New-Object System.Drawing.Size(200, 24)
-    $chkRecycle.Text = "清空回收站"
-    $chkRecycle.Checked = $true
-    $chkRecycle.Font = $Fonts.Body
-    $chkRecycle.ForeColor = $Theme.TextMain
-    $chkRecycle.BackColor = $Theme.BgDark
-    $page.Controls.Add($chkRecycle)
+    $script:ChkRecycle = New-Object System.Windows.Forms.CheckBox
+    $script:ChkRecycle.Location = New-Object System.Drawing.Point(20, 318)
+    $script:ChkRecycle.Size = New-Object System.Drawing.Size(200, 24)
+    $script:ChkRecycle.Text = "清空回收站"
+    $script:ChkRecycle.Checked = $true
+    $script:ChkRecycle.Font = $Fonts.Body
+    $script:ChkRecycle.ForeColor = $Theme.TextMain
+    $script:ChkRecycle.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:ChkRecycle)
 
-    $chkDNS = New-Object System.Windows.Forms.CheckBox
-    $chkDNS.Location = New-Object System.Drawing.Point(230, 318)
-    $chkDNS.Size = New-Object System.Drawing.Size(200, 24)
-    $chkDNS.Text = "清除 DNS 缓存"
-    $chkDNS.Checked = $true
-    $chkDNS.Font = $Fonts.Body
-    $chkDNS.ForeColor = $Theme.TextMain
-    $chkDNS.BackColor = $Theme.BgDark
-    $page.Controls.Add($chkDNS)
+    $script:ChkDNS = New-Object System.Windows.Forms.CheckBox
+    $script:ChkDNS.Location = New-Object System.Drawing.Point(230, 318)
+    $script:ChkDNS.Size = New-Object System.Drawing.Size(200, 24)
+    $script:ChkDNS.Text = "清除 DNS 缓存"
+    $script:ChkDNS.Checked = $true
+    $script:ChkDNS.Font = $Fonts.Body
+    $script:ChkDNS.ForeColor = $Theme.TextMain
+    $script:ChkDNS.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:ChkDNS)
 
-    $chkDump = New-Object System.Windows.Forms.CheckBox
-    $chkDump.Location = New-Object System.Drawing.Point(440, 318)
-    $chkDump.Size = New-Object System.Drawing.Size(200, 24)
-    $chkDump.Text = "删除内存转储文件"
-    $chkDump.Checked = $true
-    $chkDump.Font = $Fonts.Body
-    $chkDump.ForeColor = $Theme.TextMain
-    $chkDump.BackColor = $Theme.BgDark
-    $page.Controls.Add($chkDump)
+    $script:ChkDump = New-Object System.Windows.Forms.CheckBox
+    $script:ChkDump.Location = New-Object System.Drawing.Point(440, 318)
+    $script:ChkDump.Size = New-Object System.Drawing.Size(200, 24)
+    $script:ChkDump.Text = "删除内存转储文件"
+    $script:ChkDump.Checked = $true
+    $script:ChkDump.Font = $Fonts.Body
+    $script:ChkDump.ForeColor = $Theme.TextMain
+    $script:ChkDump.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:ChkDump)
 
     # 执行按钮
-    $btnClean = New-Button "开始清理" 20 356 200 44 $Theme.Success 11
-    $btnClean.Add_Click({
-        param($sender, $e)
-        $sender.Enabled = $false
-        $sender.Text = "正在清理..."
-        $MainForm.Refresh()
+    $script:BtnClean = New-Button "开始清理" 20 356 200 44 $Theme.Success 11
+    $script:BtnClean.Add_Click({
+        try {
+        $script:BtnClean.Enabled = $false
+        $script:BtnClean.Text = "正在清理..."
+        Invoke-UIRefresh
 
         $totalFreed = 0
         $filesDeleted = 0
 
-        for ($i = 0; $i -lt $cleanItems.Count; $i++) {
-            if ($listBox.GetItemChecked($i)) {
-                $item = $cleanItems[$i]
+        for ($i = 0; $i -lt $script:CleanItems.Count; $i++) {
+            if ($script:CleanListBox.GetItemChecked($i)) {
+                $item = $script:CleanItems[$i]
                 $before = Get-FolderSize $item.Path
                 if (Test-Path $item.Path) {
                     Get-ChildItem -Path $item.Path -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
@@ -645,15 +780,17 @@ function Build-CleanPage {
                     Write-Log "[清理] $($item.Name): 释放 $([math]::Round($freed/1MB,2)) MB" "SUCCESS"
                 }
             }
+            Invoke-UIRefresh
         }
 
-        if ($chkRecycle.Checked) {
-            try { Clear-RecycleBin -Force -ErrorAction SilentlyContinue; Write-Log "[清理] 回收站已清空" "SUCCESS" } catch {}
+        if ($script:ChkRecycle.Checked) {
+            Clear-RecycleBinCompat
+            Write-Log "[清理] 回收站已清空" "SUCCESS"
         }
-        if ($chkDNS.Checked) {
+        if ($script:ChkDNS.Checked) {
             try { ipconfig /flushdns | Out-Null; Write-Log "[清理] DNS 缓存已清除" "SUCCESS" } catch {}
         }
-        if ($chkDump.Checked) {
+        if ($script:ChkDump.Checked) {
             $dumpFiles = @("C:\Windows\MEMORY.DMP")
             $dumpFiles += (Get-ChildItem "C:\Windows\Minidump" -ErrorAction SilentlyContinue).FullName
             foreach ($dump in $dumpFiles) {
@@ -670,22 +807,28 @@ function Build-CleanPage {
         $msg = if ($totalGB -ge 1) { "共释放 ${totalGB} GB 空间" } else { "共释放 ${totalMB} MB 空间" }
         Write-Log "清理完成！$msg，删除 $filesDeleted 个文件" "SUCCESS"
 
-        $sender.Enabled = $true
-        $sender.Text = "开始清理"
+        $script:BtnClean.Enabled = $true
+        $script:BtnClean.Text = "开始清理"
 
         [System.Windows.Forms.MessageBox]::Show("清理完成！`n$msg`n删除 $filesDeleted 个文件", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-    }.GetNewClosure())
-    $page.Controls.Add($btnClean)
+        } catch {
+            Write-Log "清理出错: $($_.Exception.Message)" "ERROR"
+            $script:BtnClean.Enabled = $true
+            $script:BtnClean.Text = "开始清理"
+            [System.Windows.Forms.MessageBox]::Show("清理出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    })
+    $page.Controls.Add($script:BtnClean)
 }
 
 # ============================================================
 #  页面 3: 服务优化
 # ============================================================
 $pageSvc = New-Page "Services"
-$global:Pages["Services"] = $pageSvc
+$script:Pages["Services"] = $pageSvc
 
 function Build-ServicesPage {
-    $page = $global:Pages["Services"]
+    $page = $script:Pages["Services"]
     $page.Controls.Clear()
 
     $lblTitle = New-Label "服务优化" 20 10 500 30 $Fonts.Header $Theme.TextBright
@@ -775,56 +918,62 @@ function Build-ServicesPage {
     $page.Controls.Add($dgv)
 
     # 遥测任务
-    $global:chkTelemetry = New-Object System.Windows.Forms.CheckBox
-    $global:chkTelemetry.Location = New-Object System.Drawing.Point(20, 366)
-    $global:chkTelemetry.Size = New-Object System.Drawing.Size(400, 24)
-    $global:chkTelemetry.Text = "同时禁用遥测相关计划任务"
-    $global:chkTelemetry.Checked = $true
-    $global:chkTelemetry.Font = $Fonts.Body
-    $global:chkTelemetry.ForeColor = $Theme.TextMain
-    $global:chkTelemetry.BackColor = $Theme.BgDark
-    $page.Controls.Add($global:chkTelemetry)
+    $script:chkTelemetry = New-Object System.Windows.Forms.CheckBox
+    $script:chkTelemetry.Location = New-Object System.Drawing.Point(20, 366)
+    $script:chkTelemetry.Size = New-Object System.Drawing.Size(400, 24)
+    $script:chkTelemetry.Text = "同时禁用遥测相关计划任务"
+    $script:chkTelemetry.Checked = $true
+    $script:chkTelemetry.Font = $Fonts.Body
+    $script:chkTelemetry.ForeColor = $Theme.TextMain
+    $script:chkTelemetry.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkTelemetry)
 
     # 按钮
+    # 保存 DataTable 到 script 作用域
+    $script:SvcDataTable = $dt
+
     $btnSafe = New-Button "仅安全禁用" 20 400 140 40 $Theme.Accent 10
     $btnSafe.Add_Click({
-        for ($i = 0; $i -lt $dt.Rows.Count; $i++) {
-            $dt.Rows[$i]["选择"] = ($dt.Rows[$i]["级别"] -eq "安全禁用")
+        for ($i = 0; $i -lt $script:SvcDataTable.Rows.Count; $i++) {
+            $script:SvcDataTable.Rows[$i]["选择"] = ($script:SvcDataTable.Rows[$i]["级别"] -eq "安全禁用")
         }
-    }.GetNewClosure())
+    })
     $page.Controls.Add($btnSafe)
 
     $btnAll = New-Button "全选" 170 400 100 40 $Theme.AccentDark 10
     $btnAll.Add_Click({
-        for ($i = 0; $i -lt $dt.Rows.Count; $i++) { $dt.Rows[$i]["选择"] = $true }
-    }.GetNewClosure())
+        for ($i = 0; $i -lt $script:SvcDataTable.Rows.Count; $i++) { $script:SvcDataTable.Rows[$i]["选择"] = $true }
+    })
     $page.Controls.Add($btnAll)
 
-    $global:btnDisable = New-Button "执行禁用" 640 400 140 40 $Theme.Success 10
-    $global:btnDisable.Add_Click({
-        param($sender, $e)
-        $sender.Enabled = $false
-        $sender.Text = "处理中..."
-        $MainForm.Refresh()
+    $script:btnDisable = New-Button "执行禁用" 640 400 140 40 $Theme.Success 10
+    $script:btnDisable.Add_Click({
+        try {
+        $script:btnDisable.Enabled = $false
+        $script:btnDisable.Text = "处理中..."
+        Invoke-UIRefresh
 
         # 备份
-        $backupFile = Join-Path $global:BackupDir "services_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+        if (-not (Test-Path $script:BackupDir)) { New-Item -ItemType Directory -Path $script:BackupDir -Force | Out-Null }
+        $backupFile = Join-Path $script:BackupDir "services_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
         $backupData = @()
-        for ($i = 0; $i -lt $dt.Rows.Count; $i++) {
-            $svcName = $dt.Rows[$i]["服务名称"]
+        for ($i = 0; $i -lt $script:SvcDataTable.Rows.Count; $i++) {
+            $svcName = $script:SvcDataTable.Rows[$i]["服务名称"]
             $service = Get-Service -Name $svcName -ErrorAction SilentlyContinue
             if ($service) {
-                $startMode = @(Get-CimInstance Win32_Service -Filter "Name='$svcName'" -ErrorAction SilentlyContinue)[0].StartMode
+                $svcWmi = @(Get-CimData Win32_Service -Filter "Name='$svcName'")[0]
+                $startMode = if ($svcWmi) { $svcWmi.StartMode } else { "Unknown" }
                 $backupData += [PSCustomObject]@{ Name=$svcName; Status=$service.Status; StartType=$startMode; Date=(Get-Date -Format "yyyy-MM-dd HH:mm:ss") }
             }
+            Invoke-UIRefresh
         }
         $backupData | Export-Csv -Path $backupFile -NoTypeInformation -Encoding UTF8
         Write-Log "服务备份已保存: $backupFile"
 
         $disabledCount = 0
-        for ($i = 0; $i -lt $dt.Rows.Count; $i++) {
-            if ($dt.Rows[$i]["选择"] -eq $true) {
-                $svcName = $dt.Rows[$i]["服务名称"]
+        for ($i = 0; $i -lt $script:SvcDataTable.Rows.Count; $i++) {
+            if ($script:SvcDataTable.Rows[$i]["选择"] -eq $true) {
+                $svcName = $script:SvcDataTable.Rows[$i]["服务名称"]
                 $service = Get-Service -Name $svcName -ErrorAction SilentlyContinue
                 if ($service) {
                     try {
@@ -833,18 +982,19 @@ function Build-ServicesPage {
                             Start-Sleep -Milliseconds 300
                         }
                         Set-Service -Name $svcName -StartupType Disabled -ErrorAction Stop
-                        Write-Log "[禁用] $svcName — $($dt.Rows[$i]["描述"])" "SUCCESS"
+                        Write-Log "[禁用] $svcName" "SUCCESS"
                         $disabledCount++
-                        $dt.Rows[$i]["状态"] = "Stopped"
+                        $script:SvcDataTable.Rows[$i]["状态"] = "Stopped"
                     } catch {
                         Write-Log "[失败] $svcName — $($_.Exception.Message)" "ERROR"
                     }
                 }
             }
+            Invoke-UIRefresh
         }
 
         # 遥测任务
-        if ($global:chkTelemetry.Checked) {
+        if ($script:chkTelemetry.Checked) {
             $telemetryTasks = @(
                 @{Path="\Microsoft\Windows\Application Experience\"; Name="Microsoft Compatibility Appraiser"},
                 @{Path="\Microsoft\Windows\Application Experience\"; Name="ProgramDataUpdater"},
@@ -853,31 +1003,34 @@ function Build-ServicesPage {
             )
             foreach ($task in $telemetryTasks) {
                 try {
-                    $t = Get-ScheduledTask -TaskPath $task.Path -TaskName $task.Name -ErrorAction SilentlyContinue
-                    if ($t -and $t.State -ne "Disabled") {
-                        Disable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction Stop | Out-Null
-                        Write-Log "[禁用] 计划任务: $($task.Name)" "SUCCESS"
-                    }
+                    $result = Disable-ScheduledTaskCompat -TaskPath $task.Path -TaskName $task.Name
+                    if ($result) { Write-Log "[禁用] 计划任务: $($task.Name)" "SUCCESS" }
                 } catch {}
             }
         }
 
         Write-Log "服务优化完成！已禁用 $disabledCount 个服务" "SUCCESS"
-        $sender.Enabled = $true
-        $sender.Text = "执行禁用"
+        $script:btnDisable.Enabled = $true
+        $script:btnDisable.Text = "执行禁用"
         [System.Windows.Forms.MessageBox]::Show("服务优化完成！`n已禁用 $disabledCount 个服务`n`n备份文件: $backupFile", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-    }.GetNewClosure())
-    $page.Controls.Add($global:btnDisable)
+        } catch {
+            Write-Log "服务优化出错: $($_.Exception.Message)" "ERROR"
+            $script:btnDisable.Enabled = $true
+            $script:btnDisable.Text = "执行禁用"
+            [System.Windows.Forms.MessageBox]::Show("服务优化出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    })
+    $page.Controls.Add($script:btnDisable)
 }
 
 # ============================================================
 #  页面 4: 启动项
 # ============================================================
 $pageStartup = New-Page "Startup"
-$global:Pages["Startup"] = $pageStartup
+$script:Pages["Startup"] = $pageStartup
 
 function Build-StartupPage {
-    $page = $global:Pages["Startup"]
+    $page = $script:Pages["Startup"]
     $page.Controls.Clear()
 
     $lblTitle = New-Label "启动项管理" 20 10 500 30 $Fonts.Header $Theme.TextBright
@@ -886,8 +1039,8 @@ function Build-StartupPage {
     $lblDesc = New-Label "管理开机启动项，禁用不必要的程序以加快开机速度" 20 42 760 24 $Fonts.Small $Theme.TextDim
     $page.Controls.Add($lblDesc)
 
-    # 扫描启动项
-    $startupItems = @()
+    # 扫描启动项 - 用 script 作用域保存
+    $script:StartupItems = @()
     $regPaths = @(
         @{Path="HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"; Scope="当前用户"}
         @{Path="HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"; Scope="所有用户"}
@@ -898,7 +1051,7 @@ function Build-StartupPage {
             $props = Get-ItemProperty -Path $reg.Path -ErrorAction SilentlyContinue
             if ($props) {
                 $props.PSObject.Properties | Where-Object { $_.Name -notlike "PS*" -and $_.Value } | ForEach-Object {
-                    $startupItems += [PSCustomObject]@{ Name=$_.Name; Command=$_.Value; Scope=$reg.Scope; Source="注册表"; RegPath=$reg.Path }
+                    $script:StartupItems += [PSCustomObject]@{ Name=$_.Name; Command=$_.Value; Scope=$reg.Scope; Source="注册表"; RegPath=$reg.Path }
                 }
             }
         }
@@ -912,29 +1065,29 @@ function Build-StartupPage {
     foreach ($folder in $startupFolders) {
         if (Test-Path $folder.Path) {
             Get-ChildItem -Path $folder.Path -ErrorAction SilentlyContinue | ForEach-Object {
-                $startupItems += [PSCustomObject]@{ Name=$_.Name; Command=$_.FullName; Scope=$folder.Scope; Source="启动文件夹"; RegPath=$folder.Path }
+                $script:StartupItems += [PSCustomObject]@{ Name=$_.Name; Command=$_.FullName; Scope=$folder.Scope; Source="启动文件夹"; RegPath=$folder.Path }
             }
         }
     }
 
-    $dgvStartup = New-Object System.Windows.Forms.DataGridView
-    $dgvStartup.Location = New-Object System.Drawing.Point(20, 76)
-    $dgvStartup.Size = New-Object System.Drawing.Size(760, 360)
-    $dgvStartup.BackgroundColor = $Theme.BgPanel
-    $dgvStartup.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
-    $dgvStartup.DefaultCellStyle.BackColor = $Theme.BgInput
-    $dgvStartup.DefaultCellStyle.ForeColor = $Theme.TextMain
-    $dgvStartup.DefaultCellStyle.Font = $Fonts.Small
-    $dgvStartup.DefaultCellStyle.SelectionBackColor = $Theme.Accent
-    $dgvStartup.DefaultCellStyle.SelectionForeColor = $Theme.TextBright
-    $dgvStartup.ColumnHeadersDefaultCellStyle.BackColor = $Theme.BgPanel
-    $dgvStartup.ColumnHeadersDefaultCellStyle.ForeColor = $Theme.TextBright
-    $dgvStartup.ColumnHeadersDefaultCellStyle.Font = $Fonts.Body
-    $dgvStartup.EnableHeadersVisualStyles = $false
-    $dgvStartup.AllowUserToAddRows = $false
-    $dgvStartup.ReadOnly = $true
-    $dgvStartup.AutoSizeColumnsMode = [System.Windows.Forms.DataGridViewAutoSizeColumnsMode]::Fill
-    $dgvStartup.RowTemplate.Height = 28
+    $script:DgvStartup = New-Object System.Windows.Forms.DataGridView
+    $script:DgvStartup.Location = New-Object System.Drawing.Point(20, 76)
+    $script:DgvStartup.Size = New-Object System.Drawing.Size(760, 360)
+    $script:DgvStartup.BackgroundColor = $Theme.BgPanel
+    $script:DgvStartup.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+    $script:DgvStartup.DefaultCellStyle.BackColor = $Theme.BgInput
+    $script:DgvStartup.DefaultCellStyle.ForeColor = $Theme.TextMain
+    $script:DgvStartup.DefaultCellStyle.Font = $Fonts.Small
+    $script:DgvStartup.DefaultCellStyle.SelectionBackColor = $Theme.Accent
+    $script:DgvStartup.DefaultCellStyle.SelectionForeColor = $Theme.TextBright
+    $script:DgvStartup.ColumnHeadersDefaultCellStyle.BackColor = $Theme.BgPanel
+    $script:DgvStartup.ColumnHeadersDefaultCellStyle.ForeColor = $Theme.TextBright
+    $script:DgvStartup.ColumnHeadersDefaultCellStyle.Font = $Fonts.Body
+    $script:DgvStartup.EnableHeadersVisualStyles = $false
+    $script:DgvStartup.AllowUserToAddRows = $false
+    $script:DgvStartup.ReadOnly = $true
+    $script:DgvStartup.AutoSizeColumnsMode = [System.Windows.Forms.DataGridViewAutoSizeColumnsMode]::Fill
+    $script:DgvStartup.RowTemplate.Height = 28
 
     $dtStartup = New-Object System.Data.DataTable
     $dtStartup.Columns.Add("名称") | Out-Null
@@ -942,25 +1095,27 @@ function Build-StartupPage {
     $dtStartup.Columns.Add("范围") | Out-Null
     $dtStartup.Columns.Add("命令") | Out-Null
 
-    foreach ($item in $startupItems) {
+    foreach ($item in $script:StartupItems) {
         $cmd = if ($item.Command.Length -gt 60) { $item.Command.Substring(0, 57) + "..." } else { $item.Command }
         $dtStartup.Rows.Add($item.Name, $item.Source, $item.Scope, $cmd) | Out-Null
     }
-    $dgvStartup.DataSource = $dtStartup
-    $page.Controls.Add($dgvStartup)
+    $script:DgvStartup.DataSource = $dtStartup
+    $page.Controls.Add($script:DgvStartup)
 
-    $global:btnDisableStartup = New-Button "禁用选中项" 20 446 160 40 $Theme.Success 10
-    $global:btnDisableStartup.Add_Click({
-        if ($dgvStartup.SelectedRows.Count -eq 0) {
+    $script:btnDisableStartup = New-Button "禁用选中项" 20 446 160 40 $Theme.Success 10
+    $script:btnDisableStartup.Add_Click({
+        try {
+        if ($script:DgvStartup.SelectedRows.Count -eq 0) {
             [System.Windows.Forms.MessageBox]::Show("请先选择要禁用的启动项（点击行左侧选择整行）", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             return
         }
 
-        $backupFile = Join-Path $global:BackupDir "startup_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+        if (-not (Test-Path $script:BackupDir)) { New-Item -ItemType Directory -Path $script:BackupDir -Force | Out-Null }
+        $backupFile = Join-Path $script:BackupDir "startup_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
         $toRemove = @()
-        foreach ($row in $dgvStartup.SelectedRows) {
+        foreach ($row in $script:DgvStartup.SelectedRows) {
             $idx = $row.Index
-            $toRemove += $startupItems[$idx]
+            $toRemove += $script:StartupItems[$idx]
         }
         $toRemove | Select-Object Name, Command, Scope, Source | Export-Csv -Path $backupFile -NoTypeInformation -Encoding UTF8
         Write-Log "启动项备份: $backupFile"
@@ -973,7 +1128,7 @@ function Build-StartupPage {
                     Write-Log "[禁用] $($item.Name) (注册表)" "SUCCESS"
                     $count++
                 } elseif ($item.Source -eq "启动文件夹") {
-                    $backupDir2 = Join-Path $global:BackupDir "startup_items"
+                    $backupDir2 = Join-Path $script:BackupDir "startup_items"
                     if (-not (Test-Path $backupDir2)) { New-Item -ItemType Directory -Path $backupDir2 -Force | Out-Null }
                     Move-Item -Path $item.Command -Destination (Join-Path $backupDir2 (Split-Path $item.Command -Leaf)) -Force -ErrorAction Stop
                     Write-Log "[禁用] $($item.Name) (启动文件夹)" "SUCCESS"
@@ -982,13 +1137,18 @@ function Build-StartupPage {
             } catch {
                 Write-Log "[失败] $($item.Name)" "ERROR"
             }
+            Invoke-UIRefresh
         }
 
         Write-Log "启动项优化完成！已禁用 $count 项" "SUCCESS"
         [System.Windows.Forms.MessageBox]::Show("已禁用 $count 个启动项`n`n部分项需通过任务管理器->启动 禁用", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         Build-StartupPage
-    }.GetNewClosure())
-    $page.Controls.Add($global:btnDisableStartup)
+        } catch {
+            Write-Log "启动项优化出错: $($_.Exception.Message)" "ERROR"
+            [System.Windows.Forms.MessageBox]::Show("启动项优化出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    })
+    $page.Controls.Add($script:btnDisableStartup)
 
     $btnRefreshStartup = New-Button "刷新列表" 190 446 120 40 $Theme.AccentDark 10
     $btnRefreshStartup.Add_Click({ Build-StartupPage })
@@ -999,10 +1159,10 @@ function Build-StartupPage {
 #  页面 5: 视觉效果
 # ============================================================
 $pageVisual = New-Page "Visual"
-$global:Pages["Visual"] = $pageVisual
+$script:Pages["Visual"] = $pageVisual
 
 function Build-VisualPage {
-    $page = $global:Pages["Visual"]
+    $page = $script:Pages["Visual"]
     $page.Controls.Clear()
 
     $lblTitle = New-Label "视觉效果优化" 20 10 500 30 $Fonts.Header $Theme.TextBright
@@ -1012,16 +1172,16 @@ function Build-VisualPage {
     $page.Controls.Add($lblDesc)
 
     # 选项卡片
-    $global:modes = @(
+    $script:modes = @(
         @{Title="最佳性能"; Desc="关闭所有动画和特效，仅保留字体平滑`n适合老旧电脑，最大化响应速度"; Color=$Theme.Success; Value=1}
         @{Title="平衡模式"; Desc="关闭大部分动画，保留基本效果`n适合日常使用"; Color=$Theme.Accent; Value=2}
         @{Title="自定义"; Desc="逐项选择要关闭的效果`n精细控制"; Color=$Theme.Warning; Value=3}
     )
 
     $yMode = 78
-    $global:radioBtns = @()
+    $script:radioBtns = @()
     for ($i = 0; $i -lt 3; $i++) {
-        $m = $global:modes[$i]
+        $m = $script:modes[$i]
         $card = New-Object System.Windows.Forms.Panel
         $card.Location = New-Object System.Drawing.Point(20, $yMode)
         $card.Size = New-Object System.Drawing.Size(760, 64)
@@ -1035,28 +1195,28 @@ function Build-VisualPage {
         $rb.BackColor = $Theme.BgCard
         $rb.ForeColor = $m.Color
         $card.Controls.Add($rb)
-        $global:radioBtns += $rb
+        $script:radioBtns += $rb
 
         $lblMode = New-Label $m.Title 44 12 200 26 $Fonts.Header $m.Color
         $card.Controls.Add($lblMode)
 
-        $lblModeDesc = New-Label $m.Desc 44 36 700 24 $Fonts.Small $Theme.TextDim
+        $lblModeDesc = New-Label $m.Desc 44 36 700 28 $Fonts.Small $Theme.TextDim
         $card.Controls.Add($lblModeDesc)
 
         $yMode += 72
     }
 
-    $global:btnApplyVisual = New-Button "应用视觉效果" 20 ([int]($yMode + 10)) 200 44 $Theme.Success 11
-    $global:btnApplyVisual.Add_Click({
-        param($sender, $e)
+    $script:btnApplyVisual = New-Button "应用视觉效果" 20 ([int]($yMode + 10)) 200 44 $Theme.Success 11
+    $script:btnApplyVisual.Add_Click({
+        try {
         $selectedMode = 1
-        for ($i = 0; $i -lt 3; $i++) { if ($global:radioBtns[$i].Checked) { $selectedMode = $global:modes[$i].Value } }
+        for ($i = 0; $i -lt 3; $i++) { if ($script:radioBtns[$i].Checked) { $selectedMode = $script:modes[$i].Value } }
 
-        $backupFile = Join-Path $global:BackupDir "visual_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
+        $backupFile = Join-Path $script:BackupDir "visual_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
 
-        $sender.Enabled = $false
-        $sender.Text = "应用中..."
-        $MainForm.Refresh()
+        $script:btnApplyVisual.Enabled = $false
+        $script:btnApplyVisual.Text = "应用中..."
+        Invoke-UIRefresh
 
         $visualKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
         if (-not (Test-Path $visualKey)) { New-Item -Path $visualKey -Force | Out-Null }
@@ -1099,21 +1259,25 @@ function Build-VisualPage {
         # 重启资源管理器
         try { Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue; Start-Sleep 1; Start-Process explorer } catch {}
 
-        $sender.Enabled = $true
-        $sender.Text = "应用视觉效果"
+        $script:btnApplyVisual.Enabled = $true
+        $script:btnApplyVisual.Text = "应用视觉效果"
         [System.Windows.Forms.MessageBox]::Show("视觉效果已应用！`n资源管理器已重启。", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-    }.GetNewClosure())
-    $page.Controls.Add($global:btnApplyVisual)
+        } catch {
+            Write-Log "视觉效果出错: $($_.Exception.Message)" "ERROR"
+            [System.Windows.Forms.MessageBox]::Show("视觉效果出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    })
+    $page.Controls.Add($script:btnApplyVisual)
 }
 
 # ============================================================
 #  页面 6: 电源计划
 # ============================================================
 $pagePower = New-Page "Power"
-$global:Pages["Power"] = $pagePower
+$script:Pages["Power"] = $pagePower
 
 function Build-PowerPage {
-    $page = $global:Pages["Power"]
+    $page = $script:Pages["Power"]
     $page.Controls.Clear()
 
     $lblTitle = New-Label "电源计划优化" 20 10 500 30 $Fonts.Header $Theme.TextBright
@@ -1124,19 +1288,19 @@ function Build-PowerPage {
 
     # 当前计划
     $currentPlan = @(powercfg /getactivescheme 2>&1) -join ' '
-    $global:lblCurrent = New-Label "当前计划: $currentPlan" 20 78 760 24 $Fonts.Sub $Theme.Warning
-    $page.Controls.Add($global:lblCurrent)
+    $script:lblCurrent = New-Label "当前计划: $currentPlan" 20 78 760 24 $Fonts.Sub $Theme.Warning
+    $page.Controls.Add($script:lblCurrent)
 
-    $global:plans = @(
+    $script:plans = @(
         @{Title="高性能模式"; Desc="最大化 CPU 性能，CPU 始终保持最高频率`n适合台式机或插电笔记本"; GUID="8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"; Color=$Theme.Success}
         @{Title="卓越性能模式"; Desc="比高性能更高，需解锁后可用`n极限性能优先"; GUID="e9a42b02-d5df-448d-aa00-03f14749eb61"; Color=$Theme.Accent}
         @{Title="平衡优化模式"; Desc="平衡基础上优化，禁用USB挂起`n适合笔记本电池模式"; GUID="381b4222-f694-41f0-9685-ff5bb260df2e"; Color=$Theme.Warning}
     )
 
     $yPlan = 112
-    $global:radioPowers = @()
+    $script:radioPowers = @()
     for ($i = 0; $i -lt 3; $i++) {
-        $p = $global:plans[$i]
+        $p = $script:plans[$i]
         $card = New-Object System.Windows.Forms.Panel
         $card.Location = New-Object System.Drawing.Point(20, $yPlan)
         $card.Size = New-Object System.Drawing.Size(760, 68)
@@ -1150,49 +1314,49 @@ function Build-PowerPage {
         $rb.BackColor = $Theme.BgCard
         $rb.ForeColor = $p.Color
         $card.Controls.Add($rb)
-        $global:radioPowers += $rb
+        $script:radioPowers += $rb
 
         $lblP = New-Label $p.Title 44 14 250 26 $Fonts.Header $p.Color
         $card.Controls.Add($lblP)
 
-        $lblPDesc = New-Label $p.Desc 44 38 700 26 $Fonts.Small $Theme.TextDim
+        $lblPDesc = New-Label $p.Desc 44 38 700 30 $Fonts.Small $Theme.TextDim
         $card.Controls.Add($lblPDesc)
 
         $yPlan += 76
     }
 
     # 选项
-    $global:chkUSB = New-Object System.Windows.Forms.CheckBox
-    $global:chkUSB.Location = New-Object System.Drawing.Point(20, $yPlan)
-    $global:chkUSB.Size = New-Object System.Drawing.Size(300, 24)
-    $global:chkUSB.Text = "禁用 USB 选择性挂起"
-    $global:chkUSB.Checked = $true
-    $global:chkUSB.Font = $Fonts.Body
-    $global:chkUSB.ForeColor = $Theme.TextMain
-    $global:chkUSB.BackColor = $Theme.BgDark
-    $page.Controls.Add($global:chkUSB)
+    $script:chkUSB = New-Object System.Windows.Forms.CheckBox
+    $script:chkUSB.Location = New-Object System.Drawing.Point(20, $yPlan)
+    $script:chkUSB.Size = New-Object System.Drawing.Size(300, 24)
+    $script:chkUSB.Text = "禁用 USB 选择性挂起"
+    $script:chkUSB.Checked = $true
+    $script:chkUSB.Font = $Fonts.Body
+    $script:chkUSB.ForeColor = $Theme.TextMain
+    $script:chkUSB.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkUSB)
 
-    $global:chkPCI = New-Object System.Windows.Forms.CheckBox
-    $global:chkPCI.Location = New-Object System.Drawing.Point(330, $yPlan)
-    $global:chkPCI.Size = New-Object System.Drawing.Size(300, 24)
-    $global:chkPCI.Text = "关闭 PCI Express 电源管理"
-    $global:chkPCI.Checked = $true
-    $global:chkPCI.Font = $Fonts.Body
-    $global:chkPCI.ForeColor = $Theme.TextMain
-    $global:chkPCI.BackColor = $Theme.BgDark
-    $page.Controls.Add($global:chkPCI)
+    $script:chkPCI = New-Object System.Windows.Forms.CheckBox
+    $script:chkPCI.Location = New-Object System.Drawing.Point(330, $yPlan)
+    $script:chkPCI.Size = New-Object System.Drawing.Size(300, 24)
+    $script:chkPCI.Text = "关闭 PCI Express 电源管理"
+    $script:chkPCI.Checked = $true
+    $script:chkPCI.Font = $Fonts.Body
+    $script:chkPCI.ForeColor = $Theme.TextMain
+    $script:chkPCI.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkPCI)
 
     $yPlan += 32
 
-    $global:btnApplyPower = New-Button "应用电源计划" 20 ([int]($yPlan + 10)) 200 44 $Theme.Success 11
-    $global:btnApplyPower.Add_Click({
-        param($sender, $e)
-        $selectedGUID = $global:plans[0].GUID
-        for ($i = 0; $i -lt 3; $i++) { if ($global:radioPowers[$i].Checked) { $selectedGUID = $global:plans[$i].GUID } }
+    $script:btnApplyPower = New-Button "应用电源计划" 20 ([int]($yPlan + 10)) 200 44 $Theme.Success 11
+    $script:btnApplyPower.Add_Click({
+        try {
+        $selectedGUID = $script:plans[0].GUID
+        for ($i = 0; $i -lt 3; $i++) { if ($script:radioPowers[$i].Checked) { $selectedGUID = $script:plans[$i].GUID } }
 
-        $sender.Enabled = $false
-        $sender.Text = "应用中..."
-        $MainForm.Refresh()
+        $script:btnApplyPower.Enabled = $false
+        $script:btnApplyPower.Text = "应用中..."
+        Invoke-UIRefresh
 
         # 卓越性能需要解锁
         if ($selectedGUID -eq "e9a42b02-d5df-448d-aa00-03f14749eb61") {
@@ -1209,36 +1373,40 @@ function Build-PowerPage {
             Write-Log "CPU 处理器状态: 最低100% / 最高100%" "SUCCESS"
         }
 
-        if ($global:chkUSB.Checked) {
+        if ($script:chkUSB.Checked) {
             powercfg /setacvalueindex $selectedGUID SUB_USB USBSELSUSP 0 2>&1 | Out-Null
             Write-Log "USB 选择性挂起: 已禁用" "SUCCESS"
         }
-        if ($global:chkPCI.Checked) {
+        if ($script:chkPCI.Checked) {
             powercfg /setacvalueindex $selectedGUID SUB_PCIEXPRESS ASPM 0 2>&1 | Out-Null
             Write-Log "PCI Express 电源管理: 已关闭" "SUCCESS"
         }
 
         powercfg /setactive $selectedGUID 2>&1 | Out-Null
 
-        $sender.Enabled = $true
-        $sender.Text = "应用电源计划"
+        $script:btnApplyPower.Enabled = $true
+        $script:btnApplyPower.Text = "应用电源计划"
 
         $newPlan = @(powercfg /getactivescheme 2>&1) -join ' '
-        $global:lblCurrent.Text = "当前计划: $newPlan"
+        $script:lblCurrent.Text = "当前计划: $newPlan"
 
         [System.Windows.Forms.MessageBox]::Show("电源计划已切换！", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-    }.GetNewClosure())
-    $page.Controls.Add($global:btnApplyPower)
+        } catch {
+            Write-Log "电源计划出错: $($_.Exception.Message)" "ERROR"
+            [System.Windows.Forms.MessageBox]::Show("电源计划出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    })
+    $page.Controls.Add($script:btnApplyPower)
 }
 
 # ============================================================
 #  页面 7: 磁盘优化
 # ============================================================
 $pageDisk = New-Page "Disk"
-$global:Pages["Disk"] = $pageDisk
+$script:Pages["Disk"] = $pageDisk
 
 function Build-DiskPage {
-    $page = $global:Pages["Disk"]
+    $page = $script:Pages["Disk"]
     $page.Controls.Clear()
 
     $lblTitle = New-Label "磁盘优化" 20 10 500 30 $Fonts.Header $Theme.TextBright
@@ -1247,8 +1415,8 @@ function Build-DiskPage {
     $lblDesc = New-Label "SSD 执行 TRIM 优化 / HDD 执行碎片整理 / 清理系统组件" 20 42 760 24 $Fonts.Small $Theme.TextDim
     $page.Controls.Add($lblDesc)
 
-    # 磁盘列表
-    $physicalDisks = @(Get-PhysicalDisk -ErrorAction SilentlyContinue | Select-Object DeviceId, FriendlyName, MediaType, Size)
+    # 磁盘列表 - 使用兼容函数
+    $physicalDisks = @(Get-PhysicalDiskCompat)
 
     $yDisk = 76
     $lblDiskInfo = New-Label "物理磁盘:" 20 $yDisk 760 24 $Fonts.Sub $Theme.Accent
@@ -1278,109 +1446,111 @@ function Build-DiskPage {
 
     # 操作选项
     $yDisk += 10
-    $global:chkTRIM = New-Object System.Windows.Forms.CheckBox
-    $global:chkTRIM.Location = New-Object System.Drawing.Point(20, $yDisk)
-    $global:chkTRIM.Size = New-Object System.Drawing.Size(250, 24)
-    $global:chkTRIM.Text = "SSD TRIM 优化"
-    $global:chkTRIM.Checked = $true
-    $global:chkTRIM.Font = $Fonts.Body
-    $global:chkTRIM.ForeColor = $Theme.TextMain
-    $global:chkTRIM.BackColor = $Theme.BgDark
-    $page.Controls.Add($global:chkTRIM)
+    $script:chkTRIM = New-Object System.Windows.Forms.CheckBox
+    $script:chkTRIM.Location = New-Object System.Drawing.Point(20, $yDisk)
+    $script:chkTRIM.Size = New-Object System.Drawing.Size(250, 24)
+    $script:chkTRIM.Text = "SSD TRIM 优化"
+    $script:chkTRIM.Checked = $true
+    $script:chkTRIM.Font = $Fonts.Body
+    $script:chkTRIM.ForeColor = $Theme.TextMain
+    $script:chkTRIM.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkTRIM)
 
-    $global:chkDefrag = New-Object System.Windows.Forms.CheckBox
-    $global:chkDefrag.Location = New-Object System.Drawing.Point(280, $yDisk)
-    $global:chkDefrag.Size = New-Object System.Drawing.Size(250, 24)
-    $global:chkDefrag.Text = "HDD 碎片整理"
-    $global:chkDefrag.Checked = $true
-    $global:chkDefrag.Font = $Fonts.Body
-    $global:chkDefrag.ForeColor = $Theme.TextMain
-    $global:chkDefrag.BackColor = $Theme.BgDark
-    $page.Controls.Add($global:chkDefrag)
+    $script:chkDefrag = New-Object System.Windows.Forms.CheckBox
+    $script:chkDefrag.Location = New-Object System.Drawing.Point(280, $yDisk)
+    $script:chkDefrag.Size = New-Object System.Drawing.Size(250, 24)
+    $script:chkDefrag.Text = "HDD 碎片整理"
+    $script:chkDefrag.Checked = $true
+    $script:chkDefrag.Font = $Fonts.Body
+    $script:chkDefrag.ForeColor = $Theme.TextMain
+    $script:chkDefrag.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkDefrag)
 
-    $global:chkWinSxS = New-Object System.Windows.Forms.CheckBox
-    $global:chkWinSxS.Location = New-Object System.Drawing.Point(20, [int]($yDisk + 30))
-    $global:chkWinSxS.Size = New-Object System.Drawing.Size(250, 24)
-    $global:chkWinSxS.Text = "清理 WinSxS 组件存储"
-    $global:chkWinSxS.Checked = $true
-    $global:chkWinSxS.Font = $Fonts.Body
-    $global:chkWinSxS.ForeColor = $Theme.TextMain
-    $global:chkWinSxS.BackColor = $Theme.BgDark
-    $page.Controls.Add($global:chkWinSxS)
+    $script:chkWinSxS = New-Object System.Windows.Forms.CheckBox
+    $script:chkWinSxS.Location = New-Object System.Drawing.Point(20, [int]($yDisk + 30))
+    $script:chkWinSxS.Size = New-Object System.Drawing.Size(250, 24)
+    $script:chkWinSxS.Text = "清理 WinSxS 组件存储"
+    $script:chkWinSxS.Checked = $true
+    $script:chkWinSxS.Font = $Fonts.Body
+    $script:chkWinSxS.ForeColor = $Theme.TextMain
+    $script:chkWinSxS.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkWinSxS)
 
-    $global:chkCompact = New-Object System.Windows.Forms.CheckBox
-    $global:chkCompact.Location = New-Object System.Drawing.Point(280, [int]($yDisk + 30))
-    $global:chkCompact.Size = New-Object System.Drawing.Size(250, 24)
-    $global:chkCompact.Text = "压缩系统文件 (CompactOS)"
-    $global:chkCompact.Checked = $false
-    $global:chkCompact.Font = $Fonts.Body
-    $global:chkCompact.ForeColor = $Theme.TextMain
-    $global:chkCompact.BackColor = $Theme.BgDark
-    $page.Controls.Add($global:chkCompact)
+    $script:chkCompact = New-Object System.Windows.Forms.CheckBox
+    $script:chkCompact.Location = New-Object System.Drawing.Point(280, [int]($yDisk + 30))
+    $script:chkCompact.Size = New-Object System.Drawing.Size(250, 24)
+    $script:chkCompact.Text = "压缩系统文件 (CompactOS)"
+    $script:chkCompact.Checked = $false
+    $script:chkCompact.Font = $Fonts.Body
+    $script:chkCompact.ForeColor = $Theme.TextMain
+    $script:chkCompact.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkCompact)
 
     $yDisk += 70
 
-    $global:btnDiskOpt = New-Button "开始优化" 20 $yDisk 200 44 $Theme.Success 11
-    $global:btnDiskOpt.Add_Click({
-        param($sender, $e)
-        $sender.Enabled = $false
-        $sender.Text = "优化中...(可能需要数分钟)"
-        $MainForm.Refresh()
-        $physicalDisks = @(Get-PhysicalDisk -ErrorAction SilentlyContinue)
-        $volumes = @(Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter -and $_.DriveType -eq "Fixed" })
+    $script:btnDiskOpt = New-Button "开始优化" 20 $yDisk 200 44 $Theme.Success 11
+    $script:btnDiskOpt.Add_Click({
+        try {
+        $script:btnDiskOpt.Enabled = $false
+        $script:btnDiskOpt.Text = "优化中...(可能需要数分钟)"
+        Invoke-UIRefresh
+        $volumes = @(Get-VolumeCompat)
 
-        if ($global:chkTRIM.Checked -or $global:chkDefrag.Checked) {
+        if ($script:chkTRIM.Checked -or $script:chkDefrag.Checked) {
             foreach ($vol in $volumes) {
-                $partition = Get-Partition -DriveLetter $vol.DriveLetter -ErrorAction SilentlyContinue
-                if ($partition) {
-                    $pd = $physicalDisks | Where-Object { "$($_.DeviceId)" -eq "$($partition.DiskNumber)" }
-                    $mediaType = if ($pd) { $pd.MediaType } else { "Unknown" }
-
-                    $drive = "$($vol.DriveLetter):"
-                    if ($mediaType -eq "SSD" -and $global:chkTRIM.Checked) {
-                        try {
-                            Optimize-Volume -DriveLetter $vol.DriveLetter -ReTrim -ErrorAction Stop
-                            Write-Log "[优化] $drive TRIM 完成" "SUCCESS"
-                        } catch { Write-Log "[跳过] $drive TRIM" "WARN" }
-                    }
-                    elseif ($mediaType -eq "HDD" -and $global:chkDefrag.Checked) {
-                        try {
-                            Optimize-Volume -DriveLetter $vol.DriveLetter -Defrag -ErrorAction Stop
-                            Write-Log "[优化] $drive 碎片整理完成" "SUCCESS"
-                        } catch { Write-Log "[跳过] $drive 碎片整理" "WARN" }
-                    }
+                $drive = "$($vol.DriveLetter):"
+                # Win7 回退：用 WMI 查询磁盘类型
+                $mediaType = "HDD"
+                if ($script:chkTRIM.Checked) {
+                    try {
+                        Optimize-VolumeCompat -DriveLetter $vol.DriveLetter -ReTrim
+                        Write-Log "[优化] $drive TRIM 完成" "SUCCESS"
+                    } catch { Write-Log "[跳过] $drive TRIM" "WARN" }
                 }
+                if ($script:chkDefrag.Checked) {
+                    try {
+                        Optimize-VolumeCompat -DriveLetter $vol.DriveLetter -Defrag
+                        Write-Log "[优化] $drive 碎片整理完成" "SUCCESS"
+                    } catch { Write-Log "[跳过] $drive 碎片整理" "WARN" }
+                }
+                Invoke-UIRefresh
             }
         }
 
-        if ($global:chkWinSxS.Checked) {
+        if ($script:chkWinSxS.Checked) {
             Write-Log "正在清理 WinSxS 组件存储..."
             Dism.exe /Online /Cleanup-Image /StartComponentCleanup 2>&1 | Out-Null
             Write-Log "WinSxS 组件存储清理完成" "SUCCESS"
         }
 
-        if ($global:chkCompact.Checked) {
+        if ($script:chkCompact.Checked) {
             Write-Log "正在压缩系统文件..."
             Compact.exe /CompactOS:always 2>&1 | Out-Null
             Write-Log "系统文件压缩完成" "SUCCESS"
         }
 
         Write-Log "磁盘优化完成！" "SUCCESS"
-        $sender.Enabled = $true
-        $sender.Text = "开始优化"
+        $script:btnDiskOpt.Enabled = $true
+        $script:btnDiskOpt.Text = "开始优化"
         [System.Windows.Forms.MessageBox]::Show("磁盘优化完成！", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-    }.GetNewClosure())
-    $page.Controls.Add($global:btnDiskOpt)
+        } catch {
+            Write-Log "磁盘优化出错: $($_.Exception.Message)" "ERROR"
+            $script:btnDiskOpt.Enabled = $true
+            $script:btnDiskOpt.Text = "开始优化"
+            [System.Windows.Forms.MessageBox]::Show("磁盘优化出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    })
+    $page.Controls.Add($script:btnDiskOpt)
 }
 
 # ============================================================
 #  页面 8: 网络优化
 # ============================================================
 $pageNet = New-Page "Network"
-$global:Pages["Network"] = $pageNet
+$script:Pages["Network"] = $pageNet
 
 function Build-NetworkPage {
-    $page = $global:Pages["Network"]
+    $page = $script:Pages["Network"]
     $page.Controls.Clear()
 
     $lblTitle = New-Label "网络优化" 20 10 500 30 $Fonts.Header $Theme.TextBright
@@ -1394,74 +1564,74 @@ function Build-NetworkPage {
     $lblDNS = New-Label "DNS 设置:" 20 $y 100 24 $Fonts.Body $Theme.TextBright
     $page.Controls.Add($lblDNS)
 
-    $global:cbDNS = New-Object System.Windows.Forms.ComboBox
-    $global:cbDNS.Location = New-Object System.Drawing.Point(130, [int]($y - 2))
-    $global:cbDNS.Size = New-Object System.Drawing.Size(300, 28)
-    $global:cbDNS.Font = $Fonts.Body
-    $global:cbDNS.BackColor = $Theme.BgInput
-    $global:cbDNS.ForeColor = $Theme.TextMain
-    $global:cbDNS.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
-    $global:cbDNS.Items.Add("保持当前 DNS") | Out-Null
-    $global:cbDNS.Items.Add("Cloudflare (1.1.1.1 / 1.0.0.1)") | Out-Null
-    $global:cbDNS.Items.Add("Google (8.8.8.8 / 8.8.4.4)") | Out-Null
-    $global:cbDNS.Items.Add("阿里 DNS (223.5.5.5 / 223.6.6.6)") | Out-Null
-    $global:cbDNS.Items.Add("114 DNS (114.114.114.114 / 114.114.115.115)") | Out-Null
-    $global:cbDNS.SelectedIndex = 0
-    $page.Controls.Add($global:cbDNS)
+    $script:cbDNS = New-Object System.Windows.Forms.ComboBox
+    $script:cbDNS.Location = New-Object System.Drawing.Point(130, [int]($y - 2))
+    $script:cbDNS.Size = New-Object System.Drawing.Size(300, 28)
+    $script:cbDNS.Font = $Fonts.Body
+    $script:cbDNS.BackColor = $Theme.BgInput
+    $script:cbDNS.ForeColor = $Theme.TextMain
+    $script:cbDNS.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+    $script:cbDNS.Items.Add("保持当前 DNS") | Out-Null
+    $script:cbDNS.Items.Add("Cloudflare (1.1.1.1 / 1.0.0.1)") | Out-Null
+    $script:cbDNS.Items.Add("Google (8.8.8.8 / 8.8.4.4)") | Out-Null
+    $script:cbDNS.Items.Add("阿里 DNS (223.5.5.5 / 223.6.6.6)") | Out-Null
+    $script:cbDNS.Items.Add("114 DNS (114.114.114.114 / 114.114.115.115)") | Out-Null
+    $script:cbDNS.SelectedIndex = 0
+    $page.Controls.Add($script:cbDNS)
 
     $y += 40
 
-    $global:chkTCP = New-Object System.Windows.Forms.CheckBox
-    $global:chkTCP.Location = New-Object System.Drawing.Point(20, $y)
-    $global:chkTCP.Size = New-Object System.Drawing.Size(300, 24)
-    $global:chkTCP.Text = "TCP 自动调优 (Auto Tuning)"
-    $global:chkTCP.Checked = $true
-    $global:chkTCP.Font = $Fonts.Body
-    $global:chkTCP.ForeColor = $Theme.TextMain
-    $global:chkTCP.BackColor = $Theme.BgDark
-    $page.Controls.Add($global:chkTCP)
+    $script:chkTCP = New-Object System.Windows.Forms.CheckBox
+    $script:chkTCP.Location = New-Object System.Drawing.Point(20, $y)
+    $script:chkTCP.Size = New-Object System.Drawing.Size(300, 24)
+    $script:chkTCP.Text = "TCP 自动调优 (Auto Tuning)"
+    $script:chkTCP.Checked = $true
+    $script:chkTCP.Font = $Fonts.Body
+    $script:chkTCP.ForeColor = $Theme.TextMain
+    $script:chkTCP.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkTCP)
 
     $y += 30
 
-    $global:chkRSS = New-Object System.Windows.Forms.CheckBox
-    $global:chkRSS.Location = New-Object System.Drawing.Point(20, $y)
-    $global:chkRSS.Size = New-Object System.Drawing.Size(300, 24)
-    $global:chkRSS.Text = "RSS 接收端缩放"
-    $global:chkRSS.Checked = $true
-    $global:chkRSS.Font = $Fonts.Body
-    $global:chkRSS.ForeColor = $Theme.TextMain
-    $global:chkRSS.BackColor = $Theme.BgDark
-    $page.Controls.Add($global:chkRSS)
+    $script:chkRSS = New-Object System.Windows.Forms.CheckBox
+    $script:chkRSS.Location = New-Object System.Drawing.Point(20, $y)
+    $script:chkRSS.Size = New-Object System.Drawing.Size(300, 24)
+    $script:chkRSS.Text = "RSS 接收端缩放"
+    $script:chkRSS.Checked = $true
+    $script:chkRSS.Font = $Fonts.Body
+    $script:chkRSS.ForeColor = $Theme.TextMain
+    $script:chkRSS.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkRSS)
 
     $y += 30
 
-    $global:chkRSC = New-Object System.Windows.Forms.CheckBox
-    $global:chkRSC.Location = New-Object System.Drawing.Point(20, $y)
-    $global:chkRSC.Size = New-Object System.Drawing.Size(300, 24)
-    $global:chkRSC.Text = "RSC 接收段合并"
-    $global:chkRSC.Checked = $true
-    $global:chkRSC.Font = $Fonts.Body
-    $global:chkRSC.ForeColor = $Theme.TextMain
-    $global:chkRSC.BackColor = $Theme.BgDark
-    $page.Controls.Add($global:chkRSC)
+    $script:chkRSC = New-Object System.Windows.Forms.CheckBox
+    $script:chkRSC.Location = New-Object System.Drawing.Point(20, $y)
+    $script:chkRSC.Size = New-Object System.Drawing.Size(300, 24)
+    $script:chkRSC.Text = "RSC 接收段合并"
+    $script:chkRSC.Checked = $true
+    $script:chkRSC.Font = $Fonts.Body
+    $script:chkRSC.ForeColor = $Theme.TextMain
+    $script:chkRSC.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkRSC)
 
     $y += 30
 
-    $global:chkDNSCache = New-Object System.Windows.Forms.CheckBox
-    $global:chkDNSCache.Location = New-Object System.Drawing.Point(20, $y)
-    $global:chkDNSCache.Size = New-Object System.Drawing.Size(300, 24)
-    $global:chkDNSCache.Text = "刷新 DNS 缓存"
-    $global:chkDNSCache.Checked = $true
-    $global:chkDNSCache.Font = $Fonts.Body
-    $global:chkDNSCache.ForeColor = $Theme.TextMain
-    $global:chkDNSCache.BackColor = $Theme.BgDark
-    $page.Controls.Add($global:chkDNSCache)
+    $script:chkDNSCache = New-Object System.Windows.Forms.CheckBox
+    $script:chkDNSCache.Location = New-Object System.Drawing.Point(20, $y)
+    $script:chkDNSCache.Size = New-Object System.Drawing.Size(300, 24)
+    $script:chkDNSCache.Text = "刷新 DNS 缓存"
+    $script:chkDNSCache.Checked = $true
+    $script:chkDNSCache.Font = $Fonts.Body
+    $script:chkDNSCache.ForeColor = $Theme.TextMain
+    $script:chkDNSCache.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:chkDNSCache)
 
     $y += 40
 
     $lblCurDNS = New-Label "当前 DNS:" 20 $y 760 24 $Fonts.Small $Theme.TextDim
     try {
-        $adapters = Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object { $_.ServerAddresses.Count -gt 0 }
+        $adapters = Get-DnsClientServerAddressCompat
         $dnsText = $adapters | ForEach-Object { "$($_.InterfaceAlias): $($_.ServerAddresses -join ', ')" }
         $lblCurDNS.Text = "当前 DNS: $($dnsText -join ' | ')"
     } catch {}
@@ -1469,14 +1639,14 @@ function Build-NetworkPage {
 
     $y += 40
 
-    $global:btnNetOpt = New-Button "开始优化" 20 $y 200 44 $Theme.Success 11
-    $global:btnNetOpt.Add_Click({
-        param($sender, $e)
-        $sender.Enabled = $false
-        $sender.Text = "优化中..."
-        $MainForm.Refresh()
+    $script:btnNetOpt = New-Button "开始优化" 20 $y 200 44 $Theme.Success 11
+    $script:btnNetOpt.Add_Click({
+        try {
+        $script:btnNetOpt.Enabled = $false
+        $script:btnNetOpt.Text = "优化中..."
+        Invoke-UIRefresh
 
-        $dnsChoice = $global:cbDNS.SelectedIndex
+        $dnsChoice = $script:cbDNS.SelectedIndex
 
         if ($dnsChoice -gt 0) {
             $dnsServers = switch ($dnsChoice) {
@@ -1487,60 +1657,62 @@ function Build-NetworkPage {
             }
 
             try {
-                $adapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }
+                $adapters = Get-NetAdapterCompat
                 foreach ($adapter in $adapters) {
-                    Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses $dnsServers -ErrorAction SilentlyContinue
-                    Write-Log "[DNS] $($adapter.Name) 已设置为 $($dnsServers -join ', ')" "SUCCESS"
+                    if ($adapter.Name) {
+                        Set-DnsCompat -InterfaceName $adapter.Name -DnsServers $dnsServers
+                        Write-Log "[DNS] $($adapter.Name) 已设置为 $($dnsServers -join ', ')" "SUCCESS"
+                    }
                 }
             } catch {
                 Write-Log "[DNS] 设置失败: $_" "ERROR"
             }
         }
 
-        if ($global:chkTCP.Checked) {
+        if ($script:chkTCP.Checked) {
             try {
                 netsh int tcp set global autotuninglevel=normal 2>&1 | Out-Null
                 Write-Log "[TCP] 自动调优已启用" "SUCCESS"
             } catch { Write-Log "[TCP] 设置失败" "WARN" }
         }
 
-        if ($global:chkRSS.Checked) {
-            try {
-                Enable-NetAdapterRss -Name "*" -ErrorAction SilentlyContinue
-                Write-Log "[RSS] 接收端缩放已启用" "SUCCESS"
-            } catch { Write-Log "[RSS] 设置失败" "WARN" }
+        if ($script:chkRSS.Checked) {
+            Enable-NetAdapterRssCompat
+            Write-Log "[RSS] 接收端缩放已启用" "SUCCESS"
         }
 
-        if ($global:chkRSC.Checked) {
-            try {
-                Enable-NetAdapterRsc -Name "*" -ErrorAction SilentlyContinue
-                Write-Log "[RSC] 接收段合并已启用" "SUCCESS"
-            } catch { Write-Log "[RSC] 设置失败" "WARN" }
+        if ($script:chkRSC.Checked) {
+            Enable-NetAdapterRscCompat
+            Write-Log "[RSC] 接收段合并已启用" "SUCCESS"
         }
 
-        if ($global:chkDNSCache.Checked) {
-            try {
-                Clear-DnsClientCache
-                Write-Log "[DNS] 缓存已刷新" "SUCCESS"
-            } catch { Write-Log "[DNS] 缓存刷新失败" "WARN" }
+        if ($script:chkDNSCache.Checked) {
+            Clear-DnsClientCacheCompat
+            Write-Log "[DNS] 缓存已刷新" "SUCCESS"
         }
 
         Write-Log "网络优化完成！" "SUCCESS"
-        $sender.Enabled = $true
-        $sender.Text = "开始优化"
+        $script:btnNetOpt.Enabled = $true
+        $script:btnNetOpt.Text = "开始优化"
         [System.Windows.Forms.MessageBox]::Show("网络优化完成！", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-    }.GetNewClosure())
-    $page.Controls.Add($global:btnNetOpt)
+        } catch {
+            Write-Log "网络优化出错: $($_.Exception.Message)" "ERROR"
+            $script:btnNetOpt.Enabled = $true
+            $script:btnNetOpt.Text = "开始优化"
+            [System.Windows.Forms.MessageBox]::Show("网络优化出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    })
+    $page.Controls.Add($script:btnNetOpt)
 }
 
 # ============================================================
 #  页面 9: 备份恢复
 # ============================================================
 $pageBackup = New-Page "Backup"
-$global:Pages["Backup"] = $pageBackup
+$script:Pages["Backup"] = $pageBackup
 
 function Build-BackupPage {
-    $page = $global:Pages["Backup"]
+    $page = $script:Pages["Backup"]
     $page.Controls.Clear()
 
     $lblTitle = New-Label "备份恢复" 20 10 500 30 $Fonts.Header $Theme.TextBright
@@ -1554,24 +1726,24 @@ function Build-BackupPage {
     $btnBackup = New-Button "创建备份" 20 $y 160 44 $Theme.Success 11
     $btnBackup.Add_Click({
         $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-        $global:BackupDir = Join-Path $global:ProjectRoot "backups"
+        $script:BackupDir = Join-Path $script:ProjectRoot "backups"
 
-        if (-not (Test-Path $global:BackupDir)) {
-            New-Item -Path $global:BackupDir -ItemType Directory -Force | Out-Null
+        if (-not (Test-Path $script:BackupDir)) {
+            New-Item -Path $script:BackupDir -ItemType Directory -Force | Out-Null
         }
 
         Write-Log "正在创建系统备份..."
         try {
-            $startupFile = Join-Path $global:BackupDir "startup_$timestamp.csv"
-            Get-CimInstance Win32_StartupCommand | Export-Csv $startupFile -NoTypeInformation -ErrorAction SilentlyContinue
+            $startupFile = Join-Path $script:BackupDir "startup_$timestamp.csv"
+            Get-CimData Win32_StartupCommand | Export-Csv $startupFile -NoTypeInformation -ErrorAction SilentlyContinue
 
-            $svcFile = Join-Path $global:BackupDir "services_$timestamp.csv"
-            Get-CimInstance Win32_Service | Select-Object Name, DisplayName, StartMode, State | Export-Csv $svcFile -NoTypeInformation
+            $svcFile = Join-Path $script:BackupDir "services_$timestamp.csv"
+            Get-CimData Win32_Service | Select-Object Name, DisplayName, StartMode, State | Export-Csv $svcFile -NoTypeInformation
 
-            $powerFile = Join-Path $global:BackupDir "power_$timestamp.txt"
+            $powerFile = Join-Path $script:BackupDir "power_$timestamp.txt"
             powercfg /list | Out-File $powerFile -Encoding UTF8
 
-            $visFile = Join-Path $global:BackupDir "visual_$timestamp.txt"
+            $visFile = Join-Path $script:BackupDir "visual_$timestamp.txt"
             Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" | Out-File $visFile -Encoding UTF8
 
             Write-Log "备份已创建" "SUCCESS"
@@ -1581,7 +1753,7 @@ function Build-BackupPage {
             Write-Log "备份创建失败: $_" "ERROR"
             [System.Windows.Forms.MessageBox]::Show("备份创建失败: $_", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
-    }.GetNewClosure())
+    })
     $page.Controls.Add($btnBackup)
 
     $btnRestore = New-Button "恢复最近备份" 200 $y 160 44 $Theme.Warning 11
@@ -1594,8 +1766,8 @@ function Build-BackupPage {
         )
         if ($result -ne [System.Windows.Forms.DialogResult]::Yes) { return }
 
-        $global:BackupDir = Join-Path $global:ProjectRoot "backups"
-        if (-not (Test-Path $global:BackupDir)) {
+        $script:BackupDir = Join-Path $script:ProjectRoot "backups"
+        if (-not (Test-Path $script:BackupDir)) {
             [System.Windows.Forms.MessageBox]::Show("未找到备份目录", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             return
         }
@@ -1603,7 +1775,7 @@ function Build-BackupPage {
         Write-Log "开始从备份恢复..."
         $restored = 0
 
-        $svcBackups = Get-ChildItem $global:BackupDir -Filter "services_*.csv" -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+        $svcBackups = Get-ChildItem $script:BackupDir -Filter "services_*.csv" -ErrorAction SilentlyContinue | Sort-Object Name -Descending
         if ($svcBackups) {
             try {
                 $svcs = Import-Csv $svcBackups[0].FullName
@@ -1623,7 +1795,7 @@ function Build-BackupPage {
             } catch { Write-Log "服务恢复失败" "WARN" }
         }
 
-        $startupBackups = Get-ChildItem $global:BackupDir -Filter "startup_*.csv" -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+        $startupBackups = Get-ChildItem $script:BackupDir -Filter "startup_*.csv" -ErrorAction SilentlyContinue | Sort-Object Name -Descending
         if ($startupBackups) {
             try {
                 $items = Import-Csv $startupBackups[0].FullName
@@ -1648,7 +1820,7 @@ function Build-BackupPage {
         }
 
         [System.Windows.Forms.MessageBox]::Show("恢复完成！请重启电脑使所有更改生效。", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-    }.GetNewClosure())
+    })
     $page.Controls.Add($btnRestore)
 
     $y += 56
@@ -1682,9 +1854,9 @@ function Build-BackupPage {
     $dgvBackups.Columns.Add("Type", "类型") | Out-Null
     $dgvBackups.Columns.Add("Size", "大小") | Out-Null
 
-    $global:BackupDir = Join-Path $global:ProjectRoot "backups"
-    if (Test-Path $global:BackupDir) {
-        $backupFiles = Get-ChildItem $global:BackupDir -File | Sort-Object LastWriteTime -Descending | Select-Object -First 50
+    $script:BackupDir = Join-Path $script:ProjectRoot "backups"
+    if (Test-Path $script:BackupDir) {
+        $backupFiles = Get-ChildItem $script:BackupDir -File | Sort-Object LastWriteTime -Descending | Select-Object -First 50
         foreach ($b in $backupFiles) {
             $type = if ($b.Name -like "services_*") { "服务备份" }
                     elseif ($b.Name -like "startup_*") { "启动项备份" }
@@ -1707,7 +1879,7 @@ function Build-BackupPage {
             return
         }
         $selectedFile = $dgvBackups.SelectedRows[0].Cells["Name"].Value
-        $selectedPath = Join-Path $global:BackupDir $selectedFile
+        $selectedPath = Join-Path $script:BackupDir $selectedFile
 
         if (-not (Test-Path $selectedPath)) {
             [System.Windows.Forms.MessageBox]::Show("备份文件不存在", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
@@ -1758,7 +1930,7 @@ function Build-BackupPage {
         }
 
         [System.Windows.Forms.MessageBox]::Show("恢复完成！请重启电脑使所有更改生效。", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-    }.GetNewClosure())
+    })
     $page.Controls.Add($btnRestoreSel)
 
     $btnRefreshBackup = New-Button "刷新列表" 200 $y 120 44 $Theme.AccentDark 10
@@ -1770,10 +1942,10 @@ function Build-BackupPage {
 #  页面 10: 关于
 # ============================================================
 $pageAbout = New-Page "About"
-$global:Pages["About"] = $pageAbout
+$script:Pages["About"] = $pageAbout
 
 function Build-AboutPage {
-    $page = $global:Pages["About"]
+    $page = $script:Pages["About"]
     $page.Controls.Clear()
 
     $lblAboutTitle = New-Label "PC-Optimizer-7thGen" 20 20 760 36 $Fonts.Title $Theme.Accent
@@ -1783,7 +1955,8 @@ function Build-AboutPage {
     $page.Controls.Add($lblVer)
 
     $aboutText = @"
-专为 7 代及更老 CPU 的 Windows 10/11 电脑设计
+专为 7 代及更老 CPU 的 Windows 电脑设计
+兼容 Windows 7 / 8 / 10 / 11 (PS 2.0+)
 
 功能特性:
   - 垃圾文件清理（临时文件、缓存、回收站等）
@@ -1795,6 +1968,13 @@ function Build-AboutPage {
   - 网络优化（DNS 设置 / TCP 调优 / RSS RSC）
   - 备份恢复（服务/启动项/电源计划备份）
 
+Win7 兼容性:
+  - 自动检测操作系统版本
+  - PS 2.0 下回退到 Get-WmiObject
+  - Win7 下用 netsh 替代 NetAdapter cmdlet
+  - Win7 下用 schtasks 替代 ScheduledTask cmdlet
+  - Win7 下用 COM 对象清空回收站
+
 安全特性:
   - 所有操作前自动创建备份
   - 不修改系统核心文件
@@ -1805,11 +1985,11 @@ function Build-AboutPage {
   - 优化前建议先创建备份
   - 优化后重启电脑使更改生效
   - 笔记本电池模式建议使用平衡电源计划
-"@
+"@ 
 
     $lblAbout = New-Object System.Windows.Forms.Label
     $lblAbout.Location = New-Object System.Drawing.Point(20, 100)
-    $lblAbout.Size = New-Object System.Drawing.Size(760, 400)
+    $lblAbout.Size = New-Object System.Drawing.Size(760, 480)
     $lblAbout.Text = $aboutText
     $lblAbout.Font = $Fonts.Body
     $lblAbout.ForeColor = $Theme.TextMain
@@ -1828,6 +2008,8 @@ $logSplit.SplitterWidth = 1
 $logSplit.Panel1.BackColor = $Theme.BgDark
 $logSplit.Panel2.BackColor = $Theme.BgDark
 $logSplit.FixedPanel = [System.Windows.Forms.FixedPanel]::Panel1
+$logSplit.Panel1MinSize = 80
+$logSplit.SplitterDistance = 80
 # 日志面板放到 contentPanel 而非 pageContainer，避免遮挡页面内容
 $contentPanel.Controls.Add($logSplit)
 
@@ -1851,20 +2033,20 @@ $btnClearLog.BackColor = $Theme.BgPanel
 $btnClearLog.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnClearLog.Cursor = [System.Windows.Forms.Cursors]::Hand
 $btnClearLog.Add_Click({
-    $global:LogTextBox.Clear()
+    $script:LogTextBox.Clear()
 })
 $logSplit.Panel1.Controls.Add($btnClearLog)
 
 # 日志文本框
-$global:LogTextBox = New-Object System.Windows.Forms.RichTextBox
-$global:LogTextBox.Dock = [System.Windows.Forms.DockStyle]::Fill
-$global:LogTextBox.BackColor = [System.Drawing.Color]::FromArgb(25, 25, 35)
-$global:LogTextBox.ForeColor = $Theme.TextDim
-$global:LogTextBox.Font = $Fonts.Mono
-$global:LogTextBox.ReadOnly = $true
-$global:LogTextBox.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
-$global:LogTextBox.ScrollBars = [System.Windows.Forms.RichTextBoxScrollBars]::Vertical
-$logSplit.Panel2.Controls.Add($global:LogTextBox)
+$script:LogTextBox = New-Object System.Windows.Forms.RichTextBox
+$script:LogTextBox.Dock = [System.Windows.Forms.DockStyle]::Fill
+$script:LogTextBox.BackColor = [System.Drawing.Color]::FromArgb(25, 25, 35)
+$script:LogTextBox.ForeColor = $Theme.TextDim
+$script:LogTextBox.Font = $Fonts.Mono
+$script:LogTextBox.ReadOnly = $true
+$script:LogTextBox.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+$script:LogTextBox.ScrollBars = [System.Windows.Forms.RichTextBoxScrollBars]::Vertical
+$logSplit.Panel2.Controls.Add($script:LogTextBox)
 
 # ============================================================
 #  构建所有页面
@@ -1881,9 +2063,9 @@ Build-BackupPage
 Build-AboutPage
 
 # 将所有页面添加到容器
-foreach ($key in $global:Pages.Keys) {
-    $pageContainer.Controls.Add($global:Pages[$key])
-    $global:Pages[$key].BringToFront()
+foreach ($key in $script:Pages.Keys) {
+    $pageContainer.Controls.Add($script:Pages[$key])
+    $script:Pages[$key].BringToFront()
 }
 # 确保日志在最前
 $logSplit.BringToFront()
@@ -1893,7 +2075,7 @@ $pageContainer.SendToBack()
 # ============================================================
 #  侧边栏标题映射
 # ============================================================
-$global:HeaderTitles = @{
+$script:HeaderTitles = @{
     "Dashboard" = "系统仪表盘"
     "Clean"     = "垃圾清理"
     "Services"  = "服务优化"
@@ -1905,7 +2087,7 @@ $global:HeaderTitles = @{
     "Backup"    = "备份恢复"
     "About"     = "关于"
 }
-$global:HeaderLabel = $lblHeader
+$script:HeaderLabel = $lblHeader
 
 # ============================================================
 #  启动
