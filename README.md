@@ -1,4 +1,4 @@
-﻿# PC-Optimizer-7thGen 🔧
+﻿﻿# PC-Optimizer-7thGen 🔧
 
 > 专为 **7 代及更老 CPU** 的 Windows 10/11 电脑设计的系统优化工具集
 > v2.0 已合并 `windows-utils` 仓库的所有实用工具
@@ -49,15 +49,16 @@ v2.0 合并了原 `windows-utils` 仓库的 4 个实用工具（C盘清理、剪
 
 > EXE 文件无需安装 PowerShell 执行策略设置，双击即用
 
-### 方式三：GUI 图形界面（脚本模式）
+### 方式三：GUI 图形界面
 
-1. 双击项目根目录下的 `StartGUI.bat` 文件
-2. 系统自动以管理员身份启动 GUI 界面
+1. 双击项目根目录下的 `Start.bat` 文件
+2. 选择 GUI 脚本模式
+3. 系统自动以管理员身份启动 GUI 界面
 
 或者手动启动：
 ```powershell
 # 以管理员身份打开 PowerShell
-cd C:\win-optimizer
+cd C:\PC-Optimizer-7thGen
 .\OptimizeGUI.ps1
 ```
 
@@ -66,7 +67,7 @@ cd C:\win-optimizer
 1. **以管理员身份**打开 PowerShell
 2. 执行以下命令：
 ```powershell
-cd C:\win-optimizer
+cd C:\PC-Optimizer-7thGen
 .\Optimize.ps1
 ```
 
@@ -75,7 +76,7 @@ cd C:\win-optimizer
 如果修改了 `OptimizeGUI.ps1`，可以重新编译 EXE：
 ```powershell
 # 以管理员身份打开 PowerShell
-cd C:\win-optimizer
+cd C:\PC-Optimizer-7thGen
 .\Build-EXE.ps1
 ```
 
@@ -119,7 +120,7 @@ cd C:\win-optimizer
 ## 📁 项目结构
 
 ```
-win-optimizer/
+PC-Optimizer-7thGen/
 ├── PC-Optimizer.exe          # EXE 可执行程序（双击即用，最推荐）
 ├── OptimizeGUI.ps1           # GUI 图形界面源码
 ├── Build-EXE.ps1             # EXE 编译脚本（重新编译用）

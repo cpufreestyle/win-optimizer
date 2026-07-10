@@ -1,4 +1,4 @@
-﻿<#
+﻿﻿<#
 .SYNOPSIS
     系统信息检测模块 — 展示详细的硬件与系统信息
 #>
@@ -40,8 +40,8 @@ if ($cpuName -match "i[3579]-(\d)") {
 
 # --- 内存信息 ---
 Write-Host "`n[内存]" -ForegroundColor Yellow
-$totalMem = [math]::Round($os.TotalVisibleMemorySize / 1KB, 1)
-$freeMem  = [math]::Round($os.FreePhysicalMemory / 1KB, 1)
+$totalMem = [math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
+$freeMem  = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
 $usedMem  = [math]::Round($totalMem - $freeMem, 1)
 $memUsage = [math]::Round(($usedMem / $totalMem) * 100, 1)
 Write-Host "  总内存      : ${totalMem} GB"
@@ -109,7 +109,8 @@ try {
     $temps = Get-CimInstance -Namespace "root/wmi" -Class MSAcpi_ThermalZoneTemperature -ErrorAction Stop
     foreach ($t in $temps) {
         $tempC = [math]::Round(($t.CurrentTemperature - 2732) / 10.0, 1)
-        Write-Host "  温度: ${tempC}°C" $(if ($tempC -gt 80) { "-ForegroundColor Red" } elseif ($tempC -gt 65) { "-ForegroundColor Yellow" })
+        $tempColor = if ($tempC -gt 80) { "Red" } elseif ($tempC -gt 65) { "Yellow" } else { "Green" }
+        Write-Host "  温度: ${tempC}°C" -ForegroundColor $tempColor
     }
 } catch {
     Write-Host "  温度信息不可用 (需要硬件支持 ACPI 热区)" -ForegroundColor Gray

@@ -1,4 +1,4 @@
-﻿<#
+﻿﻿<#
 .SYNOPSIS
     7代CPU老电脑 Windows 系统优化工具
 .DESCRIPTION
@@ -129,12 +129,9 @@ function Show-Menu {
             "7" { Invoke-ScriptModule "07-DiskOptimize.ps1" }
             "8" { Invoke-ScriptModule "08-NetworkOptimize.ps1" }
             "9" { Invoke-FullOptimization }
-            "b" { Invoke-ScriptModule "09-BackupRestore.ps1" }
-            "B" { Invoke-ScriptModule "09-BackupRestore.ps1" }
-            "r" { Invoke-ScriptModule "09-BackupRestore.ps1" }
-            "R" { Invoke-ScriptModule "09-BackupRestore.ps1" }
-            "q" { Write-Host "感谢使用，再见！" -ForegroundColor Green; return }
-            "Q" { Write-Host "感谢使用，再见！" -ForegroundColor Green; return }
+            { $_ -eq "B" -or $_ -eq "b" } { Invoke-ScriptModule "09-BackupRestore.ps1" }
+            { $_ -eq "R" -or $_ -eq "r" } { Invoke-ScriptModule "09-BackupRestore.ps1" }
+            { $_ -eq "Q" -or $_ -eq "q" } { Write-Host "感谢使用，再见！" -ForegroundColor Green; return }
             default { Write-Host "无效选项，请重新输入。" -ForegroundColor Red; Start-Sleep -Seconds 1 }
         }
     }

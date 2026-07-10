@@ -1,4 +1,4 @@
-﻿<#
+﻿﻿<#
 .SYNOPSIS
     启动项优化模块 — 管理并禁用多余的开机启动项
 .DESCRIPTION
@@ -116,10 +116,8 @@ $input = Read-Host "选择"
 
 $toDisable = @()
 switch -Wildcard ($input) {
-    "A" { $toDisable = $startupItems }
-    "a" { $toDisable = $startupItems }
-    "N" { Write-Host "  操作已取消。" -ForegroundColor Gray; Write-Host "============================================" -ForegroundColor Cyan; return }
-    "n" { Write-Host "  操作已取消。" -ForegroundColor Gray; Write-Host "============================================" -ForegroundColor Cyan; return }
+    { $_ -eq "A" -or $_ -eq "a" } { $toDisable = $startupItems }
+    { $_ -eq "N" -or $_ -eq "n" } { Write-Host "  操作已取消。" -ForegroundColor Gray; Write-Host "============================================" -ForegroundColor Cyan; return }
     default {
         $indices = $input -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ -match "^\d+$" }
         foreach ($idx in $indices) {

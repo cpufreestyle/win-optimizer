@@ -669,11 +669,37 @@ function Build-Dashboard {
             [System.Windows.Forms.MessageBoxButtons]::YesNo,
             [System.Windows.Forms.MessageBoxIcon]::Question
         )
-        if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
-            Write-Log "请逐个点击左侧功能页面执行优化操作。一键优化功能暂不支持GUI模式。" "WARN"
-            [System.Windows.Forms.MessageBox]::Show("GUI模式下请逐个使用左侧功能页面进行优化。`n`n建议操作顺序：`n1. 垃圾清理`n2. 服务优化`n3. 启动项`n4. 视觉效果`n5. 电源计划`n6. 磁盘优化`n7. 网络优化", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-            [System.Windows.Forms.MessageBox]::Show("全面优化完成！建议重启电脑使所有更改生效。", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        if ($result -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+
+        $modules = @(
+            "02-CleanTemp.ps1",
+            "03-DisableServices.ps1",
+            "04-StartupOptimize.ps1",
+            "05-VisualEffects.ps1",
+            "06-PowerPlan.ps1",
+            "07-DiskOptimize.ps1",
+            "08-NetworkOptimize.ps1"
+        )
+
+        $sender.Enabled = $false
+        $sender.Text = "优化中..."
+        $MainForm.Refresh()
+
+        foreach ($mod in $modules) {
+            Write-Log "执行模块: $mod"
+            $scriptPath = Join-Path $script:ScriptsDir $mod
+            if (Test-Path $scriptPath) {
+                try { & $scriptPath } catch { Write-Log "模块 $mod 出错: $($_.Exception.Message)" "ERROR" }
+                Write-Log "模块 $mod 完成" "SUCCESS"
+            } else {
+                Write-Log "找不到模块文件: $scriptPath" "ERROR"
+            }
         }
+
+        $sender.Enabled = $true
+        $sender.Text = "一键全面优化"
+        Write-Log "一键全面优化完成！建议重启电脑使所有更改生效。" "SUCCESS"
+        [System.Windows.Forms.MessageBox]::Show("全面优化完成！`n建议重启电脑使所有更改生效。", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
     })
     $page.Controls.Add($btnFull)
 }

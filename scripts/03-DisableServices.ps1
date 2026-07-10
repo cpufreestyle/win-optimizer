@@ -1,4 +1,4 @@
-﻿<#
+﻿﻿<#
 .SYNOPSIS
     服务优化模块 — 禁用不必要的后台服务以释放系统资源
 .DESCRIPTION
@@ -79,7 +79,7 @@ Write-Host "  备份已保存: $backupFile" -ForegroundColor Green
 # 显示服务列表并让用户确认
 Write-Host "`n[2/3] 以下服务将被禁用:" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "  {'服务名'.PadRight(28)} {'级别'.PadRight(10)} 描述" -ForegroundColor DarkGray
+Write-Host "  $('服务名'.PadRight(28)) $('级别'.PadRight(10)) 描述" -ForegroundColor DarkGray
 Write-Host "  $('-' * 75)" -ForegroundColor DarkGray
 foreach ($svc in $servicesToDisable) {
     $levelColor = if ($svc.Level -eq "安全禁用") { "Green" } else { "Yellow" }
@@ -99,10 +99,8 @@ Write-Host ""
 $confirm = Read-Host "确认禁用以上服务？(Y=全部禁用 / S=仅安全禁用 / N=取消)"
 
 $toProcess = switch ($confirm) {
-    "Y" { $servicesToDisable }
-    "y" { $servicesToDisable }
-    "S" { $servicesToDisable | Where-Object { $_.Level -eq "安全禁用" } }
-    "s" { $servicesToDisable | Where-Object { $_.Level -eq "安全禁用" } }
+    { $_ -eq "Y" -or $_ -eq "y" } { $servicesToDisable }
+    { $_ -eq "S" -or $_ -eq "s" } { $servicesToDisable | Where-Object { $_.Level -eq "安全禁用" } }
     default { @() }
 }
 
