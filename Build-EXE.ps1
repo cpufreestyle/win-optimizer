@@ -1,50 +1,83 @@
 ﻿<#
 .SYNOPSIS
-    编译 GUI 脚本为 EXE 可执行文件
+    Compile the C# launcher to PCOptimizer.exe
 .DESCRIPTION
-    使用 PS2EXE 模块将 OptimizeGUI.ps1 编译为 PC-Optimizer.exe
+    Uses .NET Framework's csc.exe to compile Launcher.cs into a native Windows EXE.
+    No external dependencies required (no ps2exe, no PowerShell modules).
 #>
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  编译 PC-Optimizer.exe" -ForegroundColor Cyan
+Write-Host "  Build PCOptimizer.exe (C# Launcher)" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 
-# 检查 ps2exe 模块
-if (-not (Get-Module -ListAvailable -Name ps2exe)) {
-    Write-Host "[安装] 正在安装 ps2exe 模块..." -ForegroundColor Yellow
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser -ErrorAction SilentlyContinue
-    Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
-    Install-Module -Name ps2exe -Force -Scope CurrentUser
+$scriptDir = $PSScriptRoot
+if (-not $scriptDir) { $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
+
+$csFile    = Join-Path $scriptDir "Launcher.cs"
+$outFile   = Join-Path $scriptDir "PCOptimizer.exe"
+
+# Find csc.exe (.NET Framework C# compiler)
+$dotNetDirs = @(
+    "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319",
+    "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319",
+    "$env:WINDIR\Microsoft.NET\Framework64\v3.5",
+    "$env:WINDIR\Microsoft.NET\Framework\v3.5"
+)
+
+$csc = $null
+foreach ($dir in $dotNetDirs) {
+    $candidate = Join-Path $dir "csc.exe"
+    if (Test-Path $candidate) {
+        $csc = $candidate
+        break
+    }
 }
 
-Import-Module ps2exe
+if (-not $csc) {
+    # Fallback: search for any v4+ compiler
+    $found = Get-ChildItem "$env:WINDIR\Microsoft.NET" -Recurse -Filter "csc.exe" -ErrorAction SilentlyContinue |
+        Where-Object { $_.DirectoryName -match 'v4\.' } |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if ($found) { $csc = $found.FullName }
+}
 
-$inputFile  = Join-Path $PSScriptRoot "OptimizeGUI.ps1"
-$outputFile = Join-Path $PSScriptRoot "PC-Optimizer.exe"
+if (-not $csc) {
+    Write-Host "  [ERROR] Cannot find csc.exe (C# compiler)" -ForegroundColor Red
+    Write-Host "  Please install .NET Framework 4.x Developer Pack" -ForegroundColor Yellow
+    exit 1
+}
 
+Write-Host "  Compiler: $csc"
+Write-Host "  Source:   $csFile"
+Write-Host "  Output:   $outFile"
 Write-Host ""
-Write-Host "  输入: $inputFile"
-Write-Host "  输出: $outputFile"
-Write-Host ""
-Write-Host "  正在编译..." -ForegroundColor Yellow
 
-Invoke-ps2exe -inputFile $inputFile -outputFile $outputFile -title "PC-Optimizer-7thGen" -version "1.0.0.0" -noConsole -requireAdmin
+if (-not (Test-Path $csFile)) {
+    Write-Host "  [ERROR] Launcher.cs not found!" -ForegroundColor Red
+    exit 1
+}
 
-if (Test-Path $outputFile) {
-    $size = [math]::Round((Get-Item $outputFile).Length / 1KB, 1)
+Write-Host "  Compiling..." -ForegroundColor Yellow
+
+# Compile as winexe (Windows app, no console window)
+& $csc /nologo /target:winexe /optimize+ /out:"$outFile" /reference:System.Windows.Forms.dll "$csFile"
+
+if ($LASTEXITCODE -eq 0 -and (Test-Path $outFile)) {
+    $size = [math]::Round((Get-Item $outFile).Length / 1KB, 1)
     Write-Host ""
-    Write-Host "  [成功] 编译完成！" -ForegroundColor Green
-    Write-Host "  文件: $outputFile"
-    Write-Host "  大小: ${size} KB"
+    Write-Host "  [OK] Build successful!" -ForegroundColor Green
+    Write-Host "  File: $outFile"
+    Write-Host "  Size: ${size} KB"
     Write-Host ""
-    Write-Host "  使用方法:" -ForegroundColor Cyan
-    Write-Host "    双击 PC-Optimizer.exe 运行（自动请求管理员权限）"
+    Write-Host "  Usage:" -ForegroundColor Cyan
+    Write-Host "    Double-click PCOptimizer.exe (auto UAC elevation)"
     Write-Host ""
 } else {
     Write-Host ""
-    Write-Host "  [失败] 编译失败！" -ForegroundColor Red
+    Write-Host "  [FAIL] Build failed!" -ForegroundColor Red
+    Write-Host "  Exit code: $LASTEXITCODE"
 }
 
 Write-Host "============================================" -ForegroundColor Cyan
