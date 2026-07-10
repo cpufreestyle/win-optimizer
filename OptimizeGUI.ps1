@@ -669,37 +669,11 @@ function Build-Dashboard {
             [System.Windows.Forms.MessageBoxButtons]::YesNo,
             [System.Windows.Forms.MessageBoxIcon]::Question
         )
-        if ($result -ne [System.Windows.Forms.DialogResult]::Yes) { return }
-
-        $modules = @(
-            "02-CleanTemp.ps1",
-            "03-DisableServices.ps1",
-            "04-StartupOptimize.ps1",
-            "05-VisualEffects.ps1",
-            "06-PowerPlan.ps1",
-            "07-DiskOptimize.ps1",
-            "08-NetworkOptimize.ps1"
-        )
-
-        $sender.Enabled = $false
-        $sender.Text = "优化中..."
-        $MainForm.Refresh()
-
-        foreach ($mod in $modules) {
-            Write-Log "执行模块: $mod"
-            $scriptPath = Join-Path $script:ScriptsDir $mod
-            if (Test-Path $scriptPath) {
-                try { & $scriptPath } catch { Write-Log "模块 $mod 出错: $($_.Exception.Message)" "ERROR" }
-                Write-Log "模块 $mod 完成" "SUCCESS"
-            } else {
-                Write-Log "找不到模块文件: $scriptPath" "ERROR"
-            }
+        if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+            Write-Log "请逐个点击左侧功能页面执行优化操作。一键优化功能暂不支持GUI模式。" "WARN"
+            [System.Windows.Forms.MessageBox]::Show("GUI模式下请逐个使用左侧功能页面进行优化。`n`n建议操作顺序：`n1. 垃圾清理`n2. 服务优化`n3. 启动项`n4. 视觉效果`n5. 电源计划`n6. 磁盘优化`n7. 网络优化", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            [System.Windows.Forms.MessageBox]::Show("全面优化完成！建议重启电脑使所有更改生效。", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         }
-
-        $sender.Enabled = $true
-        $sender.Text = "一键全面优化"
-        Write-Log "一键全面优化完成！建议重启电脑使所有更改生效。" "SUCCESS"
-        [System.Windows.Forms.MessageBox]::Show("全面优化完成！`n建议重启电脑使所有更改生效。", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
     })
     $page.Controls.Add($btnFull)
 }
@@ -1246,41 +1220,33 @@ function Build-VisualPage {
 
         $visualKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
         if (-not (Test-Path $visualKey)) { New-Item -Path $visualKey -Force | Out-Null }
+        $perfKey = "HKCU:\Control Panel\Desktop"
+        $advKey  = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+        $dwmKey  = "HKCU:\Software\Microsoft\Windows\DWM"
 
-        if ($selectedMode -eq 1) {
-            # 最佳性能
-            Set-ItemProperty -Path $visualKey -Name "VisualFXSetting" -Value 3 -Type DWord
-            $perfKey = "HKCU:\Control Panel\Desktop"
-            Set-ItemProperty -Path $perfKey -Name "DragFullWindows" -Value "0" -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path $perfKey -Name "FontSmoothing" -Value "2" -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path $perfKey -Name "MenuShowDelay" -Value "0" -ErrorAction SilentlyContinue
-            $advKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
-            Set-ItemProperty -Path $advKey -Name "TaskbarAnimations" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path $advKey -Name "ListviewAlphaSelect" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-            $dwmKey = "HKCU:\Software\Microsoft\Windows\DWM"
-            Set-ItemProperty -Path $dwmKey -Name "EnableAeroPeek" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-            Write-Log "视觉效果: 最佳性能模式已应用" "SUCCESS"
+        Set-ItemProperty -Path $visualKey -Name "VisualFXSetting" -Value 3 -Type DWord
+        Set-ItemProperty -Path $advKey -Name "TaskbarAnimations" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+
+        $modeName = switch ($selectedMode) {
+            1 {
+                Set-ItemProperty -Path $perfKey -Name "DragFullWindows" -Value "0" -ErrorAction SilentlyContinue
+                Set-ItemProperty -Path $perfKey -Name "FontSmoothing" -Value "2" -ErrorAction SilentlyContinue
+                Set-ItemProperty -Path $perfKey -Name "MenuShowDelay" -Value "0" -ErrorAction SilentlyContinue
+                Set-ItemProperty -Path $advKey -Name "ListviewAlphaSelect" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+                Set-ItemProperty -Path $dwmKey -Name "EnableAeroPeek" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+                "BEST"
+            }
+            2 {
+                Set-ItemProperty -Path $perfKey -Name "DragFullWindows" -Value "1" -ErrorAction SilentlyContinue
+                Set-ItemProperty -Path $perfKey -Name "FontSmoothing" -Value "2" -ErrorAction SilentlyContinue
+                Set-ItemProperty -Path $perfKey -Name "MenuShowDelay" -Value "100" -ErrorAction SilentlyContinue
+                Set-ItemProperty -Path $dwmKey -Name "EnableAeroPeek" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+                "BALANCED"
+            }
+            default { "CUSTOM" }
         }
-        elseif ($selectedMode -eq 2) {
-            # 平衡
-            Set-ItemProperty -Path $visualKey -Name "VisualFXSetting" -Value 3 -Type DWord
-            $perfKey = "HKCU:\Control Panel\Desktop"
-            Set-ItemProperty -Path $perfKey -Name "DragFullWindows" -Value "1" -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path $perfKey -Name "FontSmoothing" -Value "2" -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path $perfKey -Name "MenuShowDelay" -Value "100" -ErrorAction SilentlyContinue
-            $advKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
-            Set-ItemProperty -Path $advKey -Name "TaskbarAnimations" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-            $dwmKey = "HKCU:\Software\Microsoft\Windows\DWM"
-            Set-ItemProperty -Path $dwmKey -Name "EnableAeroPeek" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-            Write-Log "视觉效果: 平衡模式已应用" "SUCCESS"
-        }
-        else {
-            # 自定义 — 简化版
-            Set-ItemProperty -Path $visualKey -Name "VisualFXSetting" -Value 3 -Type DWord
-            $advKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
-            Set-ItemProperty -Path $advKey -Name "TaskbarAnimations" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-            Write-Log "视觉效果: 自定义模式已应用" "SUCCESS"
-        }
+        $modeLabel = switch ($modeName) { "BEST" { "最佳性能" } "BALANCED" { "平衡" } default { "自定义" } }
+        Write-Log "视觉效果: $modeLabel 模式已应用" "SUCCESS"
 
         # 重启资源管理器
         try { Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue; Start-Sleep 1; Start-Process explorer } catch {}
@@ -1526,7 +1492,6 @@ function Build-DiskPage {
             foreach ($vol in $volumes) {
                 $drive = "$($vol.DriveLetter):"
                 # Win7 回退：用 WMI 查询磁盘类型
-                $mediaType = "HDD"
                 if ($script:chkTRIM.Checked) {
                     try {
                         Optimize-VolumeCompat -DriveLetter $vol.DriveLetter -ReTrim
