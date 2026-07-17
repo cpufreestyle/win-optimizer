@@ -1,4 +1,4 @@
-﻿﻿<#
+﻿<#
 .SYNOPSIS
     服务优化模块 — 禁用不必要的后台服务以释放系统资源
 .DESCRIPTION
@@ -14,46 +14,25 @@
     所有更改会记录到备份文件，可随时恢复。
 #>
 
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "         服务优化" -ForegroundColor Cyan
-Write-Host "============================================" -ForegroundColor Cyan
+. "$PSScriptRoot\Common.ps1"
+Show-ModuleBanner "服务优化"
 
-# 要禁用的服务列表
+# 服务列表与计划任务统一从配置文件读取（单一数据源，避免与 config 重复维护）
 # 安全禁用 = 对日常使用几乎无影响
 # 建议禁用 = 大多数用户不需要，但某些场景可能用到
-$servicesToDisable = @(
-    # --- 诊断与遥测 ---
-    @{Name="DiagTrack";              Desc="诊断跟踪服务（遥测数据收集）";           Level="安全禁用"}
-    @{Name="dmwappushservice";       Desc="设备管理 WAP 推送消息路由服务";          Level="安全禁用"}
-    @{Name="WerSvc";                 Desc="Windows 错误报告服务";                   Level="安全禁用"}
+$config = Get-OptimizationConfig -ConfigPath (Join-Path $PSScriptRoot "..\config\optimization.json")
+if (-not $config) {
+    Write-Host "============================================" -ForegroundColor Cyan
+    return
+}
 
-    # --- Xbox 相关 ---
-    @{Name="XblAuthManager";         Desc="Xbox Live 身份验证管理器";               Level="安全禁用"}
-    @{Name="XblGameSave";            Desc="Xbox Live 游戏保存";                     Level="安全禁用"}
-    @{Name="XboxGipSvc";             Desc="Xbox 附件管理服务";                      Level="安全禁用"}
-    @{Name="XboxNetApiSvc";          Desc="Xbox Live 网络服务";                     Level="安全禁用"}
-
-    # --- 传感器（笔记本可能需要） ---
-    @{Name="SensorService";          Desc="传感器服务";                             Level="建议禁用"}
-    @{Name="SensrSvc";               Desc="传感器监控服务";                         Level="建议禁用"}
-
-    # --- 远程与传真 ---
-    @{Name="Fax";                    Desc="传真服务";                               Level="安全禁用"}
-    @{Name="RemoteRegistry";         Desc="远程注册表服务";                         Level="安全禁用"}
-
-    # --- 其他 ---
-    @{Name="RetailDemo";             Desc="零售演示服务";                           Level="安全禁用"}
-    @{Name="WMPNetworkSvc";          Desc="Windows Media Player 网络共享服务";      Level="建议禁用"}
-    @{Name="HvHost";                 Desc="HV 主机服务（虚拟化）";                  Level="建议禁用"}
-    @{Name="vmickvpexchange";        Desc="Hyper-V 数据交换服务";                   Level="建议禁用"}
-    @{Name="vmicguestinterface";     Desc="Hyper-V 来宾接口服务";                   Level="建议禁用"}
-    @{Name="vmicshutdown";           Desc="Hyper-V 关机服务";                       Level="建议禁用"}
-    @{Name="vmicheartbeat";          Desc="Hyper-V 心跳服务";                       Level="建议禁用"}
-    @{Name="vmicvmsession";          Desc="Hyper-V PowerShell 直接服务";            Level="建议禁用"}
-    @{Name="vmicrdv";                Desc="Hyper-V 远程桌面虚拟化服务";             Level="建议禁用"}
-    @{Name="vmictimesync";           Desc="Hyper-V 时间同步服务";                   Level="建议禁用"}
-)
+$servicesToDisable = @()
+foreach ($s in $config.services.safe_to_disable) {
+    $servicesToDisable += [PSCustomObject]@{Name = $s.name; Desc = $s.desc; Level = "安全禁用"}
+}
+foreach ($s in $config.services.recommended_to_disable) {
+    $servicesToDisable += [PSCustomObject]@{Name = $s.name; Desc = $s.desc; Level = "建议禁用"}
+}
 
 # 备份当前服务状态
 $backupFile = Join-Path $PSScriptRoot "..\backups\services_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
@@ -141,13 +120,7 @@ foreach ($svc in $toProcess) {
 
 # 额外：禁用遥测相关计划任务
 Write-Host "`n[额外] 禁用遥测相关计划任务..." -ForegroundColor Yellow
-$telemetryTasks = @(
-    "\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser",
-    "\Microsoft\Windows\Application Experience\ProgramDataUpdater",
-    "\Microsoft\Windows\Customer Experience Improvement Program\Consolidator",
-    "\Microsoft\Windows\Customer Experience Improvement Program\UsbCeip",
-    "\Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector"
-)
+$telemetryTasks = @($config.telemetry_tasks)
 foreach ($task in $telemetryTasks) {
     try {
         $t = Get-ScheduledTask -TaskPath ($task | Split-Path) -TaskName ($task | Split-Path -Leaf) -ErrorAction SilentlyContinue
@@ -161,10 +134,9 @@ foreach ($task in $telemetryTasks) {
 }
 
 Write-Host ""
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  服务优化完成！" -ForegroundColor Green
-Write-Host "  已禁用: $disabledCount 个服务" -ForegroundColor Green
-Write-Host "  已跳过: $skippedCount 个服务" -ForegroundColor Gray
-Write-Host "  备份文件: $backupFile" -ForegroundColor Gray
-Write-Host "  如需恢复，请使用 [B] 备份恢复功能" -ForegroundColor Gray
-Write-Host "============================================" -ForegroundColor Cyan
+Show-ModuleFooter "服务优化完成！" -Lines @(
+    "已禁用: $disabledCount 个服务"
+    "已跳过: $skippedCount 个服务"
+    "备份文件: $backupFile"
+    "如需恢复，请使用 [B] 备份恢复功能"
+)

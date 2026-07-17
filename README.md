@@ -1,4 +1,4 @@
-﻿﻿# PC-Optimizer-7thGen 🔧
+# PC-Optimizer-7thGen 🔧
 
 > 专为 **7 代及更老 CPU** 的 Windows 10/11 电脑设计的系统优化工具集
 > v2.0 已合并 `windows-utils` 仓库的所有实用工具
@@ -117,6 +117,16 @@ cd C:\PC-Optimizer-7thGen
 6. 再次运行 [1] 对比优化效果
 ```
 
+## 🔧 获取源码（开发者向）
+
+仓库远程使用 **SSH 协议**，克隆命令：
+
+```powershell
+git clone git@github.com:cpufreestyle/win-optimizer.git
+```
+
+推送（`git push`）前，需将本机 SSH 公钥（`~/.ssh/id_ed25519.pub`）添加到 GitHub → Settings → SSH and GPG keys（详见上方注意事项第 10 条）。HTTPS 密码方式已被 GitHub 停用，无法用于 push。
+
 ## 📁 项目结构
 
 ```
@@ -195,6 +205,7 @@ GUI 版本采用现代化深色主题设计，包含以下区域：
 7. **网络重置** — 如果选择重置网络栈，需要重启电脑才能生效
 8. **Windows 11 用户** — 7代 CPU 官方不支持 Win11，如已安装可能存在兼容性问题
 9. **Python 工具** — `tools/` 目录下的工具需要 Python 3.x 环境
+10. **代码仓库远程使用 SSH 协议** — 推送（`git push`）前，需将本机 SSH 公钥（`~/.ssh/id_ed25519.pub`）添加到 GitHub → Settings → SSH and GPG keys；若尚未生成密钥，可用 `ssh-keygen -t ed25519 -C "你的邮箱"` 生成后一并加入。HTTPS 密码方式已被 GitHub 停用，无法用于 push。
 
 ## 🔒 安全说明
 

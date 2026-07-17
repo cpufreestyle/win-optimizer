@@ -9,10 +9,8 @@
     - 从备份恢复电源计划
 #>
 
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "         备份与恢复" -ForegroundColor Cyan
-Write-Host "============================================" -ForegroundColor Cyan
+. "$PSScriptRoot\Common.ps1"
+Show-ModuleBanner "备份与恢复"
 
 $backupDir = Join-Path $PSScriptRoot "..\backups"
 $backupDir = [System.IO.Path]::GetFullPath($backupDir)
@@ -209,8 +207,6 @@ else {
     }
 }
 
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  恢复操作完成！" -ForegroundColor Green
-Write-Host "  建议重启电脑使所有更改生效" -ForegroundColor Gray
-Write-Host "============================================" -ForegroundColor Cyan
+Show-ModuleFooter "恢复操作完成！" -Lines @(
+    "  建议重启电脑使所有更改生效"
+)

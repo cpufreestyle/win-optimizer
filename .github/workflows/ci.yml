@@ -36,6 +36,17 @@ jobs:
             Write-Host "✓ config/optimization.json: valid"
           }
 
+      - name: Check README has no BOM (prevent release mojibake)
+        shell: pwsh
+        run: |
+          $b = [System.IO.File]::ReadAllBytes('README.md')
+          if ($b.Count -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
+            Write-Error "README.md must NOT have a UTF-8 BOM (it causes GitHub mojibake on the Release page)."
+            exit 1
+          } else {
+            Write-Host "OK: README.md has no BOM"
+          }
+
       - name: Check README
         shell: pwsh
         run: Test-Path README.md

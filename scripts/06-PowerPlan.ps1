@@ -11,10 +11,8 @@
     - 调整无线适配器电源模式
 #>
 
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "         电源计划优化" -ForegroundColor Cyan
-Write-Host "============================================" -ForegroundColor Cyan
+. "$PSScriptRoot\Common.ps1"
+Show-ModuleBanner "电源计划优化"
 
 # --- 显示当前电源计划 ---
 Write-Host "`n[1/3] 当前电源计划:" -ForegroundColor Yellow
@@ -174,9 +172,7 @@ Write-Host "`n当前活动电源计划:" -ForegroundColor Yellow
 $currentPlan = powercfg /getactivescheme
 Write-Host "  $currentPlan" -ForegroundColor Green
 
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  电源计划优化完成！" -ForegroundColor Green
-Write-Host "  备份文件: $backupFile" -ForegroundColor Gray
-Write-Host "  提示: 笔记本电池模式下建议使用平衡模式以延长续航" -ForegroundColor Gray
-Write-Host "============================================" -ForegroundColor Cyan
+Show-ModuleFooter "电源计划优化完成！" -Lines @(
+    "  备份文件: $backupFile"
+    "  提示: 笔记本电池模式下建议使用平衡模式以延长续航"
+)

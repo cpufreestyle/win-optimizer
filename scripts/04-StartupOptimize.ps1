@@ -6,10 +6,8 @@
     以加快开机速度并减少后台资源占用。
 #>
 
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "         启动项优化" -ForegroundColor Cyan
-Write-Host "============================================" -ForegroundColor Cyan
+. "$PSScriptRoot\Common.ps1"
+Show-ModuleBanner "启动项优化"
 
 # --- 获取启动项 ---
 Write-Host "`n[1/2] 正在扫描启动项...`n" -ForegroundColor Yellow
@@ -176,11 +174,9 @@ foreach ($item in $toDisable) {
     }
 }
 
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  启动项优化完成！" -ForegroundColor Green
-Write-Host "  已禁用: $disabledCount 项" -ForegroundColor Green
-Write-Host "  失败  : $failedCount 项" -ForegroundColor $(if ($failedCount -gt 0) { "Yellow" } else { "Gray" })
-Write-Host "  备份文件: $backupFile" -ForegroundColor Gray
-Write-Host "  注意: 部分启动项可能需要通过任务管理器->启动 选项卡禁用" -ForegroundColor Gray
-Write-Host "============================================" -ForegroundColor Cyan
+Show-ModuleFooter "启动项优化完成！" -Lines @(
+    "已禁用: $disabledCount 项"
+    "失败  : $failedCount 项"
+    "备份文件: $backupFile"
+    "注意: 部分启动项可能需要通过任务管理器->启动 选项卡禁用"
+)

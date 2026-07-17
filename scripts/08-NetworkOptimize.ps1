@@ -10,10 +10,10 @@
     - 重置网络栈 (可选)
 #>
 
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "         网络优化" -ForegroundColor Cyan
-Write-Host "============================================" -ForegroundColor Cyan
+. "$PSScriptRoot\Common.ps1"
+Show-ModuleBanner "网络优化"
+
+$config = Get-OptimizationConfig -ConfigPath (Join-Path $PSScriptRoot "..\config\optimization.json")
 
 # --- 显示当前网络设置 ---
 Write-Host "`n[1/4] 当前网络信息:" -ForegroundColor Yellow
@@ -43,30 +43,45 @@ if ($tcpGlobal) {
     Write-Host "    拥塞控制   : $($tcpGlobal.CongestionProvider)" -ForegroundColor Gray
 }
 
-# --- 选择 DNS ---
-Write-Host "`n[2/4] 选择 DNS 服务器:" -ForegroundColor Yellow
-Write-Host ""
-Write-Host "  [1] 阿里 DNS         (223.5.5.5 / 223.6.6.6)        — 国内推荐"
-Write-Host "  [2] 腾讯 DNS         (119.29.29.29 / 119.28.28.28)  — 国内推荐"
-Write-Host "  [3] 114 DNS          (114.114.114.114 / 114.114.115.115)"
-Write-Host "  [4] Google DNS       (8.8.8.8 / 8.8.4.4)            — 需翻墙"
-Write-Host "  [5] Cloudflare DNS   (1.1.1.1 / 1.0.0.1)            — 需翻墙"
-Write-Host "  [6] 阿里+Cloudflare  (223.5.5.5 / 1.1.1.1)          — 混合"
-Write-Host "  [0] 跳过 DNS 设置"
-$dnsChoice = Read-Host "选择 (0-6)"
-
 $dnsPrimary = $null
 $dnsSecondary = $null
 
-switch ($dnsChoice) {
-    "1" { $dnsPrimary = "223.5.5.5";     $dnsSecondary = "223.6.6.6" }
-    "2" { $dnsPrimary = "119.29.29.29";  $dnsSecondary = "119.28.28.28" }
-    "3" { $dnsPrimary = "114.114.114.114"; $dnsSecondary = "114.114.115.115" }
-    "4" { $dnsPrimary = "8.8.8.8";       $dnsSecondary = "8.8.4.4" }
-    "5" { $dnsPrimary = "1.1.1.1";       $dnsSecondary = "1.0.0.1" }
-    "6" { $dnsPrimary = "223.5.5.5";     $dnsSecondary = "1.1.1.1" }
-    "0" { Write-Host "  跳过 DNS 设置" -ForegroundColor Gray }
-    default { Write-Host "  无效选择，跳过 DNS 设置" -ForegroundColor Yellow }
+# --- 选择 DNS ---
+Write-Host "`n[2/4] 选择 DNS 服务器:" -ForegroundColor Yellow
+Write-Host ""
+
+if (-not $config) {
+    Write-Host "  [错误] 配置文件缺失，跳过 DNS 设置。" -ForegroundColor Red
+} else {
+    $dns = $config.dns_options
+    $menu = @(
+        @{ Key = "aliyun";     Label = "阿里 DNS";       Note = "国内推荐" }
+        @{ Key = "tencent";    Label = "腾讯 DNS";       Note = "国内推荐" }
+        @{ Key = "114";        Label = "114 DNS";        Note = "" }
+        @{ Key = "google";     Label = "Google DNS";     Note = "需翻墙" }
+        @{ Key = "cloudflare"; Label = "Cloudflare DNS"; Note = "需翻墙" }
+    )
+    $idx = 1
+    foreach ($m in $menu) {
+        $servers = ($dns.$($m.Key) -join " / ")
+        $note = if ($m.Note) { "— $($m.Note)" } else { "" }
+        Write-Host "  [$idx] $($m.Label)  ($servers)  $note"
+        $idx++
+    }
+    Write-Host "  [6] 阿里+Cloudflare  ($(($dns.aliyun)[0]) / $(($dns.cloudflare)[0]))  — 混合"
+    Write-Host "  [0] 跳过 DNS 设置"
+    $dnsChoice = Read-Host "选择 (0-6)"
+
+    switch ($dnsChoice) {
+        "1" { $dnsPrimary = ($dns.aliyun)[0];      $dnsSecondary = ($dns.aliyun)[1] }
+        "2" { $dnsPrimary = ($dns.tencent)[0];     $dnsSecondary = ($dns.tencent)[1] }
+        "3" { $dnsPrimary = ($dns.'114')[0];       $dnsSecondary = ($dns.'114')[1] }
+        "4" { $dnsPrimary = ($dns.google)[0];      $dnsSecondary = ($dns.google)[1] }
+        "5" { $dnsPrimary = ($dns.cloudflare)[0];  $dnsSecondary = ($dns.cloudflare)[1] }
+        "6" { $dnsPrimary = ($dns.aliyun)[0];      $dnsSecondary = ($dns.cloudflare)[0] }
+        "0" { Write-Host "  跳过 DNS 设置" -ForegroundColor Gray }
+        default { Write-Host "  无效选择，跳过 DNS 设置" -ForegroundColor Yellow }
+    }
 }
 
 if ($dnsPrimary) {
@@ -180,8 +195,6 @@ foreach ($domain in $testDomains) {
     }
 }
 
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  网络优化完成！" -ForegroundColor Green
-Write-Host "  如更改了网络栈，请重启电脑使所有更改生效" -ForegroundColor Gray
-Write-Host "============================================" -ForegroundColor Cyan
+Show-ModuleFooter "网络优化完成！" -Lines @(
+    "  如更改了网络栈，请重启电脑使所有更改生效"
+)

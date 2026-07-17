@@ -14,10 +14,8 @@
     - 内存转储文件
 #>
 
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "         临时文件清理" -ForegroundColor Cyan
-Write-Host "============================================" -ForegroundColor Cyan
+. "$PSScriptRoot\Common.ps1"
+Show-ModuleBanner "临时文件清理"
 
 $totalFreed = 0
 $filesDeleted = 0
@@ -146,14 +144,10 @@ try {
 } catch {}
 
 # --- 总结 ---
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Cyan
 $totalMB = [math]::Round($script:totalFreed / 1MB, 2)
 $totalGB = [math]::Round($script:totalFreed / 1GB, 2)
-if ($totalGB -ge 1) {
-    Write-Host "  清理完成！共释放 ${totalGB} GB 空间" -ForegroundColor Green
-} else {
-    Write-Host "  清理完成！共释放 ${totalMB} MB 空间" -ForegroundColor Green
-}
-Write-Host "  删除文件数: $script:filesDeleted" -ForegroundColor Green
-Write-Host "============================================" -ForegroundColor Cyan
+$freedText = if ($totalGB -ge 1) { "清理完成！共释放 ${totalGB} GB 空间" } else { "清理完成！共释放 ${totalMB} MB 空间" }
+Show-ModuleFooter "临时文件清理完成！" -Lines @(
+    $freedText
+    "删除文件数: $script:filesDeleted"
+)

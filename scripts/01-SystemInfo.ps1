@@ -3,10 +3,8 @@
     系统信息检测模块 — 展示详细的硬件与系统信息
 #>
 
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "         系统信息检测" -ForegroundColor Cyan
-Write-Host "============================================" -ForegroundColor Cyan
+. "$PSScriptRoot\Common.ps1"
+Show-ModuleBanner "系统信息检测"
 
 # --- 操作系统信息 ---
 Write-Host "`n[操作系统]" -ForegroundColor Yellow
@@ -71,10 +69,14 @@ foreach ($disk in $disks) {
 
 # 检测 SSD/HDD
 Write-Host "  磁盘类型    :"
-$physicalDisks = Get-PhysicalDisk | Select-Object FriendlyName, MediaType, Size
-foreach ($pd in $physicalDisks) {
-    $sizeGB = [math]::Round($pd.Size / 1GB, 0)
-    Write-Host "    - $($pd.FriendlyName): $($pd.MediaType) ${sizeGB}GB"
+try {
+    $physicalDisks = Get-PhysicalDisk -ErrorAction Stop | Select-Object FriendlyName, MediaType, Size
+    foreach ($pd in $physicalDisks) {
+        $sizeGB = [math]::Round($pd.Size / 1GB, 0)
+        Write-Host "    - $($pd.FriendlyName): $($pd.MediaType) ${sizeGB}GB"
+    }
+} catch {
+    Write-Host "    无法获取物理磁盘类型（需要 Storage 模块或管理员权限）" -ForegroundColor Gray
 }
 
 # --- 显卡信息 ---
@@ -132,6 +134,4 @@ if ($uptime.Days -gt 7) {
     Write-Host "  ! 系统已运行 $($uptime.Days) 天，建议重启以释放资源" -ForegroundColor Yellow
 }
 
-Write-Host "`n============================================" -ForegroundColor Cyan
-Write-Host "         检测完成" -ForegroundColor Cyan
-Write-Host "============================================" -ForegroundColor Cyan
+Show-ModuleFooter "检测完成"

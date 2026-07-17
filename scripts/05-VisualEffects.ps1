@@ -11,10 +11,8 @@
     所有更改会备份，可随时恢复。
 #>
 
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "         视觉效果优化" -ForegroundColor Cyan
-Write-Host "============================================" -ForegroundColor Cyan
+. "$PSScriptRoot\Common.ps1"
+Show-ModuleBanner "视觉效果优化"
 
 # --- 备份当前设置 ---
 $backupFile = Join-Path $PSScriptRoot "..\backups\visual_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
@@ -213,9 +211,7 @@ try {
     Write-Host "  请手动重启资源管理器或重启电脑" -ForegroundColor Yellow
 }
 
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  视觉效果优化完成！" -ForegroundColor Green
-Write-Host "  备份文件: $backupFile" -ForegroundColor Gray
-Write-Host "  如需恢复，请使用 [B] 备份恢复功能" -ForegroundColor Gray
-Write-Host "============================================" -ForegroundColor Cyan
+Show-ModuleFooter "视觉效果优化完成！" -Lines @(
+    "  备份文件: $backupFile"
+    "  如需恢复，请使用 [B] 备份恢复功能"
+)

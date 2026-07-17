@@ -264,6 +264,272 @@ function Invoke-ScriptModule {
 }
 
 # ============================================================
+#  一键优化：各页面执行逻辑抽取（单页按钮与一键按钮共用）
+# ============================================================
+function Invoke-CleanOptimization {
+    $totalFreed = 0
+    $filesDeleted = 0
+    for ($i = 0; $i -lt $script:CleanItems.Count; $i++) {
+        if ($script:CleanListBox.GetItemChecked($i)) {
+            $item = $script:CleanItems[$i]
+            $before = Get-FolderSize $item.Path
+            if (Test-Path $item.Path) {
+                Get-ChildItem -Path $item.Path -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                    try { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue; $filesDeleted++ } catch {}
+                }
+                $after = Get-FolderSize $item.Path
+                $freed = $before - $after
+                $totalFreed += $freed
+                Write-Log "[清理] $($item.Name): 释放 $([math]::Round($freed/1MB,2)) MB" "SUCCESS"
+            }
+        }
+        Invoke-UIRefresh
+    }
+    if ($script:ChkRecycle.Checked) { Clear-RecycleBinCompat; Write-Log "[清理] 回收站已清空" "SUCCESS" }
+    if ($script:ChkDNS.Checked) { try { ipconfig /flushdns | Out-Null; Write-Log "[清理] DNS 缓存已清除" "SUCCESS" } catch {} }
+    if ($script:ChkDump.Checked) {
+        $dumpFiles = @("C:\Windows\MEMORY.DMP")
+        $dumpFiles += (Get-ChildItem "C:\Windows\Minidump" -ErrorAction SilentlyContinue).FullName
+        foreach ($dump in $dumpFiles) {
+            if ($dump -and (Test-Path $dump)) {
+                $totalFreed += (Get-Item $dump).Length
+                Remove-Item $dump -Force -ErrorAction SilentlyContinue
+                Write-Log "[清理] 删除转储文件: $(Split-Path $dump -Leaf)" "SUCCESS"
+            }
+        }
+    }
+    $totalMB = [math]::Round($totalFreed / 1MB, 2)
+    $totalGB = [math]::Round($totalFreed / 1GB, 2)
+    $msg = if ($totalGB -ge 1) { "共释放 ${totalGB} GB 空间" } else { "共释放 ${totalMB} MB 空间" }
+    Write-Log "清理完成！$msg，删除 $filesDeleted 个文件" "SUCCESS"
+    return "清理完成，$msg，删除 $filesDeleted 个文件"
+}
+
+function Invoke-ServicesOptimization {
+    if (-not (Test-Path $script:BackupDir)) { New-Item -ItemType Directory -Path $script:BackupDir -Force | Out-Null }
+    $backupFile = Join-Path $script:BackupDir "services_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+    $backupData = @()
+    for ($i = 0; $i -lt $script:SvcDataTable.Rows.Count; $i++) {
+        $svcName = $script:SvcDataTable.Rows[$i]["服务名称"]
+        $service = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+        if ($service) {
+            $svcWmi = @(Get-CimData Win32_Service -Filter "Name='$svcName'")[0]
+            $startMode = if ($svcWmi) { $svcWmi.StartMode } else { "Unknown" }
+            $backupData += [PSCustomObject]@{ Name=$svcName; Status=$service.Status; StartType=$startMode; Date=(Get-Date -Format "yyyy-MM-dd HH:mm:ss") }
+        }
+        Invoke-UIRefresh
+    }
+    $backupData | Export-Csv -Path $backupFile -NoTypeInformation -Encoding UTF8
+    Write-Log "服务备份已保存: $backupFile"
+
+    $disabledCount = 0
+    for ($i = 0; $i -lt $script:SvcDataTable.Rows.Count; $i++) {
+        if ($script:SvcDataTable.Rows[$i]["选择"] -eq $true) {
+            $svcName = $script:SvcDataTable.Rows[$i]["服务名称"]
+            $service = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+            if ($service) {
+                try {
+                    if ($service.Status -eq "Running") {
+                        Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue
+                        Start-Sleep -Milliseconds 300
+                    }
+                    Set-Service -Name $svcName -StartupType Disabled -ErrorAction Stop
+                    Write-Log "[禁用] $svcName" "SUCCESS"
+                    $disabledCount++
+                    $script:SvcDataTable.Rows[$i]["状态"] = "Stopped"
+                } catch {
+                    Write-Log "[失败] $svcName — $($_.Exception.Message)" "ERROR"
+                }
+            }
+        }
+        Invoke-UIRefresh
+    }
+
+    if ($script:chkTelemetry.Checked) {
+        $telemetryTasks = @(
+            @{Path="\Microsoft\Windows\Application Experience\"; Name="Microsoft Compatibility Appraiser"},
+            @{Path="\Microsoft\Windows\Application Experience\"; Name="ProgramDataUpdater"},
+            @{Path="\Microsoft\Windows\Customer Experience Improvement Program\"; Name="Consolidator"},
+            @{Path="\Microsoft\Windows\Customer Experience Improvement Program\"; Name="UsbCeip"}
+        )
+        foreach ($task in $telemetryTasks) {
+            try {
+                $r = Disable-ScheduledTaskCompat -TaskPath $task.Path -TaskName $task.Name
+                if ($r) { Write-Log "[禁用] 计划任务: $($task.Name)" "SUCCESS" }
+            } catch {}
+        }
+    }
+
+    Write-Log "服务优化完成！已禁用 $disabledCount 个服务" "SUCCESS"
+    return "已禁用 $disabledCount 个服务"
+}
+
+function Invoke-StartupOptimization {
+    param([switch]$DisableAll)
+    if (-not $DisableAll -and $script:DgvStartup.SelectedRows.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show("请先选择要禁用的启动项（点击行左侧选择整行）", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        return $null
+    }
+    if (-not (Test-Path $script:BackupDir)) { New-Item -ItemType Directory -Path $script:BackupDir -Force | Out-Null }
+    $backupFile = Join-Path $script:BackupDir "startup_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+    $toRemove = @()
+    if ($DisableAll) {
+        $toRemove = $script:StartupItems
+    } else {
+        foreach ($row in $script:DgvStartup.SelectedRows) {
+            $idx = $row.Index
+            $toRemove += $script:StartupItems[$idx]
+        }
+    }
+    $toRemove | Select-Object Name, Command, Scope, Source | Export-Csv -Path $backupFile -NoTypeInformation -Encoding UTF8
+    Write-Log "启动项备份: $backupFile"
+    $count = 0
+    foreach ($item in $toRemove) {
+        try {
+            if ($item.Source -eq "注册表") {
+                Remove-ItemProperty -Path $item.RegPath -Name $item.Name -ErrorAction Stop
+                Write-Log "[禁用] $($item.Name) (注册表)" "SUCCESS"
+                $count++
+            } elseif ($item.Source -eq "启动文件夹") {
+                $backupDir2 = Join-Path $script:BackupDir "startup_items"
+                if (-not (Test-Path $backupDir2)) { New-Item -ItemType Directory -Path $backupDir2 -Force | Out-Null }
+                Move-Item -Path $item.Command -Destination (Join-Path $backupDir2 (Split-Path $item.Command -Leaf)) -Force -ErrorAction Stop
+                Write-Log "[禁用] $($item.Name) (启动文件夹)" "SUCCESS"
+                $count++
+            }
+        } catch {
+            Write-Log "[失败] $($item.Name)" "ERROR"
+        }
+        Invoke-UIRefresh
+    }
+    Write-Log "启动项优化完成！已禁用 $count 项" "SUCCESS"
+    return "已禁用 $count 个启动项"
+}
+
+function Invoke-VisualOptimization {
+    $selectedMode = 1
+    for ($i = 0; $i -lt 3; $i++) { if ($script:radioBtns[$i].Checked) { $selectedMode = $script:modes[$i].Value } }
+    if (-not (Test-Path $script:BackupDir)) { New-Item -ItemType Directory -Path $script:BackupDir -Force | Out-Null }
+    $visualKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
+    if (-not (Test-Path $visualKey)) { New-Item -Path $visualKey -Force | Out-Null }
+    $perfKey = "HKCU:\Control Panel\Desktop"
+    $advKey  = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+    $dwmKey  = "HKCU:\Software\Microsoft\Windows\DWM"
+    Set-ItemProperty -Path $visualKey -Name "VisualFXSetting" -Value 3 -Type DWord
+    Set-ItemProperty -Path $advKey -Name "TaskbarAnimations" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+    $modeName = switch ($selectedMode) {
+        1 {
+            Set-ItemProperty -Path $perfKey -Name "DragFullWindows" -Value "0" -ErrorAction SilentlyContinue
+            Set-ItemProperty -Path $perfKey -Name "FontSmoothing" -Value "2" -ErrorAction SilentlyContinue
+            Set-ItemProperty -Path $perfKey -Name "MenuShowDelay" -Value "0" -ErrorAction SilentlyContinue
+            Set-ItemProperty -Path $advKey -Name "ListviewAlphaSelect" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+            Set-ItemProperty -Path $dwmKey -Name "EnableAeroPeek" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+            "BEST"
+        }
+        2 {
+            Set-ItemProperty -Path $perfKey -Name "DragFullWindows" -Value "1" -ErrorAction SilentlyContinue
+            Set-ItemProperty -Path $perfKey -Name "FontSmoothing" -Value "2" -ErrorAction SilentlyContinue
+            Set-ItemProperty -Path $perfKey -Name "MenuShowDelay" -Value "100" -ErrorAction SilentlyContinue
+            Set-ItemProperty -Path $dwmKey -Name "EnableAeroPeek" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+            "BALANCED"
+        }
+        default { "CUSTOM" }
+    }
+    $modeLabel = switch ($modeName) { "BEST" { "最佳性能" } "BALANCED" { "平衡" } default { "自定义" } }
+    Write-Log "视觉效果: $modeLabel 模式已应用" "SUCCESS"
+    try { Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue; Start-Sleep 1; Start-Process explorer } catch {}
+    return "视觉效果已应用（$modeLabel）"
+}
+
+function Invoke-PowerOptimization {
+    $selectedGUID = $script:plans[0].GUID
+    for ($i = 0; $i -lt 3; $i++) { if ($script:radioPowers[$i].Checked) { $selectedGUID = $script:plans[$i].GUID } }
+    if ($selectedGUID -eq "e9a42b02-d5df-448d-aa00-03f14749eb61") {
+        powercfg /duplicatescheme $selectedGUID 2>&1 | Out-Null
+    }
+    powercfg /setactive $selectedGUID 2>&1 | Out-Null
+    Write-Log "已切换电源计划: $selectedGUID" "SUCCESS"
+    if ($selectedGUID -eq "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c") {
+        powercfg /setacvalueindex $selectedGUID SUB_PROCESSOR PROCTHROTTLEMIN 100 2>&1 | Out-Null
+        powercfg /setacvalueindex $selectedGUID SUB_PROCESSOR PROCTHROTTLEMAX 100 2>&1 | Out-Null
+        Write-Log "CPU 处理器状态: 最低100% / 最高100%" "SUCCESS"
+    }
+    if ($script:chkUSB.Checked) {
+        powercfg /setacvalueindex $selectedGUID SUB_USB USBSELSUSP 0 2>&1 | Out-Null
+        Write-Log "USB 选择性挂起: 已禁用" "SUCCESS"
+    }
+    if ($script:chkPCI.Checked) {
+        powercfg /setacvalueindex $selectedGUID SUB_PCIEXPRESS ASPM 0 2>&1 | Out-Null
+        Write-Log "PCI Express 电源管理: 已关闭" "SUCCESS"
+    }
+    powercfg /setactive $selectedGUID 2>&1 | Out-Null
+    $planTitle = ($script:plans | Where-Object { $_.GUID -eq $selectedGUID }).Title
+    return "电源计划已切换（$planTitle）"
+}
+
+function Invoke-DiskOptimization {
+    $volumes = @(Get-VolumeCompat)
+    if ($script:chkTRIM.Checked -or $script:chkDefrag.Checked) {
+        foreach ($vol in $volumes) {
+            $drive = "$($vol.DriveLetter):"
+            if ($script:chkTRIM.Checked) {
+                try { Optimize-VolumeCompat -DriveLetter $vol.DriveLetter -ReTrim; Write-Log "[优化] $drive TRIM 完成" "SUCCESS" }
+                catch { Write-Log "[跳过] $drive TRIM" "WARN" }
+            }
+            if ($script:chkDefrag.Checked) {
+                try { Optimize-VolumeCompat -DriveLetter $vol.DriveLetter -Defrag; Write-Log "[优化] $drive 碎片整理完成" "SUCCESS" }
+                catch { Write-Log "[跳过] $drive 碎片整理" "WARN" }
+            }
+            Invoke-UIRefresh
+        }
+    }
+    if ($script:chkWinSxS.Checked) {
+        Write-Log "正在清理 WinSxS 组件存储..."
+        Dism.exe /Online /Cleanup-Image /StartComponentCleanup 2>&1 | Out-Null
+        Write-Log "WinSxS 组件存储清理完成" "SUCCESS"
+    }
+    if ($script:chkCompact.Checked) {
+        Write-Log "正在压缩系统文件..."
+        Compact.exe /CompactOS:always 2>&1 | Out-Null
+        Write-Log "系统文件压缩完成" "SUCCESS"
+    }
+    Write-Log "磁盘优化完成！" "SUCCESS"
+    return "磁盘优化完成"
+}
+
+function Invoke-NetworkOptimization {
+    $dnsChoice = $script:cbDNS.SelectedIndex
+    if ($dnsChoice -gt 0) {
+        $dnsServers = switch ($dnsChoice) {
+            1 { @("1.1.1.1", "1.0.0.1") }
+            2 { @("8.8.8.8", "8.8.4.4") }
+            3 { @("223.5.5.5", "223.6.6.6") }
+            4 { @("114.114.114.114", "114.114.115.115") }
+        }
+        try {
+            $adapters = Get-NetAdapterCompat
+            foreach ($adapter in $adapters) {
+                if ($adapter.Name) {
+                    Set-DnsCompat -InterfaceName $adapter.Name -DnsServers $dnsServers
+                    Write-Log "[DNS] $($adapter.Name) 已设置为 $($dnsServers -join ', ')" "SUCCESS"
+                }
+            }
+        } catch {
+            Write-Log "[DNS] 设置失败: $_" "ERROR"
+        }
+    }
+    if ($script:chkTCP.Checked) {
+        try { netsh int tcp set global autotuninglevel=normal 2>&1 | Out-Null; Write-Log "[TCP] 自动调优已启用" "SUCCESS" }
+        catch { Write-Log "[TCP] 设置失败" "WARN" }
+    }
+    if ($script:chkRSS.Checked) { Enable-NetAdapterRssCompat; Write-Log "[RSS] 接收端缩放已启用" "SUCCESS" }
+    if ($script:chkRSC.Checked) { Enable-NetAdapterRscCompat; Write-Log "[RSC] 接收段合并已启用" "SUCCESS" }
+    if ($script:chkDNSCache.Checked) { Clear-DnsClientCacheCompat; Write-Log "[DNS] 缓存已刷新" "SUCCESS" }
+    Write-Log "网络优化完成！" "SUCCESS"
+    return "网络优化完成"
+}
+
+# ============================================================
 #  UI 辅助函数
 # ============================================================
 function New-Label {
@@ -664,16 +930,47 @@ function Build-Dashboard {
     $btnFull = New-Button "一键全面优化" 640 ([int]($yDisk + 112)) 140 36 $Theme.Success 10
     $btnFull.Add_Click({
         $result = [System.Windows.Forms.MessageBox]::Show(
-            "即将执行所有优化操作，可能需要几分钟时间。`n`n建议先进行备份。`n`n确认继续？",
+            "即将依次执行所有优化（垃圾清理→服务→启动项→视觉→电源→磁盘→网络），可能需要几分钟。`n`n建议先进行备份。`n`n确认继续？",
             "一键全面优化",
             [System.Windows.Forms.MessageBoxButtons]::YesNo,
             [System.Windows.Forms.MessageBoxIcon]::Question
         )
-        if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
-            Write-Log "请逐个点击左侧功能页面执行优化操作。一键优化功能暂不支持GUI模式。" "WARN"
-            [System.Windows.Forms.MessageBox]::Show("GUI模式下请逐个使用左侧功能页面进行优化。`n`n建议操作顺序：`n1. 垃圾清理`n2. 服务优化`n3. 启动项`n4. 视觉效果`n5. 电源计划`n6. 磁盘优化`n7. 网络优化", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-            [System.Windows.Forms.MessageBox]::Show("全面优化完成！建议重启电脑使所有更改生效。", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        if ($result -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+
+        $script:btnFull.Enabled = $false
+        $script:btnFull.Text = "优化中..."
+        Invoke-UIRefresh
+
+        $summaries = @()
+        $steps = @(
+            @{ Name = "垃圾清理"; Action = { Invoke-CleanOptimization } },
+            @{ Name = "服务优化"; Action = { Invoke-ServicesOptimization } },
+            @{ Name = "启动项";   Action = { Invoke-StartupOptimization -DisableAll } },
+            @{ Name = "视觉效果"; Action = { Invoke-VisualOptimization } },
+            @{ Name = "电源计划"; Action = { Invoke-PowerOptimization } },
+            @{ Name = "磁盘优化"; Action = { Invoke-DiskOptimization } },
+            @{ Name = "网络优化"; Action = { Invoke-NetworkOptimization } }
+        )
+        $idx = 0
+        foreach ($step in $steps) {
+            $idx++
+            $script:btnFull.Text = "优化中 ($idx/$($steps.Count)): $($step.Name)"
+            Write-Log "========== 一键优化 [$idx/$($steps.Count)] $($step.Name) ==========" "INFO"
+            try {
+                $s = & $step.Action
+                if ($s) { $summaries += "[$($step.Name)] $s" }
+            } catch {
+                Write-Log "[$($step.Name)] 执行出错: $($_.Exception.Message)" "ERROR"
+                $summaries += "[$($step.Name)] 出错: $($_.Exception.Message)"
+            }
+            Invoke-UIRefresh
         }
+
+        $script:btnFull.Enabled = $true
+        $script:btnFull.Text = "一键全面优化"
+        $report = "一键全面优化完成！`n`n" + ($summaries -join "`n")
+        Write-Log "一键全面优化完成" "SUCCESS"
+        [System.Windows.Forms.MessageBox]::Show("$report`n`n建议重启电脑使所有更改生效。", "一键优化完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
     })
     $page.Controls.Add($btnFull)
 }
@@ -758,64 +1055,18 @@ function Build-CleanPage {
     # 执行按钮
     $script:BtnClean = New-Button "开始清理" 20 356 200 44 $Theme.Success 11
     $script:BtnClean.Add_Click({
-        try {
         $script:BtnClean.Enabled = $false
         $script:BtnClean.Text = "正在清理..."
         Invoke-UIRefresh
-
-        $totalFreed = 0
-        $filesDeleted = 0
-
-        for ($i = 0; $i -lt $script:CleanItems.Count; $i++) {
-            if ($script:CleanListBox.GetItemChecked($i)) {
-                $item = $script:CleanItems[$i]
-                $before = Get-FolderSize $item.Path
-                if (Test-Path $item.Path) {
-                    Get-ChildItem -Path $item.Path -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                        try { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue; $filesDeleted++ } catch {}
-                    }
-                    $after = Get-FolderSize $item.Path
-                    $freed = $before - $after
-                    $totalFreed += $freed
-                    Write-Log "[清理] $($item.Name): 释放 $([math]::Round($freed/1MB,2)) MB" "SUCCESS"
-                }
-            }
-            Invoke-UIRefresh
-        }
-
-        if ($script:ChkRecycle.Checked) {
-            Clear-RecycleBinCompat
-            Write-Log "[清理] 回收站已清空" "SUCCESS"
-        }
-        if ($script:ChkDNS.Checked) {
-            try { ipconfig /flushdns | Out-Null; Write-Log "[清理] DNS 缓存已清除" "SUCCESS" } catch {}
-        }
-        if ($script:ChkDump.Checked) {
-            $dumpFiles = @("C:\Windows\MEMORY.DMP")
-            $dumpFiles += (Get-ChildItem "C:\Windows\Minidump" -ErrorAction SilentlyContinue).FullName
-            foreach ($dump in $dumpFiles) {
-                if ($dump -and (Test-Path $dump)) {
-                    $totalFreed += (Get-Item $dump).Length
-                    Remove-Item $dump -Force -ErrorAction SilentlyContinue
-                    Write-Log "[清理] 删除转储文件: $(Split-Path $dump -Leaf)" "SUCCESS"
-                }
-            }
-        }
-
-        $totalMB = [math]::Round($totalFreed / 1MB, 2)
-        $totalGB = [math]::Round($totalFreed / 1GB, 2)
-        $msg = if ($totalGB -ge 1) { "共释放 ${totalGB} GB 空间" } else { "共释放 ${totalMB} MB 空间" }
-        Write-Log "清理完成！$msg，删除 $filesDeleted 个文件" "SUCCESS"
-
-        $script:BtnClean.Enabled = $true
-        $script:BtnClean.Text = "开始清理"
-
-        [System.Windows.Forms.MessageBox]::Show("清理完成！`n$msg`n删除 $filesDeleted 个文件", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        try {
+            $summary = Invoke-CleanOptimization
+            [System.Windows.Forms.MessageBox]::Show($summary, "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } catch {
             Write-Log "清理出错: $($_.Exception.Message)" "ERROR"
+            [System.Windows.Forms.MessageBox]::Show("清理出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        } finally {
             $script:BtnClean.Enabled = $true
             $script:BtnClean.Text = "开始清理"
-            [System.Windows.Forms.MessageBox]::Show("清理出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
     })
     $page.Controls.Add($script:BtnClean)
@@ -948,76 +1199,18 @@ function Build-ServicesPage {
 
     $script:btnDisable = New-Button "执行禁用" 640 400 140 40 $Theme.Success 10
     $script:btnDisable.Add_Click({
-        try {
         $script:btnDisable.Enabled = $false
         $script:btnDisable.Text = "处理中..."
         Invoke-UIRefresh
-
-        # 备份
-        if (-not (Test-Path $script:BackupDir)) { New-Item -ItemType Directory -Path $script:BackupDir -Force | Out-Null }
-        $backupFile = Join-Path $script:BackupDir "services_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
-        $backupData = @()
-        for ($i = 0; $i -lt $script:SvcDataTable.Rows.Count; $i++) {
-            $svcName = $script:SvcDataTable.Rows[$i]["服务名称"]
-            $service = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-            if ($service) {
-                $svcWmi = @(Get-CimData Win32_Service -Filter "Name='$svcName'")[0]
-                $startMode = if ($svcWmi) { $svcWmi.StartMode } else { "Unknown" }
-                $backupData += [PSCustomObject]@{ Name=$svcName; Status=$service.Status; StartType=$startMode; Date=(Get-Date -Format "yyyy-MM-dd HH:mm:ss") }
-            }
-            Invoke-UIRefresh
-        }
-        $backupData | Export-Csv -Path $backupFile -NoTypeInformation -Encoding UTF8
-        Write-Log "服务备份已保存: $backupFile"
-
-        $disabledCount = 0
-        for ($i = 0; $i -lt $script:SvcDataTable.Rows.Count; $i++) {
-            if ($script:SvcDataTable.Rows[$i]["选择"] -eq $true) {
-                $svcName = $script:SvcDataTable.Rows[$i]["服务名称"]
-                $service = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-                if ($service) {
-                    try {
-                        if ($service.Status -eq "Running") {
-                            Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue
-                            Start-Sleep -Milliseconds 300
-                        }
-                        Set-Service -Name $svcName -StartupType Disabled -ErrorAction Stop
-                        Write-Log "[禁用] $svcName" "SUCCESS"
-                        $disabledCount++
-                        $script:SvcDataTable.Rows[$i]["状态"] = "Stopped"
-                    } catch {
-                        Write-Log "[失败] $svcName — $($_.Exception.Message)" "ERROR"
-                    }
-                }
-            }
-            Invoke-UIRefresh
-        }
-
-        # 遥测任务
-        if ($script:chkTelemetry.Checked) {
-            $telemetryTasks = @(
-                @{Path="\Microsoft\Windows\Application Experience\"; Name="Microsoft Compatibility Appraiser"},
-                @{Path="\Microsoft\Windows\Application Experience\"; Name="ProgramDataUpdater"},
-                @{Path="\Microsoft\Windows\Customer Experience Improvement Program\"; Name="Consolidator"},
-                @{Path="\Microsoft\Windows\Customer Experience Improvement Program\"; Name="UsbCeip"}
-            )
-            foreach ($task in $telemetryTasks) {
-                try {
-                    $result = Disable-ScheduledTaskCompat -TaskPath $task.Path -TaskName $task.Name
-                    if ($result) { Write-Log "[禁用] 计划任务: $($task.Name)" "SUCCESS" }
-                } catch {}
-            }
-        }
-
-        Write-Log "服务优化完成！已禁用 $disabledCount 个服务" "SUCCESS"
-        $script:btnDisable.Enabled = $true
-        $script:btnDisable.Text = "执行禁用"
-        [System.Windows.Forms.MessageBox]::Show("服务优化完成！`n已禁用 $disabledCount 个服务`n`n备份文件: $backupFile", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        try {
+            $summary = Invoke-ServicesOptimization
+            [System.Windows.Forms.MessageBox]::Show("服务优化完成！`n$summary`n`n备份文件已生成", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } catch {
             Write-Log "服务优化出错: $($_.Exception.Message)" "ERROR"
+            [System.Windows.Forms.MessageBox]::Show("服务优化出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        } finally {
             $script:btnDisable.Enabled = $true
             $script:btnDisable.Text = "执行禁用"
-            [System.Windows.Forms.MessageBox]::Show("服务优化出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
     })
     $page.Controls.Add($script:btnDisable)
@@ -1105,44 +1298,11 @@ function Build-StartupPage {
     $script:btnDisableStartup = New-Button "禁用选中项" 20 446 160 40 $Theme.Success 10
     $script:btnDisableStartup.Add_Click({
         try {
-        if ($script:DgvStartup.SelectedRows.Count -eq 0) {
-            [System.Windows.Forms.MessageBox]::Show("请先选择要禁用的启动项（点击行左侧选择整行）", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-            return
-        }
-
-        if (-not (Test-Path $script:BackupDir)) { New-Item -ItemType Directory -Path $script:BackupDir -Force | Out-Null }
-        $backupFile = Join-Path $script:BackupDir "startup_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
-        $toRemove = @()
-        foreach ($row in $script:DgvStartup.SelectedRows) {
-            $idx = $row.Index
-            $toRemove += $script:StartupItems[$idx]
-        }
-        $toRemove | Select-Object Name, Command, Scope, Source | Export-Csv -Path $backupFile -NoTypeInformation -Encoding UTF8
-        Write-Log "启动项备份: $backupFile"
-
-        $count = 0
-        foreach ($item in $toRemove) {
-            try {
-                if ($item.Source -eq "注册表") {
-                    Remove-ItemProperty -Path $item.RegPath -Name $item.Name -ErrorAction Stop
-                    Write-Log "[禁用] $($item.Name) (注册表)" "SUCCESS"
-                    $count++
-                } elseif ($item.Source -eq "启动文件夹") {
-                    $backupDir2 = Join-Path $script:BackupDir "startup_items"
-                    if (-not (Test-Path $backupDir2)) { New-Item -ItemType Directory -Path $backupDir2 -Force | Out-Null }
-                    Move-Item -Path $item.Command -Destination (Join-Path $backupDir2 (Split-Path $item.Command -Leaf)) -Force -ErrorAction Stop
-                    Write-Log "[禁用] $($item.Name) (启动文件夹)" "SUCCESS"
-                    $count++
-                }
-            } catch {
-                Write-Log "[失败] $($item.Name)" "ERROR"
+            $summary = Invoke-StartupOptimization
+            if ($summary) {
+                [System.Windows.Forms.MessageBox]::Show("$summary`n`n部分项需通过任务管理器->启动 禁用", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+                Build-StartupPage
             }
-            Invoke-UIRefresh
-        }
-
-        Write-Log "启动项优化完成！已禁用 $count 项" "SUCCESS"
-        [System.Windows.Forms.MessageBox]::Show("已禁用 $count 个启动项`n`n部分项需通过任务管理器->启动 禁用", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-        Build-StartupPage
         } catch {
             Write-Log "启动项优化出错: $($_.Exception.Message)" "ERROR"
             [System.Windows.Forms.MessageBox]::Show("启动项优化出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
@@ -1208,55 +1368,18 @@ function Build-VisualPage {
 
     $script:btnApplyVisual = New-Button "应用视觉效果" 20 ([int]($yMode + 10)) 200 44 $Theme.Success 11
     $script:btnApplyVisual.Add_Click({
-        try {
-        $selectedMode = 1
-        for ($i = 0; $i -lt 3; $i++) { if ($script:radioBtns[$i].Checked) { $selectedMode = $script:modes[$i].Value } }
-
-        $backupFile = Join-Path $script:BackupDir "visual_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
-
         $script:btnApplyVisual.Enabled = $false
         $script:btnApplyVisual.Text = "应用中..."
         Invoke-UIRefresh
-
-        $visualKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
-        if (-not (Test-Path $visualKey)) { New-Item -Path $visualKey -Force | Out-Null }
-        $perfKey = "HKCU:\Control Panel\Desktop"
-        $advKey  = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
-        $dwmKey  = "HKCU:\Software\Microsoft\Windows\DWM"
-
-        Set-ItemProperty -Path $visualKey -Name "VisualFXSetting" -Value 3 -Type DWord
-        Set-ItemProperty -Path $advKey -Name "TaskbarAnimations" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-
-        $modeName = switch ($selectedMode) {
-            1 {
-                Set-ItemProperty -Path $perfKey -Name "DragFullWindows" -Value "0" -ErrorAction SilentlyContinue
-                Set-ItemProperty -Path $perfKey -Name "FontSmoothing" -Value "2" -ErrorAction SilentlyContinue
-                Set-ItemProperty -Path $perfKey -Name "MenuShowDelay" -Value "0" -ErrorAction SilentlyContinue
-                Set-ItemProperty -Path $advKey -Name "ListviewAlphaSelect" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-                Set-ItemProperty -Path $dwmKey -Name "EnableAeroPeek" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-                "BEST"
-            }
-            2 {
-                Set-ItemProperty -Path $perfKey -Name "DragFullWindows" -Value "1" -ErrorAction SilentlyContinue
-                Set-ItemProperty -Path $perfKey -Name "FontSmoothing" -Value "2" -ErrorAction SilentlyContinue
-                Set-ItemProperty -Path $perfKey -Name "MenuShowDelay" -Value "100" -ErrorAction SilentlyContinue
-                Set-ItemProperty -Path $dwmKey -Name "EnableAeroPeek" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-                "BALANCED"
-            }
-            default { "CUSTOM" }
-        }
-        $modeLabel = switch ($modeName) { "BEST" { "最佳性能" } "BALANCED" { "平衡" } default { "自定义" } }
-        Write-Log "视觉效果: $modeLabel 模式已应用" "SUCCESS"
-
-        # 重启资源管理器
-        try { Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue; Start-Sleep 1; Start-Process explorer } catch {}
-
-        $script:btnApplyVisual.Enabled = $true
-        $script:btnApplyVisual.Text = "应用视觉效果"
-        [System.Windows.Forms.MessageBox]::Show("视觉效果已应用！`n资源管理器已重启。", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        try {
+            $summary = Invoke-VisualOptimization
+            [System.Windows.Forms.MessageBox]::Show("$summary！`n资源管理器已重启。", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } catch {
             Write-Log "视觉效果出错: $($_.Exception.Message)" "ERROR"
             [System.Windows.Forms.MessageBox]::Show("视觉效果出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        } finally {
+            $script:btnApplyVisual.Enabled = $true
+            $script:btnApplyVisual.Text = "应用视觉效果"
         }
     })
     $page.Controls.Add($script:btnApplyVisual)
@@ -1342,50 +1465,20 @@ function Build-PowerPage {
 
     $script:btnApplyPower = New-Button "应用电源计划" 20 ([int]($yPlan + 10)) 200 44 $Theme.Success 11
     $script:btnApplyPower.Add_Click({
-        try {
-        $selectedGUID = $script:plans[0].GUID
-        for ($i = 0; $i -lt 3; $i++) { if ($script:radioPowers[$i].Checked) { $selectedGUID = $script:plans[$i].GUID } }
-
         $script:btnApplyPower.Enabled = $false
         $script:btnApplyPower.Text = "应用中..."
         Invoke-UIRefresh
-
-        # 卓越性能需要解锁
-        if ($selectedGUID -eq "e9a42b02-d5df-448d-aa00-03f14749eb61") {
-            powercfg /duplicatescheme $selectedGUID 2>&1 | Out-Null
-        }
-
-        powercfg /setactive $selectedGUID 2>&1 | Out-Null
-        Write-Log "已切换电源计划: $selectedGUID" "SUCCESS"
-
-        # CPU 频率
-        if ($selectedGUID -eq "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c") {
-            powercfg /setacvalueindex $selectedGUID SUB_PROCESSOR PROCTHROTTLEMIN 100 2>&1 | Out-Null
-            powercfg /setacvalueindex $selectedGUID SUB_PROCESSOR PROCTHROTTLEMAX 100 2>&1 | Out-Null
-            Write-Log "CPU 处理器状态: 最低100% / 最高100%" "SUCCESS"
-        }
-
-        if ($script:chkUSB.Checked) {
-            powercfg /setacvalueindex $selectedGUID SUB_USB USBSELSUSP 0 2>&1 | Out-Null
-            Write-Log "USB 选择性挂起: 已禁用" "SUCCESS"
-        }
-        if ($script:chkPCI.Checked) {
-            powercfg /setacvalueindex $selectedGUID SUB_PCIEXPRESS ASPM 0 2>&1 | Out-Null
-            Write-Log "PCI Express 电源管理: 已关闭" "SUCCESS"
-        }
-
-        powercfg /setactive $selectedGUID 2>&1 | Out-Null
-
-        $script:btnApplyPower.Enabled = $true
-        $script:btnApplyPower.Text = "应用电源计划"
-
-        $newPlan = @(powercfg /getactivescheme 2>&1) -join ' '
-        $script:lblCurrent.Text = "当前计划: $newPlan"
-
-        [System.Windows.Forms.MessageBox]::Show("电源计划已切换！", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        try {
+            $summary = Invoke-PowerOptimization
+            $newPlan = @(powercfg /getactivescheme 2>&1) -join ' '
+            $script:lblCurrent.Text = "当前计划: $newPlan"
+            [System.Windows.Forms.MessageBox]::Show("$summary！", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } catch {
             Write-Log "电源计划出错: $($_.Exception.Message)" "ERROR"
             [System.Windows.Forms.MessageBox]::Show("电源计划出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        } finally {
+            $script:btnApplyPower.Enabled = $true
+            $script:btnApplyPower.Text = "应用电源计划"
         }
     })
     $page.Controls.Add($script:btnApplyPower)
@@ -1482,53 +1575,18 @@ function Build-DiskPage {
 
     $script:btnDiskOpt = New-Button "开始优化" 20 $yDisk 200 44 $Theme.Success 11
     $script:btnDiskOpt.Add_Click({
-        try {
         $script:btnDiskOpt.Enabled = $false
         $script:btnDiskOpt.Text = "优化中...(可能需要数分钟)"
         Invoke-UIRefresh
-        $volumes = @(Get-VolumeCompat)
-
-        if ($script:chkTRIM.Checked -or $script:chkDefrag.Checked) {
-            foreach ($vol in $volumes) {
-                $drive = "$($vol.DriveLetter):"
-                # Win7 回退：用 WMI 查询磁盘类型
-                if ($script:chkTRIM.Checked) {
-                    try {
-                        Optimize-VolumeCompat -DriveLetter $vol.DriveLetter -ReTrim
-                        Write-Log "[优化] $drive TRIM 完成" "SUCCESS"
-                    } catch { Write-Log "[跳过] $drive TRIM" "WARN" }
-                }
-                if ($script:chkDefrag.Checked) {
-                    try {
-                        Optimize-VolumeCompat -DriveLetter $vol.DriveLetter -Defrag
-                        Write-Log "[优化] $drive 碎片整理完成" "SUCCESS"
-                    } catch { Write-Log "[跳过] $drive 碎片整理" "WARN" }
-                }
-                Invoke-UIRefresh
-            }
-        }
-
-        if ($script:chkWinSxS.Checked) {
-            Write-Log "正在清理 WinSxS 组件存储..."
-            Dism.exe /Online /Cleanup-Image /StartComponentCleanup 2>&1 | Out-Null
-            Write-Log "WinSxS 组件存储清理完成" "SUCCESS"
-        }
-
-        if ($script:chkCompact.Checked) {
-            Write-Log "正在压缩系统文件..."
-            Compact.exe /CompactOS:always 2>&1 | Out-Null
-            Write-Log "系统文件压缩完成" "SUCCESS"
-        }
-
-        Write-Log "磁盘优化完成！" "SUCCESS"
-        $script:btnDiskOpt.Enabled = $true
-        $script:btnDiskOpt.Text = "开始优化"
-        [System.Windows.Forms.MessageBox]::Show("磁盘优化完成！", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        try {
+            $summary = Invoke-DiskOptimization
+            [System.Windows.Forms.MessageBox]::Show($summary, "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } catch {
             Write-Log "磁盘优化出错: $($_.Exception.Message)" "ERROR"
+            [System.Windows.Forms.MessageBox]::Show("磁盘优化出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        } finally {
             $script:btnDiskOpt.Enabled = $true
             $script:btnDiskOpt.Text = "开始优化"
-            [System.Windows.Forms.MessageBox]::Show("磁盘优化出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
     })
     $page.Controls.Add($script:btnDiskOpt)
@@ -1632,65 +1690,18 @@ function Build-NetworkPage {
 
     $script:btnNetOpt = New-Button "开始优化" 20 $y 200 44 $Theme.Success 11
     $script:btnNetOpt.Add_Click({
-        try {
         $script:btnNetOpt.Enabled = $false
         $script:btnNetOpt.Text = "优化中..."
         Invoke-UIRefresh
-
-        $dnsChoice = $script:cbDNS.SelectedIndex
-
-        if ($dnsChoice -gt 0) {
-            $dnsServers = switch ($dnsChoice) {
-                1 { @("1.1.1.1", "1.0.0.1") }
-                2 { @("8.8.8.8", "8.8.4.4") }
-                3 { @("223.5.5.5", "223.6.6.6") }
-                4 { @("114.114.114.114", "114.114.115.115") }
-            }
-
-            try {
-                $adapters = Get-NetAdapterCompat
-                foreach ($adapter in $adapters) {
-                    if ($adapter.Name) {
-                        Set-DnsCompat -InterfaceName $adapter.Name -DnsServers $dnsServers
-                        Write-Log "[DNS] $($adapter.Name) 已设置为 $($dnsServers -join ', ')" "SUCCESS"
-                    }
-                }
-            } catch {
-                Write-Log "[DNS] 设置失败: $_" "ERROR"
-            }
-        }
-
-        if ($script:chkTCP.Checked) {
-            try {
-                netsh int tcp set global autotuninglevel=normal 2>&1 | Out-Null
-                Write-Log "[TCP] 自动调优已启用" "SUCCESS"
-            } catch { Write-Log "[TCP] 设置失败" "WARN" }
-        }
-
-        if ($script:chkRSS.Checked) {
-            Enable-NetAdapterRssCompat
-            Write-Log "[RSS] 接收端缩放已启用" "SUCCESS"
-        }
-
-        if ($script:chkRSC.Checked) {
-            Enable-NetAdapterRscCompat
-            Write-Log "[RSC] 接收段合并已启用" "SUCCESS"
-        }
-
-        if ($script:chkDNSCache.Checked) {
-            Clear-DnsClientCacheCompat
-            Write-Log "[DNS] 缓存已刷新" "SUCCESS"
-        }
-
-        Write-Log "网络优化完成！" "SUCCESS"
-        $script:btnNetOpt.Enabled = $true
-        $script:btnNetOpt.Text = "开始优化"
-        [System.Windows.Forms.MessageBox]::Show("网络优化完成！", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        try {
+            $summary = Invoke-NetworkOptimization
+            [System.Windows.Forms.MessageBox]::Show($summary, "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } catch {
             Write-Log "网络优化出错: $($_.Exception.Message)" "ERROR"
+            [System.Windows.Forms.MessageBox]::Show("网络优化出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        } finally {
             $script:btnNetOpt.Enabled = $true
             $script:btnNetOpt.Text = "开始优化"
-            [System.Windows.Forms.MessageBox]::Show("网络优化出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
     })
     $page.Controls.Add($script:btnNetOpt)

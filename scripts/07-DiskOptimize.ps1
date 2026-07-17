@@ -9,15 +9,18 @@
     - 压缩系统文件
 #>
 
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "         磁盘优化" -ForegroundColor Cyan
-Write-Host "============================================" -ForegroundColor Cyan
+. "$PSScriptRoot\Common.ps1"
+Show-ModuleBanner "磁盘优化"
 
 # --- 获取磁盘信息 ---
 Write-Host "`n[1/3] 检测磁盘信息..." -ForegroundColor Yellow
 
-$physicalDisks = Get-PhysicalDisk | Select-Object DeviceId, FriendlyName, MediaType, Size, BusType
+try {
+    $physicalDisks = Get-PhysicalDisk -ErrorAction Stop | Select-Object DeviceId, FriendlyName, MediaType, Size, BusType
+} catch {
+    Write-Host "    无法获取物理磁盘信息（需要 Storage 模块或管理员权限），将按未知类型处理。" -ForegroundColor Gray
+    $physicalDisks = @()
+}
 $volumes = Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveType -eq "Fixed" }
 
 Write-Host ""
@@ -136,9 +139,7 @@ foreach ($vol in $updatedVolumes) {
     Write-Host "  $($vol.DriveLetter): ${totalGB}GB 总计 | ${freeGB}GB 可用"
 }
 
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  磁盘优化完成！" -ForegroundColor Green
-Write-Host "  SSD 已执行 TRIM | HDD 已执行碎片整理" -ForegroundColor Gray
-Write-Host "  系统组件已清理并压缩" -ForegroundColor Gray
-Write-Host "============================================" -ForegroundColor Cyan
+Show-ModuleFooter "磁盘优化完成！" -Lines @(
+    "  SSD 已执行 TRIM | HDD 已执行碎片整理"
+    "  系统组件已清理并压缩"
+)
