@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Compile the C# launcher to PCOptimizer.exe
 .DESCRIPTION

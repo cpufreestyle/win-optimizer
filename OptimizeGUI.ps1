@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     PC-Optimizer-7thGen GUI 版本
 .DESCRIPTION

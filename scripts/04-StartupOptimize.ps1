@@ -1,4 +1,4 @@
-﻿﻿<#
+<#
 .SYNOPSIS
     启动项优化模块 — 管理并禁用多余的开机启动项
 .DESCRIPTION

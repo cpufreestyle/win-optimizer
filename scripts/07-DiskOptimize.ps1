@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     磁盘优化模块 — 磁盘清理与碎片整理/SSD优化
 .DESCRIPTION

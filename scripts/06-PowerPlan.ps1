@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     电源计划优化模块 — 切换高性能电源计划以提升 CPU 响应
 .DESCRIPTION

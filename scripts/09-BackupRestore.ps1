@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     备份与恢复模块 — 备份当前系统设置 / 从备份恢复
 .DESCRIPTION

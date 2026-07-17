@@ -36,16 +36,31 @@ jobs:
             Write-Host "✓ config/optimization.json: valid"
           }
 
-      - name: Check README has no BOM (prevent release mojibake)
+      - name: Check release-facing files have no BOM (prevent release mojibake)
         shell: pwsh
         run: |
-          $b = [System.IO.File]::ReadAllBytes('README.md')
-          if ($b.Count -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
-            Write-Error "README.md must NOT have a UTF-8 BOM (it causes GitHub mojibake on the Release page)."
-            exit 1
-          } else {
-            Write-Host "OK: README.md has no BOM"
+          $files = @(
+            'README.md',
+            'config/optimization.json',
+            'Optimize.ps1',
+            'OptimizeGUI.ps1',
+            'Build-EXE.ps1',
+            'Launcher.cs',
+            'tools/README.md',
+            'tools/remove-internal-tool/README.md'
+          )
+          $bad = @()
+          foreach ($f in $files) {
+            if (-not (Test-Path $f)) { continue }
+            $b = [System.IO.File]::ReadAllBytes($f)
+            $hasBom = ($b.Count -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)
+            if ($hasBom) { $bad += $f } else { Write-Host "OK: $f has no BOM" }
           }
+          if ($bad.Count -gt 0) {
+            Write-Error "These release-facing files must NOT have a UTF-8 BOM (it causes GitHub mojibake on the Release page): $($bad -join ', ')"
+            exit 1
+          }
+          Write-Host "All checked files are BOM-free."
 
       - name: Check README
         shell: pwsh

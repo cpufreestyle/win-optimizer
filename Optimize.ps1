@@ -1,4 +1,4 @@
-﻿﻿<#
+<#
 .SYNOPSIS
     7代CPU老电脑 Windows 系统优化工具
 .DESCRIPTION

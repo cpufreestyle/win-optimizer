@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     网络优化模块 — 优化 DNS 与网络参数以提升网络响应速度
 .DESCRIPTION
