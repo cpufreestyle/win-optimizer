@@ -127,6 +127,18 @@ git clone git@github.com:cpufreestyle/win-optimizer.git
 
 推送（`git push`）前，需将本机 SSH 公钥（`~/.ssh/id_ed25519.pub`）添加到 GitHub → Settings → SSH and GPG keys（详见上方注意事项第 10 条）。HTTPS 密码方式已被 GitHub 停用，无法用于 push。
 
+## 🚀 发布 Release
+
+仓库根目录的 `RELEASE_NOTES.md` 为本项目的 Release 说明模板，可直接用于 `gh` 创建 Release：
+
+```powershell
+# 在已登录 gh 的前提下
+git push origin main
+gh release create v2.1.2 --title "v2.1.2 一键优化与 Release 乱码修复" --notes-file RELEASE_NOTES.md
+```
+
+未安装 `gh` 时，可前往 GitHub 仓库 → Releases → Draft a new release，将 `RELEASE_NOTES.md` 内容粘贴进说明框即可。所有面向 Release 的文件均已去除 UTF-8 BOM，Release 页面不会显示乱码。
+
 ## 📁 项目结构
 
 ```
