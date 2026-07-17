@@ -119,13 +119,13 @@ cd C:\PC-Optimizer-7thGen
 
 ## 🔧 获取源码（开发者向）
 
-仓库远程使用 **SSH 协议**，克隆命令：
+仓库远程使用 **HTTPS 协议**，克隆命令：
 
 ```powershell
-git clone git@github.com:cpufreestyle/win-optimizer.git
+git clone https://github.com/cpufreestyle/win-optimizer.git
 ```
 
-推送（`git push`）前，需将本机 SSH 公钥（`~/.ssh/id_ed25519.pub`）添加到 GitHub → Settings → SSH and GPG keys（详见上方注意事项第 10 条）。HTTPS 密码方式已被 GitHub 停用，无法用于 push。
+推送（`git push`）需使用 **Personal Access Token（PAT）**：GitHub → Settings → Developer settings → Personal access tokens 生成（勾选 `repo` 权限），推送弹窗中用户名填 GitHub 邮箱、密码填该 token（详见上方注意事项第 10 条）。GitHub 已停用账户密码登录 Git，无法用登录密码 push。
 
 ## 🚀 发布 Release
 
@@ -217,7 +217,7 @@ GUI 版本采用现代化深色主题设计，包含以下区域：
 7. **网络重置** — 如果选择重置网络栈，需要重启电脑才能生效
 8. **Windows 11 用户** — 7代 CPU 官方不支持 Win11，如已安装可能存在兼容性问题
 9. **Python 工具** — `tools/` 目录下的工具需要 Python 3.x 环境
-10. **代码仓库远程使用 SSH 协议** — 推送（`git push`）前，需将本机 SSH 公钥（`~/.ssh/id_ed25519.pub`）添加到 GitHub → Settings → SSH and GPG keys；若尚未生成密钥，可用 `ssh-keygen -t ed25519 -C "你的邮箱"` 生成后一并加入。HTTPS 密码方式已被 GitHub 停用，无法用于 push。
+10. **代码仓库远程使用 HTTPS 协议** — 推送（`git push`）需使用 Personal Access Token（PAT）：GitHub → Settings → Developer settings → Personal access tokens 生成（勾选 `repo` 权限），推送弹窗中用户名填 GitHub 邮箱、密码填该 token。GitHub 已停用账户密码登录 Git，无法用登录密码 push。
 
 ## 🔒 安全说明
 
