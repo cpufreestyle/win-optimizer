@@ -1,5 +1,7 @@
 # 编译产物
 *.exe
+# 例外：发布用的可执行文件作为 release 资产纳入版本管理
+!PC-Optimizer.exe
 
 # 日志文件
 *.log
