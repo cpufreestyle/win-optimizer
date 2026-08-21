@@ -1,6 +1,5 @@
 @echo off
-:: PC-Optimizer-7thGen 启动器
-:: 自动请求管理员权限并启动 GUI
+:: PC-Optimizer-7thGen launcher - request admin and start GUI
 
 >nul 2>&1 net session
 if %errorlevel% neq 0 (

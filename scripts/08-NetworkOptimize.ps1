@@ -46,27 +46,60 @@ if ($tcpGlobal) {
 # --- 选择 DNS ---
 Write-Host "`n[2/4] 选择 DNS 服务器:" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "  [1] 阿里 DNS         (223.5.5.5 / 223.6.6.6)        — 国内推荐"
-Write-Host "  [2] 腾讯 DNS         (119.29.29.29 / 119.28.28.28)  — 国内推荐"
-Write-Host "  [3] 114 DNS          (114.114.114.114 / 114.114.115.115)"
-Write-Host "  [4] Google DNS       (8.8.8.8 / 8.8.4.4)            — 需翻墙"
-Write-Host "  [5] Cloudflare DNS   (1.1.1.1 / 1.0.0.1)            — 需翻墙"
-Write-Host "  [6] 阿里+Cloudflare  (223.5.5.5 / 1.1.1.1)          — 混合"
+
+# DNS 选项：优先从 config/optimization.json 的 dns_options 读取，回退到内置列表
+$dnsOptions = @(
+    @{Label="阿里 DNS";        Primary="223.5.5.5";      Secondary="223.6.6.6"}
+    @{Label="腾讯 DNS";        Primary="119.29.29.29";   Secondary="119.28.28.28"}
+    @{Label="114 DNS";         Primary="114.114.114.114"; Secondary="114.114.115.115"}
+    @{Label="Google DNS";      Primary="8.8.8.8";        Secondary="8.8.4.4"}
+    @{Label="Cloudflare DNS";  Primary="1.1.1.1";        Secondary="1.0.0.1"}
+    @{Label="阿里+Cloudflare";  Primary="223.5.5.5";      Secondary="1.1.1.1"}
+)
+$configPath = Join-Path $PSScriptRoot "..\config\optimization.json"
+$configPath = [System.IO.Path]::GetFullPath($configPath)
+if (Test-Path $configPath) {
+    try {
+        $cfg = Get-Content -Path $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($cfg.dns_options -and ($cfg.dns_options.PSObject.Properties.Count -gt 0)) {
+            $cfgOptions = @()
+            $i = 1
+            foreach ($prop in $cfg.dns_options.PSObject.Properties) {
+                $addrs = @($prop.Value)
+                $cfgOptions += @{Label=$prop.Name; Primary=$addrs[0]; Secondary=if($addrs.Count -gt 1){$addrs[1]}else{$addrs[0]}}
+                $i++
+            }
+            # 用配置的 DNS（去掉内置的"混合"项，避免重复）
+            $dnsOptions = $cfgOptions
+            Write-Host "  (已从 config/optimization.json 加载 DNS 选项)" -ForegroundColor DarkGray
+        }
+    } catch {
+        Write-Host "  (DNS 配置读取失败，使用内置选项)" -ForegroundColor Yellow
+    }
+}
+
+for ($i = 0; $i -lt $dnsOptions.Count; $i++) {
+    $o = $dnsOptions[$i]
+    Write-Host ("  [{0}] {1,-16} ({2} / {3})" -f ($i+1), $o.Label, $o.Primary, $o.Secondary)
+}
 Write-Host "  [0] 跳过 DNS 设置"
-$dnsChoice = Read-Host "选择 (0-6)"
+$dnsChoice = Read-Host "选择 (0-$($dnsOptions.Count))"
 
 $dnsPrimary = $null
 $dnsSecondary = $null
 
-switch ($dnsChoice) {
-    "1" { $dnsPrimary = "223.5.5.5";     $dnsSecondary = "223.6.6.6" }
-    "2" { $dnsPrimary = "119.29.29.29";  $dnsSecondary = "119.28.28.28" }
-    "3" { $dnsPrimary = "114.114.114.114"; $dnsSecondary = "114.114.115.115" }
-    "4" { $dnsPrimary = "8.8.8.8";       $dnsSecondary = "8.8.4.4" }
-    "5" { $dnsPrimary = "1.1.1.1";       $dnsSecondary = "1.0.0.1" }
-    "6" { $dnsPrimary = "223.5.5.5";     $dnsSecondary = "1.1.1.1" }
-    "0" { Write-Host "  跳过 DNS 设置" -ForegroundColor Gray }
-    default { Write-Host "  无效选择，跳过 DNS 设置" -ForegroundColor Yellow }
+if ($dnsChoice -match '^\d+$') {
+    $idx = [int]$dnsChoice - 1
+    if ($idx -ge 0 -and $idx -lt $dnsOptions.Count) {
+        $dnsPrimary = $dnsOptions[$idx].Primary
+        $dnsSecondary = $dnsOptions[$idx].Secondary
+    } elseif ($dnsChoice -eq "0") {
+        Write-Host "  跳过 DNS 设置" -ForegroundColor Gray
+    } else {
+        Write-Host "  无效选择，跳过 DNS 设置" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "  无效选择，跳过 DNS 设置" -ForegroundColor Yellow
 }
 
 if ($dnsPrimary) {

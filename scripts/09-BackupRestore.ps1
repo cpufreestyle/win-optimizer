@@ -39,12 +39,16 @@ $serviceBackups  = $backups | Where-Object { $_.Name -like "services_backup_*" }
 $startupBackups  = $backups | Where-Object { $_.Name -like "startup_backup_*" }
 $visualBackups   = $backups | Where-Object { $_.Name -like "visual_backup_*" }
 $powerBackups    = $backups | Where-Object { $_.Name -like "power_backup_*" }
+$updateBackups   = $backups | Where-Object { $_.Name -like "winupdate_block_*" }
+$manualBackups   = $backups | Where-Object { $_.Name -like "manual_update_*" }
 
 $categories = @(
     @{Name="服务备份";    Backups=$serviceBackups;  Type="services"}
     @{Name="启动项备份";  Backups=$startupBackups;  Type="startup"}
     @{Name="视觉效果备份"; Backups=$visualBackups;   Type="visual"}
     @{Name="电源计划备份"; Backups=$powerBackups;    Type="power"}
+    @{Name="屏蔽Windows更新备份"; Backups=$updateBackups;   Type="update"}
+    @{Name="手动更新备份"; Backups=$manualBackups;   Type="update"}
 )
 
 $menuIndex = 1
@@ -166,6 +170,25 @@ function Restore-Power {
     }
 }
 
+function Restore-Update {
+    param([string]$BackupFile)
+    Write-Host "  正在恢复 Windows Update 注册表（解除 Windows 更新屏蔽）..." -ForegroundColor Yellow
+    if ($BackupFile -like "*.reg") {
+        try {
+            & reg import $BackupFile 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "    [完成] 已导入注册表备份，Windows 更新屏蔽已解除" -ForegroundColor Green
+            } else {
+                Write-Host "    [失败] 导入注册表失败（退出码 $LASTEXITCODE）" -ForegroundColor Red
+            }
+        } catch {
+            Write-Host "    [失败] $($_.Exception.Message)" -ForegroundColor Red
+        }
+    } else {
+        Write-Host "    [跳过] 非注册表备份文件" -ForegroundColor Gray
+    }
+}
+
 if ($input -eq "A" -or $input -eq "a") {
     # 恢复所有最近的备份
     foreach ($cat in $categories) {
@@ -177,6 +200,7 @@ if ($input -eq "A" -or $input -eq "a") {
                 "startup"  { Restore-Startup  -BackupFile $latest.FullName }
                 "visual"   { Restore-Visual   -BackupFile $latest.FullName }
                 "power"    { Restore-Power    -BackupFile $latest.FullName }
+                "update"   { Restore-Update   -BackupFile $latest.FullName }
             }
         }
     }
@@ -203,6 +227,7 @@ else {
             "startup"  { Restore-Startup  -BackupFile $selected.File }
             "visual"   { Restore-Visual   -BackupFile $selected.File }
             "power"    { Restore-Power    -BackupFile $selected.File }
+            "update"   { Restore-Update   -BackupFile $selected.File }
         }
     } else {
         Write-Host "  无效选择。" -ForegroundColor Red

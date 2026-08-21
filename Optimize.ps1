@@ -21,7 +21,7 @@ $script:ScriptsDir  = Join-Path $ProjectRoot "scripts"
 $script:ConfigDir   = Join-Path $ProjectRoot "config"
 $script:BackupDir   = Join-Path $ProjectRoot "backups"
 $script:LogFile     = Join-Path $ProjectRoot "optimize.log"
-$script:Version     = "1.0.0"
+$script:Version     = "3.0.0"
 
 # ============================================================
 #  工具函数
@@ -109,6 +109,10 @@ function Show-Menu {
         Write-Host "   [7]  磁盘优化            — 磁盘清理与碎片整理/SSD优化"
         Write-Host "   [8]  网络优化            — 优化DNS与网络参数"
         Write-Host "   [9]  一键全面优化        — 执行上述所有优化（推荐）"
+        Write-Host "   [10] 屏蔽 Windows 更新   — 停止反复推送升级（如 24H2）"
+        Write-Host "   [11] 手动更新模式         — 不暂停，但不自动安装/重启"
+        Write-Host "   [12] 隐藏指定更新         — 把指定升级藏起来不再出现"
+        Write-Host "   [13] Windows 可选功能     — 列出并启用微软默认未开启的功能"
         Write-Host ""
         Write-Host " [工具]" -ForegroundColor Yellow
         Write-Host "   [B]  备份当前系统设置"
@@ -129,6 +133,10 @@ function Show-Menu {
             "7" { Invoke-ScriptModule "07-DiskOptimize.ps1" }
             "8" { Invoke-ScriptModule "08-NetworkOptimize.ps1" }
             "9" { Invoke-FullOptimization }
+            "10" { Invoke-ScriptModule "10-BlockWin1124H2.ps1" }
+            "11" { Invoke-ScriptModule "11-ManualUpdateMode.ps1" }
+            "12" { Invoke-ScriptModule "12-HideUpdates.ps1" }
+            "13" { Invoke-ScriptModule "13-WindowsFeatures.ps1" }
             { $_ -eq "B" -or $_ -eq "b" } { Invoke-ScriptModule "09-BackupRestore.ps1" }
             { $_ -eq "R" -or $_ -eq "r" } { Invoke-ScriptModule "09-BackupRestore.ps1" }
             { $_ -eq "Q" -or $_ -eq "q" } { Write-Host "感谢使用，再见！" -ForegroundColor Green; return }
@@ -156,7 +164,8 @@ function Invoke-FullOptimization {
         "05-VisualEffects.ps1",
         "06-PowerPlan.ps1",
         "07-DiskOptimize.ps1",
-        "08-NetworkOptimize.ps1"
+        "08-NetworkOptimize.ps1",
+        "10-BlockWin1124H2.ps1"
     )
 
     $total = $modules.Count
@@ -182,7 +191,7 @@ if (-not (Test-Administrator)) {
     Write-Host "================================================" -ForegroundColor Red
     Write-Host "  错误：请以管理员身份运行此脚本！" -ForegroundColor Red
     Write-Host "  右键 PowerShell -> 以管理员身份运行" -ForegroundColor Red
-    Write-Host "  然后执行: cd C:\PC-Optimizer-7thGen; .\Optimize.ps1" -ForegroundColor Red
+    Write-Host "  然后执行: cd $ProjectRoot; .\Optimize.ps1" -ForegroundColor Red
     Write-Host "================================================" -ForegroundColor Red
     Write-Host ""
     pause

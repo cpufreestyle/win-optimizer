@@ -29,6 +29,8 @@ Write-Host "  $plans" -ForegroundColor Gray
 # --- 备份 ---
 $backupFile = Join-Path $PSScriptRoot "..\backups\power_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
 $backupFile = [System.IO.Path]::GetFullPath($backupFile)
+$backupDir = Split-Path $backupFile -Parent
+if (-not (Test-Path $backupDir)) { New-Item -ItemType Directory -Path $backupDir -Force | Out-Null }
 powercfg /query > $backupFile 2>&1
 Write-Host "`n  备份已保存: $backupFile" -ForegroundColor Green
 

@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PC-Optimizer-7thGen · WebUI</title>
+<style>
+  :root{
+    --bg:#0f0f17; --panel:#1b1b27; --panel2:#232333; --border:#2e2e42;
+    --text:#e6e6f0; --dim:#9a9ab0; --accent:#4f8cff; --accent2:#6f5cff;
+    --green:#3ecf8e; --yellow:#f5c451; --red:#ff6b6b; --orange:#ff9f43;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;
+    background:var(--bg); color:var(--text); min-height:100vh; line-height:1.5;
+  }
+  /* 布局：左侧边栏 + 右侧内容，移动端堆叠 */
+  .layout{display:flex; height:100vh; flex-direction:row; overflow:hidden}
+  .sidebar{
+    width:230px; flex-shrink:0; background:var(--panel);
+    border-right:1px solid var(--border); padding:18px 12px;
+    display:flex; flex-direction:column; gap:6px;
+    overflow-y:auto;
+  }
+  .brand{font-size:18px; font-weight:700; padding:6px 10px 16px; color:var(--accent);
+    word-break:break-word}
+  .nav-item{
+    padding:11px 14px; border-radius:8px; cursor:pointer; color:var(--dim);
+    font-size:14px; transition:.15s; word-break:break-word;
+  }
+  .nav-item:hover{background:var(--panel2); color:var(--text)}
+  .nav-item.active{background:linear-gradient(90deg,var(--accent),var(--accent2)); color:#fff; font-weight:600}
+  .main{flex:1; padding:32px 28px 28px; overflow-y:auto; overflow-x:hidden; min-width:0}
+  .page-title{font-size:22px; font-weight:700; margin:4px 0 4px; word-break:break-word}
+  .page-sub{color:var(--dim); font-size:13px; margin-bottom:20px; word-break:break-word}
+  .card{
+    background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:18px; margin-bottom:16px; width:100%;
+  }
+  .card h3{font-size:15px; margin-bottom:12px; color:var(--accent); word-break:break-word}
+  .grid{display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+  .stat{
+    background:var(--panel2); border-radius:10px; padding:14px;
+  }
+  .stat .k{font-size:12px; color:var(--dim)}
+  .stat .v{font-size:20px; font-weight:700; margin-top:4px; word-break:break-word}
+  .stat .v.small{font-size:15px}
+  /* 表格自适应 */
+  table{width:100%; border-collapse:collapse; font-size:13px}
+  th,td{text-align:left; padding:11px 12px; border-bottom:1px solid var(--border);
+    word-break:break-word; vertical-align:middle; line-height:1.4}
+  th{color:var(--dim); font-weight:600; background:var(--panel2)}
+  .table-wrap{max-height:480px; overflow:auto; border:1px solid var(--border); border-radius:8px}
+  /* 进度条 */
+  .bar{height:10px; background:var(--panel2); border-radius:6px; overflow:hidden; margin-top:6px}
+  .bar > i{display:block; height:100%; border-radius:6px}
+  /* 按钮 */
+  .btn{
+    display:inline-flex; align-items:center; justify-content:center; gap:6px;
+    padding:10px 18px; border:none; border-radius:8px; cursor:pointer;
+    font-size:14px; font-weight:600; color:#fff; background:var(--accent);
+    transition:.15s; margin:4px 6px 4px 0; white-space:normal; text-align:center;
+  }
+  .btn:hover{filter:brightness(1.1)}
+  .btn.green{background:var(--green)} .btn.yellow{background:var(--yellow); color:#222}
+  .btn.red{background:var(--red)} .btn.ghost{background:var(--panel2); color:var(--text)}
+  .btn:disabled{opacity:.5; cursor:not-allowed}
+  .row{display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px}
+  .badge{display:inline-block; padding:2px 9px; border-radius:20px; font-size:12px; font-weight:600}
+  .badge.ok{background:rgba(62,207,142,.18); color:var(--green)}
+  .badge.warn{background:rgba(245,196,81,.18); color:var(--yellow)}
+  .badge.err{background:rgba(255,107,107,.18); color:var(--red)}
+  .badge.info{background:rgba(79,140,255,.18); color:var(--accent)}
+  .log{background:#0a0a12; border:1px solid var(--border); border-radius:8px;
+    padding:12px; font-family:Consolas,monospace; font-size:12px; color:var(--dim);
+    max-height:220px; overflow:auto; white-space:pre-wrap; word-break:break-word}
+  .muted{color:var(--dim); font-size:13px}
+  .alert{background:rgba(245,196,81,.12); border:1px solid var(--yellow);
+    color:var(--yellow); padding:10px 14px; border-radius:8px; font-size:13px; margin-bottom:14px;
+    word-break:break-word}
+  /* 移动端 */
+  @media(max-width:760px){
+    .layout{flex-direction:column}
+    .sidebar{width:100%; flex-direction:row; flex-wrap:wrap; border-right:none;
+      border-bottom:1px solid var(--border)}
+    .brand{width:100%}
+    .nav-item{flex:1 1 auto; text-align:center; padding:9px 10px}
+    .main{padding:16px}
+  }
+  .hidden{display:none}
+  .check{width:16px; height:16px; cursor:pointer; vertical-align:middle; margin-right:8px}
+  .spin{display:inline-block; width:14px; height:14px; border:2px solid #fff;
+    border-top-color:transparent; border-radius:50%; animation:sp .7s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="sidebar">
+    <div class="brand">PC-Optimizer<br>7thGen · WebUI</div>
+    <div class="nav-item active" data-page="overview">📊 系统概览</div>
+    <div class="nav-item" data-page="clean">🧹 垃圾清理</div>
+    <div class="nav-item" data-page="services">⚙️ 服务优化</div>
+    <div class="nav-item" data-page="startup">🚀 启动项</div>
+    <div class="nav-item" data-page="update">🛡️ 更新与功能</div>
+    <div class="nav-item" data-page="visual">🎨 视觉效果</div>
+    <div class="nav-item" data-page="power">⚡ 电源计划</div>
+    <div class="nav-item" data-page="disk">💽 磁盘优化</div>
+    <div class="nav-item" data-page="network">🌐 网络优化</div>
+    <div class="nav-item" data-page="backup">💾 备份恢复</div>
+  </div>
+  <div class="main">
+    <div id="content"></div>
+  </div>
+</div>
+
+<script>
+const $ = (s,el=document)=>el.querySelector(s);
+const $$ = (s,el=document)=>[...el.querySelectorAll(s)];
+const content = $('#content');
+let logLines = [];
+
+function log(msg,type=''){
+  const t = new Date().toLocaleTimeString();
+  logLines.unshift(`[${t}] ${msg}`);
+  logLines = logLines.slice(0,80);
+  const box = $('#logbox');
+  if(box){ box.textContent = logLines.join('\n'); }
+}
+function esc(s){ return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+async function api(url,opts={}){
+  const r = await fetch(url,{
+    method:opts.method||'GET',
+    headers:{'Content-Type':'application/json'},
+    body:opts.body?JSON.stringify(opts.body):undefined
+  });
+  return await r.json();
+}
+function btn(label,cls='',onclick,disabled=false){
+  // 返回 HTML 字符串，便于嵌入到模板字符串里
+  const c = cls ? 'btn '+cls : 'btn';
+  const dis = disabled ? ' disabled' : '';
+  const id = 'b_'+Math.random().toString(36).slice(2,9);
+  pendingBtns[id] = onclick;
+  return `<button id="${id}" class="${c}"${dis}>${label}</button>`;
+}
+const pendingBtns = {};
+// 在 DOM 就绪后绑定 onclick
+function bindBtns(root){
+  root.querySelectorAll('button[id^="b_"]').forEach(b=>{
+    const fn = pendingBtns[b.id];
+    if (fn) { b.onclick = fn; delete pendingBtns[b.id]; }
+  });
+}
+function badge(text,type='info'){ return `<span class="badge ${type}">${esc(text)}</span>`; }
+
+// ---------------- 概览 ----------------
+async function renderOverview(){
+  content.innerHTML = `<div class="page-title">系统概览</div>
+    <div class="page-sub">当前硬件与系统状态</div>
+    <div class="card"><div id="ov" class="muted">加载中…</div></div>
+    <div class="card"><h3>操作日志</h3><div class="log" id="logbox"></div></div>`;
+  bindBtns(content);
+  try{
+    const d = await api('/api/overview');
+    if(!d.ok){ $('#ov').innerHTML='<span class="badge err">获取失败</span> '+esc(d.error); return; }
+    let disks = d.disks.map(x=>`<div class="stat">
+      <div class="k">${esc(x.drive)} · 已用 ${x.pct}%</div>
+      <div class="v small">${x.usedGB} / ${x.totalGB} GB</div>
+      <div class="bar"><i style="width:${x.pct}%;background:${x.pct>85?'var(--red)':x.pct>70?'var(--yellow)':'var(--green)'}"></i></div>
+    </div>`).join('');
+    let gpus = (d.gpus&&d.gpus.length)?d.gpus.map(g=>`<div class="stat"><div class="k">显卡</div><div class="v small">${esc(g)}</div></div>`).join('') : '';
+    $('#ov').innerHTML = `
+      <div class="grid">
+        <div class="stat"><div class="k">操作系统</div><div class="v small">${esc(d.osName)} Build ${esc(d.build)}</div></div>
+        <div class="stat"><div class="k">CPU</div><div class="v small">${esc(d.cpuName)}</div>
+          <div class="k" style="margin-top:6px">${d.cpuCores}核 / ${d.cpuThreads}线程 · ${d.cpuClock}GHz · 负载 ${d.cpuLoad}%</div>
+          ${d.cpuGen?`<div class="k" style="color:var(--green)">${esc(d.cpuGen)}</div>`:''}
+        </div>
+      </div>
+      <div class="grid" style="margin-top:14px">
+        <div class="stat"><div class="k">内存 · 已用 ${d.memPct}%</div>
+          <div class="v small">${d.memUsed} / ${d.memTotal} GB（可用 ${d.memFree}）</div>
+          <div class="bar"><i style="width:${d.memPct}%;background:${d.memPct>80?'var(--red)':d.memPct>60?'var(--yellow)':'var(--green)'}"></i></div>
+        </div>
+        <div class="stat"><div class="k">运行时间</div><div class="v small">${d.uptimeDays}天 ${d.uptimeHours}时 ${d.uptimeMins}分</div></div>
+      </div>
+      <div class="grid" style="margin-top:14px">${disks}${gpus}</div>`;
+  }catch(e){ $('#ov').innerHTML='<span class="badge err">异常</span> '+esc(e.message); }
+}
+
+// ---------------- 清理 ----------------
+let cleanItems=[];
+async function renderClean(){
+  content.innerHTML = `<div class="page-title">垃圾清理</div>
+    <div class="page-sub">扫描并清理系统临时文件、缓存，释放磁盘空间</div>
+    <div class="card">
+      <h3>可清理项目</h3>
+      <div id="cleanlist" class="muted">扫描中…</div>
+      <div class="row">
+        ${btn('扫描','ghost',scanClean)}
+        ${btn('清理选中','green',cleanSelected)}
+        ${btn('全部清理','red',()=>cleanSelected(true))}
+      </div>
+    </div>
+    <div class="card"><h3>操作日志</h3><div class="log" id="logbox"></div></div>`;
+  bindBtns(content);
+  scanClean();
+}
+async function scanClean(){
+  $('#cleanlist').innerHTML='扫描中…';
+  const d = await api('/api/clean/scan');
+  if(!d.ok){ $('#cleanlist').innerHTML=badge('失败','err')+' '+esc(d.error); return; }
+  cleanItems=d.items;
+  let rows = d.items.map(it=>`<tr>
+    <td><input type="checkbox" class="check" data-key="${esc(it.key)}" checked></td>
+    <td>${esc(it.name)}</td>
+    <td class="muted" style="word-break:break-all">${esc(it.path)}</td>
+    <td>${it.sizeMB} MB</td></tr>`).join('');
+  $('#cleanlist').innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th></th><th>项目</th><th>路径</th><th>预估大小</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>
+    <p class="muted" style="margin-top:8px">回收站约 ${d.recycleMB} MB（清理时一并清空）</p>`;
+}
+async function cleanSelected(all=false){
+  let keys = all ? 'all' : $$('#cleanlist .check:checked').map(c=>c.dataset.key).join(',');
+  if(!all && !keys){ log('未选择任何项'); return; }
+  const b=event?event.target:null; if(b){b.disabled=true;b.innerHTML='<span class="spin"></span>清理中';}
+  log('开始清理…');
+  const d = await api('/api/clean',{method:'POST',body:{items:keys}});
+  if(b){b.disabled=false;b.textContent=all?'全部清理':'清理选中';}
+  if(d.ok){ log(`清理完成：释放 ${d.freedMB} MB，删除 ${d.filesDeleted} 个文件`); scanClean(); }
+  else { log('清理失败：'+d.error,'err'); }
+}
+
+// ---------------- 服务 ----------------
+async function renderServices(){
+  content.innerHTML = `<div class="page-title">服务优化</div>
+    <div class="page-sub">禁用不必要的后台服务以释放 CPU 和内存资源</div>
+    <div class="alert">提示：禁用前会自动备份，可随时恢复。建议先点"仅安全禁用"。</div>
+    <div class="card">
+      <h3>可优化服务</h3>
+      <div id="svclist" class="muted">加载中…</div>
+      <div class="row">
+        ${btn('刷新','ghost',renderServices)}
+        ${btn('仅安全禁用','green',()=>applySvc('safe'))}
+        ${btn('全部禁用','yellow',()=>applySvc('all'))}
+        ${btn('恢复备份','ghost',restoreSvc)}
+      </div>
+    </div>
+    <div class="card"><h3>操作日志</h3><div class="log" id="logbox"></div></div>`;
+  bindBtns(content);
+  const d = await api('/api/services');
+  if(!d.ok){ $('#svclist').innerHTML=badge('失败','err')+' '+esc(d.error); return; }
+  let rows = d.services.map(s=>`<tr>
+    <td>${esc(s.name)}</td><td class="muted">${esc(s.desc)}</td>
+    <td>${badge(s.level,s.level==='安全禁用'?'ok':'warn')}</td>
+    <td>${badge(s.startType==='Disabled'?'已禁用':'运行中',s.startType==='Disabled'?'ok':'info')}</td>
+  </tr>`).join('');
+  $('#svclist').innerHTML=`<div class="table-wrap"><table>
+    <thead><tr><th>服务名</th><th>说明</th><th>级别</th><th>当前状态</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+async function applySvc(mode){
+  if(!confirm(`确认${mode==='all'?'全部禁用':'仅安全禁用'}所选服务？`)) return;
+  log(`应用服务优化(${mode})…`);
+  const d = await api('/api/services/apply',{method:'POST',body:{mode}});
+  if(d.ok){ log(`已禁用 ${d.disabled} 个，跳过 ${d.skipped} 个。备份：${d.backup}`); renderServices(); }
+  else log('服务优化失败：'+d.error,'err');
+}
+async function restoreSvc(){
+  log('恢复服务备份…');
+  const d = await api('/api/services/restore',{method:'POST'});
+  if(d.ok){ log(`已恢复 ${d.restored} 个服务`); renderServices(); }
+  else log('恢复失败：'+d.error,'err');
+}
+
+// ---------------- 启动项 ----------------
+async function renderStartup(){
+  content.innerHTML = `<div class="page-title">启动项优化</div>
+    <div class="page-sub">管理并禁用多余的开机启动项，加快开机速度</div>
+    <div class="card">
+      <h3>启动项列表</h3>
+      <div id="stlist" class="muted">加载中…</div>
+      <div class="row">
+        ${btn('刷新','ghost',renderStartup)}
+        ${btn('禁用选中','green',disableStartup)}
+        ${btn('禁用全部','red',()=>disableStartup(true))}
+      </div>
+    </div>
+    <div class="card"><h3>操作日志</h3><div class="log" id="logbox"></div></div>`;
+  bindBtns(content);
+  const d = await api('/api/startup');
+  if(!d.ok){ $('#stlist').innerHTML=badge('失败','err')+' '+esc(d.error); return; }
+  if(!d.count){ $('#stlist').innerHTML='<p class="muted">未发现启动项。</p>'; return; }
+  let rows = d.items.map(it=>`<tr>
+    <td><input type="checkbox" class="check" data-idx="${it.index}" checked></td>
+    <td>${esc(it.name)}</td><td class="muted" style="word-break:break-all">${esc(it.value)}</td>
+    <td>${esc(it.source)}</td><td>${esc(it.scope)}</td></tr>`).join('');
+  $('#stlist').innerHTML=`<div class="table-wrap"><table>
+    <thead><tr><th></th><th>名称</th><th>命令/路径</th><th>来源</th><th>范围</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+async function disableStartup(all=false){
+  let sel = all ? 'all' : $$('#stlist .check:checked').map(c=>c.dataset.idx).join(',');
+  if(!all && !sel){ log('未选择任何项'); return; }
+  if(!confirm('确认禁用所选启动项？（会先备份）')) return;
+  log('禁用启动项…');
+  const d = await api('/api/startup/disable',{method:'POST',body:{items:sel}});
+  if(d.ok){ log(`已禁用 ${d.disabled} 项，跳过/失败 ${d.failed} 项`); renderStartup(); }
+  else log('失败：'+d.error,'err');
+}
+
+// ---------------- 更新与功能 ----------------
+async function renderUpdate(){
+  content.innerHTML = `<div class="page-title">更新与功能</div>
+    <div class="page-sub">管理 Windows 更新策略与可选功能</div>
+    <div class="grid">
+      <div class="card"><h3>🛡️ 屏蔽 Windows 更新</h3>
+        <p class="muted" id="blockst">锁定当前版本，停止反复推送升级（如 24H2）。</p>
+        <div class="row">
+          ${btn('应用屏蔽','red',blockUpdate)}
+          ${btn('恢复','ghost',restoreBlock)}
+          ${btn('状态','ghost',blockStatus)}
+        </div>
+      </div>
+      <div class="card"><h3>🔔 手动更新模式</h3>
+        <p class="muted" id="manualst">更新照常下载提示，但不自动安装/强制重启。</p>
+        <div class="row">
+          ${btn('设为手动','yellow',manualUpdate)}
+          ${btn('恢复','ghost',restoreManual)}
+          ${btn('状态','ghost',manualStatus)}
+        </div>
+      </div>
+    </div>
+    <div class="card"><h3>🫥 隐藏/恢复指定更新</h3>
+      <div class="row">
+        ${btn('列出可隐藏','ghost',listHide)}
+        ${btn('列出已隐藏','ghost',listHidden)}
+        ${btn('隐藏选中','green',hideSel)}
+        ${btn('恢复选中','green',showSel)}
+      </div>
+      <div id="hidetable" class="muted" style="margin-top:10px"></div>
+    </div>
+    <div class="card"><h3>🧩 Windows 可选功能</h3>
+      <div class="row">
+        ${btn('列出未启用','ghost',listFeat)}
+        ${btn('已启用','ghost',listFeatOn)}
+        ${btn('启用选中','green',enableFeat)}
+      </div>
+      <div id="feattable" class="muted" style="margin-top:10px"></div>
+    </div>
+    <div class="card"><h3>操作日志</h3><div class="log" id="logbox"></div></div>`;
+  bindBtns(content);
+  blockStatus(); manualStatus();
+}
+async function blockUpdate(){
+  if(!confirm('确认屏蔽 Windows 更新（硬锁当前版本）？')) return;
+  log('应用屏蔽 Windows 更新…');
+  const d=await api('/api/update/block',{method:'POST',body:{action:'apply'}});
+  if(d.ok){ log(`已锁定版本 ${d.lockedVersion}，隐藏升级项 ${d.hiddenUpgrades} 个。备份：${d.backup}`); blockStatus(); }
+  else log('失败：'+d.error,'err');
+}
+async function restoreBlock(){
+  log('恢复屏蔽备份…');
+  const d=await api('/api/update/block',{method:'POST',body:{action:'restore'}});
+  if(d.ok){ log('已恢复'); blockStatus(); } else log('失败：'+d.error,'err');
+}
+async function blockStatus(){
+  const d=await api('/api/update/block',{method:'POST',body:{action:'status'}});
+  if(d.ok) $('#blockst').innerHTML = `当前状态：${badge(d.blocked?'已屏蔽':'未屏蔽',d.blocked?'ok':'info')}` +
+    (d.targetVersion?` 锁定版本：${esc(d.targetVersion)}`:'');
+}
+async function manualUpdate(){
+  if(!confirm('确认设为手动安装模式？')) return;
+  log('设为手动更新模式…');
+  const d=await api('/api/update/manual',{method:'POST',body:{action:'apply'}});
+  if(d.ok){ log('已设为手动安装模式'); manualStatus(); } else log('失败：'+d.error,'err');
+}
+async function restoreManual(){
+  log('恢复手动模式备份…');
+  const d=await api('/api/update/manual',{method:'POST',body:{action:'restore'}});
+  if(d.ok){ log('已恢复'); manualStatus(); } else log('失败：'+d.error,'err');
+}
+async function manualStatus(){
+  const d=await api('/api/update/manual',{method:'POST',body:{action:'status'}});
+  if(d.ok) $('#manualst').innerHTML='当前模式：'+badge(d.mode,d.mode==='自动(默认)'?'info':'ok');
+}
+let hideCache=[];
+async function listHide(){
+  const d=await api('/api/update/hide');
+  if(!d.ok){ $('#hidetable').innerHTML=badge('失败','err')+' '+esc(d.error); return; }
+  hideCache=d.updates; renderHideTable(d.updates,'可隐藏');
+}
+async function listHidden(){
+  const d=await api('/api/update/hidden');
+  if(!d.ok){ $('#hidetable').innerHTML=badge('失败','err')+' '+esc(d.error); return; }
+  renderHideTable(d.updates,'已隐藏');
+}
+function renderHideTable(list,kind){
+  if(!list.length){ $('#hidetable').innerHTML='<p class="muted">无'+kind+'的更新。</p>'; return; }
+  let rows=list.map(u=>`<tr>
+    <td><input type="checkbox" class="check" data-idx="${u.index}" ${kind==='可隐藏'?'checked':''}></td>
+    <td>${esc(u.title)}</td></tr>`).join('');
+  $('#hidetable').innerHTML=`<p class="muted">${kind}（${list.length} 项）</p><div class="table-wrap"><table>
+    <thead><tr><th></th><th>标题</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+async function hideSel(){
+  let sel=$$('#hidetable .check:checked').map(c=>c.dataset.idx).join(',');
+  if(!sel){ log('未选择'); return; }
+  log('隐藏更新…');
+  const d=await api('/api/update/hide',{method:'POST',body:{items:sel}});
+  if(d.ok){ log(`已隐藏 ${d.count} 个`); listHide(); } else log('失败：'+d.error,'err');
+}
+async function showSel(){
+  let sel=$$('#hidetable .check:checked').map(c=>c.dataset.idx).join(',');
+  if(!sel){ log('未选择'); return; }
+  log('恢复显示更新…');
+  const d=await api('/api/update/show',{method:'POST',body:{items:sel}});
+  if(d.ok){ log(`已恢复 ${d.count} 个`); listHidden(); } else log('失败：'+d.error,'err');
+}
+let featCache=[];
+async function listFeat(){
+  const d=await api('/api/features');
+  if(!d.ok){ $('#feattable').innerHTML=badge('失败','err')+' '+esc(d.error); return; }
+  featCache=d.features; renderFeatTable(d.features,'可启用');
+}
+async function listFeatOn(){
+  const d=await api('/api/features/enabled');
+  if(!d.ok){ $('#feattable').innerHTML=badge('失败','err')+' '+esc(d.error); return; }
+  renderFeatTable(d.features,'已启用',true);
+}
+function renderFeatTable(list,kind,on=false){
+  if(!list.length){ $('#feattable').innerHTML='<p class="muted">'+(on?'未启用任何功能':'无可选功能')+'。</p>'; return; }
+  let rows=list.map(f=>`<tr>
+    <td>${on?'':`<input type="checkbox" class="check" data-idx="${f.index}" checked>`}</td>
+    <td>${esc(f.name)}</td><td>${esc(f.state||'')}</td></tr>`).join('');
+  $('#feattable').innerHTML=`<p class="muted">${kind}（${list.length} 项）</p><div class="table-wrap"><table>
+    <thead><tr><th></th><th>功能名</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+async function enableFeat(){
+  let sel=$$('#feattable .check:checked').map(c=>c.dataset.idx).join(',');
+  if(!sel){ log('未选择'); return; }
+  if(!confirm('确认启用所选功能？（部分需联网获取组件，可能需重启）')) return;
+  log('启用功能…');
+  const d=await api('/api/features/enable',{method:'POST',body:{items:sel}});
+  if(d.ok){ log(`已启用 ${d.enabled} 个。需重启：${d.needReboot?'是':'否'}`); listFeat(); }
+  else log('失败：'+d.error,'err');
+}
+
+// ---------------- 视觉效果 ----------------
+async function renderVisual(){
+  content.innerHTML = `<div class="page-title">视觉效果优化</div>
+    <div class="page-sub">降低视觉特效以提升系统响应速度，老电脑推荐使用最佳性能模式</div>
+    <div class="alert">提示：应用后会重启资源管理器使设置生效。</div>
+    <div class="card">
+      <h3>性能模式</h3>
+      <div id="vismode" class="muted">加载中…</div>
+      <div class="row" id="visbtns"></div>
+    </div>
+    <div class="card"><h3>操作日志</h3><div class="log" id="logbox"></div></div>`;
+  bindBtns(content);
+  const d = await api('/api/visual');
+  if(!d.ok){ $('#vismode').innerHTML=badge('失败','err')+' '+esc(d.error); return; }
+  let cur = (d.current===null||d.current===undefined)?'未知':String(d.current);
+  let cards = d.modes.map(m=>`<div class="stat" style="margin:8px 0">
+    <div class="v small">${esc(m.title)} ${m.value===cur?badge('当前','ok'):''}</div>
+    <div class="k" style="margin-top:4px">${esc(m.desc)}</div>
+  </div>`).join('');
+  $('#vismode').innerHTML = `<p class="muted" style="margin-bottom:10px">当前 VisualFXSetting: <b>${cur}</b></p><div class="grid">${cards}</div>`;
+  let btns='';
+  d.modes.forEach(m=>{ btns += btn('应用：'+m.title, m.safe?'green':'yellow', ()=>applyVisual(m.value)); });
+  $('#visbtns').innerHTML = btns;
+  bindBtns($('#visbtns'));
+}
+async function applyVisual(value){
+  if(!confirm('确认应用该视觉效果模式？（将重启资源管理器）')) return;
+  log('应用视觉效果模式…');
+  const d = await api('/api/visual/apply',{method:'POST',body:{value}});
+  if(d.ok){ log(`已应用：${d.applied}`); renderVisual(); }
+  else log('失败：'+d.error,'err');
+}
+
+// ---------------- 电源计划 ----------------
+async function renderPower(){
+  content.innerHTML = `<div class="page-title">电源计划优化</div>
+    <div class="page-sub">切换高性能电源计划，最大化 CPU 性能响应速度</div>
+    <div class="card">
+      <h3>电源计划</h3>
+      <div id="pwmode" class="muted">加载中…</div>
+      <p class="muted" style="margin-top:10px">
+        <label><input type="checkbox" id="cbUsb" checked> 禁用 USB 选择性挂起</label>
+        &nbsp;&nbsp;
+        <label><input type="checkbox" id="cbPci" checked> 关闭 PCI Express 电源管理</label>
+      </p>
+      <div class="row" id="pwbtns"></div>
+    </div>
+    <div class="card"><h3>操作日志</h3><div class="log" id="logbox"></div></div>`;
+  bindBtns(content);
+  const d = await api('/api/power');
+  if(!d.ok){ $('#pwmode').innerHTML=badge('失败','err')+' '+esc(d.error); return; }
+  let cards = d.plans.map(p=>`<div class="stat" style="margin:8px 0">
+    <div class="v small">${esc(p.title)} ${p.guid===d.current?badge('当前','ok'):''}</div>
+    <div class="k" style="margin-top:4px">${esc(p.desc)}</div>
+  </div>`).join('');
+  $('#pwmode').innerHTML = `<div class="grid">${cards}</div>`;
+  let btns='';
+  d.plans.forEach(p=>{ btns += btn('应用：'+p.title, 'green', ()=>applyPower(p.value)); });
+  $('#pwbtns').innerHTML = btns;
+  bindBtns($('#pwbtns'));
+}
+async function applyPower(value){
+  if(!confirm('确认切换电源计划？')) return;
+  log('切换电源计划…');
+  const usb = $('#cbUsb').checked, pci = $('#cbPci').checked;
+  const d = await api('/api/power/apply',{method:'POST',body:{value,usb,pci}});
+  if(d.ok){ log(`已切换：${d.applied}`); renderPower(); }
+  else log('失败：'+d.error,'err');
+}
+
+// ---------------- 磁盘优化 ----------------
+async function renderDisk(){
+  content.innerHTML = `<div class="page-title">磁盘优化</div>
+    <div class="page-sub">SSD 执行 TRIM 优化 / HDD 执行碎片整理 / 清理系统组件</div>
+    <div class="card">
+      <h3>物理磁盘</h3>
+      <div id="dsklist" class="muted">加载中…</div>
+      <p class="muted" style="margin-top:10px">
+        <label><input type="checkbox" id="cbTrim" checked> SSD TRIM 优化</label>
+        <label><input type="checkbox" id="cbDefrag" checked> HDD 碎片整理</label>
+        <label><input type="checkbox" id="cbWinSxS" checked> 清理 WinSxS 组件存储</label>
+        <label><input type="checkbox" id="cbCompact"> 压缩系统文件 (CompactOS)</label>
+      </p>
+      <div class="row">
+        ${btn('开始优化','green',optimizeDisk)}
+      </div>
+    </div>
+    <div class="card"><h3>操作日志</h3><div class="log" id="logbox"></div></div>`;
+  bindBtns(content);
+  const d = await api('/api/disk');
+  if(!d.ok){ $('#dsklist').innerHTML=badge('失败','err')+' '+esc(d.error); return; }
+  if(!d.disks.length){ $('#dsklist').innerHTML='<p class="muted">未发现物理磁盘。</p>'; return; }
+  let rows = d.disks.map(x=>`<tr><td>${esc(x.name)}</td><td>${esc(x.type)}</td><td>${x.sizeGB} GB</td></tr>`).join('');
+  $('#dsklist').innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>磁盘</th><th>类型</th><th>容量</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+async function optimizeDisk(){
+  if(!confirm('确认执行磁盘优化？（TRIM/碎片整理可能耗时数分钟）')) return;
+  log('磁盘优化中…');
+  const body = {
+    trim: $('#cbTrim').checked, defrag: $('#cbDefrag').checked,
+    winsxs: $('#cbWinSxS').checked, compact: $('#cbCompact').checked
+  };
+  const d = await api('/api/disk/optimize',{method:'POST',body});
+  if(d.ok){ (d.log||[]).forEach(l=>log(l)); log('磁盘优化完成'); }
+  else log('失败：'+d.error,'err');
+}
+
+// ---------------- 网络优化 ----------------
+async function renderNetwork(){
+  content.innerHTML = `<div class="page-title">网络优化</div>
+    <div class="page-sub">优化 DNS 和网络参数以提升网络响应速度</div>
+    <div class="card">
+      <h3>当前 DNS</h3>
+      <div id="netcur" class="muted">加载中…</div>
+      <p class="muted" style="margin-top:10px">
+        DNS 设置：
+        <select id="selDns">
+          <option value="0">保持当前 DNS</option>
+          <option value="1">Cloudflare (1.1.1.1)</option>
+          <option value="2">Google (8.8.8.8)</option>
+          <option value="3">阿里 (223.5.5.5)</option>
+          <option value="4">114 (114.114.114.114)</option>
+        </select>
+      </p>
+      <p class="muted">
+        <label><input type="checkbox" id="cbTcp" checked> TCP 自动调优</label>
+        <label><input type="checkbox" id="cbRss" checked> RSS 接收端缩放</label>
+        <label><input type="checkbox" id="cbRsc" checked> RSC 接收段合并</label>
+        <label><input type="checkbox" id="cbDnsCache" checked> 刷新 DNS 缓存</label>
+      </p>
+      <div class="row">
+        ${btn('开始优化','green',optimizeNetwork)}
+      </div>
+    </div>
+    <div class="card"><h3>操作日志</h3><div class="log" id="logbox"></div></div>`;
+  bindBtns(content);
+  const d = await api('/api/network');
+  if(!d.ok){ $('#netcur').innerHTML=badge('失败','err')+' '+esc(d.error); return; }
+  if(!d.adapters.length){ $('#netcur').innerHTML='<p class="muted">未发现活动网络适配器。</p>'; return; }
+  let rows = d.adapters.map(a=>`<tr><td>${esc(a.name)}</td><td class="muted" style="word-break:break-all">${esc(a.dns)}</td></tr>`).join('');
+  $('#netcur').innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>适配器</th><th>DNS 服务器</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+async function optimizeNetwork(){
+  if(!confirm('确认执行网络优化？')) return;
+  log('网络优化中…');
+  const body = {
+    dns: parseInt($('#selDns').value,10)||0,
+    tcp: $('#cbTcp').checked, rss: $('#cbRss').checked,
+    rsc: $('#cbRsc').checked, dnscache: $('#cbDnsCache').checked
+  };
+  const d = await api('/api/network/apply',{method:'POST',body});
+  if(d.ok){ (d.log||[]).forEach(l=>log(l)); log('网络优化完成'); renderNetwork(); }
+  else log('失败：'+d.error,'err');
+}
+
+// ---------------- 备份恢复 ----------------
+async function renderBackup(){
+  content.innerHTML = `<div class="page-title">备份恢复</div>
+    <div class="page-sub">管理优化操作的备份，可随时恢复</div>
+    <div class="card">
+      <div class="row">
+        ${btn('创建备份','green',createBackup)}
+        ${btn('恢复最近备份','yellow',restoreBackup)}
+        ${btn('刷新列表','ghost',renderBackup)}
+      </div>
+      <h3 style="margin-top:14px">备份列表</h3>
+      <div id="bklist" class="muted" style="margin-top:8px">加载中…</div>
+    </div>
+    <div class="card"><h3>操作日志</h3><div class="log" id="logbox"></div></div>`;
+  bindBtns(content);
+  const d = await api('/api/backup/list');
+  if(!d.ok){ $('#bklist').innerHTML=badge('失败','err')+' '+esc(d.error); return; }
+  if(!d.files.length){ $('#bklist').innerHTML='<p class="muted">暂无备份文件。</p>'; return; }
+  let rows = d.files.map(f=>`<tr>
+    <td>${esc(f.name)}</td><td>${esc(f.type)}</td><td>${esc(f.date)}</td><td>${esc(f.size)}</td>
+    <td><button class="btn ghost" onclick="restoreBackupFile('${esc(f.name)}')">恢复此备份</button></td>
+  </tr>`).join('');
+  $('#bklist').innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>文件名</th><th>类型</th><th>日期</th><th>大小</th><th>操作</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+async function createBackup(){
+  log('创建备份…');
+  const d = await api('/api/backup/create',{method:'POST'});
+  if(d.ok){ log('备份已创建：'+d.created); renderBackup(); }
+  else log('失败：'+d.error,'err');
+}
+async function restoreBackup(){
+  if(!confirm('确认从最近备份恢复？将恢复服务与启动项。')) return;
+  log('恢复最近备份…');
+  const d = await api('/api/backup/restore',{method:'POST'});
+  if(d.ok){ (d.log||[]).forEach(l=>log(l)); log('恢复完成'); renderBackup(); }
+  else log('失败：'+d.error,'err');
+}
+async function restoreBackupFile(name){
+  if(!confirm('确认恢复备份：'+name+'？')) return;
+  log('恢复备份：'+name);
+  const d = await api('/api/backup/restore',{method:'POST',body:{file:name}});
+  if(d.ok){ (d.log||[]).forEach(l=>log(l)); log('恢复完成'); renderBackup(); }
+  else log('失败：'+d.error,'err');
+}
+
+// ---------------- 路由 ----------------
+const pages = {
+  overview:renderOverview, clean:renderClean, services:renderServices,
+  startup:renderStartup, update:renderUpdate, visual:renderVisual,
+  power:renderPower, disk:renderDisk, network:renderNetwork, backup:renderBackup
+};
+$$('.nav-item').forEach(n=>{
+  n.onclick=()=>{
+    $$('.nav-item').forEach(x=>x.classList.remove('active'));
+    n.classList.add('active');
+    logLines=[];
+    (pages[n.dataset.page]||renderOverview)();
+  };
+});
+renderOverview();
+</script>
+</body>
+</html>

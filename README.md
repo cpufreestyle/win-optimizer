@@ -23,6 +23,10 @@ v2.0 合并了原 `windows-utils` 仓库的 4 个实用工具（C盘清理、剪
 | 🔋 电源计划优化 | 切换高性能/卓越性能计划，优化 CPU 频率策略 | 最大化 CPU 性能 |
 | 💿 磁盘优化 | SSD TRIM 优化、HDD 碎片整理、系统组件清理压缩 | 提升磁盘读写速度 |
 | 🌐 网络优化 | 设置快速 DNS、优化 TCP 参数、启用 RSS/RSC | 提升网络响应速度 |
+| 🛡️ 屏蔽 Windows 更新 | 硬锁版本+高优先级通道+隐藏升级项，停止反复推送升级（如 24H2） | 避免强制升级 |
+| 🔧 手动更新模式 | 不暂停更新，但改为"通知下载并安装"，不强制重启 | 可控更新 |
+| 🫥 隐藏指定更新 | 通过 WUAPI 把 24H2 等升级藏起来，不再出现 | 彻底不弹 |
+| 🧩 Windows 可选功能 | 列出并一键启用微软默认未开启的功能（如 .NET 3.5、Hyper-V、WSL） | 按需开启 |
 | 💾 备份与恢复 | 所有优化前自动备份，支持一键恢复 | 安全可逆 |
 
 ### 实用工具模块（Python 脚本，原 windows-utils）
@@ -58,7 +62,7 @@ v2.0 合并了原 `windows-utils` 仓库的 4 个实用工具（C盘清理、剪
 或者手动启动：
 ```powershell
 # 以管理员身份打开 PowerShell
-cd C:\PC-Optimizer-7thGen
+cd <项目根目录>
 .\OptimizeGUI.ps1
 ```
 
@@ -67,7 +71,7 @@ cd C:\PC-Optimizer-7thGen
 1. **以管理员身份**打开 PowerShell
 2. 执行以下命令：
 ```powershell
-cd C:\PC-Optimizer-7thGen
+cd <项目根目录>
 .\Optimize.ps1
 ```
 
@@ -76,7 +80,7 @@ cd C:\PC-Optimizer-7thGen
 如果修改了 `OptimizeGUI.ps1`，可以重新编译 EXE：
 ```powershell
 # 以管理员身份打开 PowerShell
-cd C:\PC-Optimizer-7thGen
+cd <项目根目录>
 .\Build-EXE.ps1
 ```
 
@@ -95,6 +99,10 @@ cd C:\PC-Optimizer-7thGen
 | `[7]` 磁盘优化 | 自动识别 SSD/HDD 并执行对应优化 |
 | `[8]` 网络优化 | 多种 DNS 选择 + TCP 参数调优 |
 | `[9]` 一键全面优化 | 依次执行 2~8 号所有优化模块 |
+| `[10]` 屏蔽 Windows 更新 | 锁定当前版本，停止反复推送升级（如 24H2） |
+| `[11]` 手动更新模式 | 更新照常下载提示，但不自动安装/强制重启 |
+| `[12]` 隐藏指定更新 | 把 24H2 等升级藏起来，不再出现在更新列表 |
+| `[13]` Windows 可选功能 | 列出并启用被微软默认关闭的 Windows 功能 |
 | `[B]` 备份 | 查看和管理备份文件 |
 | `[R]` 恢复 | 从备份恢复系统设置 |
 
@@ -122,9 +130,25 @@ cd C:\PC-Optimizer-7thGen
 ```
 PC-Optimizer-7thGen/
 ├── PC-Optimizer.exe          # EXE 可执行程序（双击即用，最推荐）
-├── OptimizeGUI.ps1           # GUI 图形界面源码
-├── Build-EXE.ps1             # EXE 编译脚本（重新编译用）
+├── OptimizeGUI.ps1           # GUI 主窗体源码（页面加载器 + 主窗体）
+├── Build-EXE.ps1             # EXE 编译脚本（拼接 lib + gui/pages 后编译）
 ├── Optimize.ps1              # 命令行交互模式入口
+├── lib/
+│   └── Optimize.Core.ps1     # 核心逻辑库（服务/遥测/备份，CLI/Web/GUI 三套复用）
+├── gui/
+│   ├── UpdateCheck.ps1       # 更新检查函数（GitHub Releases）
+│   └── pages/                # GUI 各页面函数（Build-XxxPage）
+│       ├── Dashboard.ps1     #   系统仪表盘
+│       ├── Clean.ps1         #   垃圾清理
+│       ├── Services.ps1      #   服务优化
+│       ├── Startup.ps1       #   启动项优化
+│       ├── Visual.ps1        #   视觉效果
+│       ├── Power.ps1         #   电源计划
+│       ├── Disk.ps1          #   磁盘优化
+│       ├── Network.ps1       #   网络优化
+│       ├── Backup.ps1        #   备份与恢复
+│       ├── Update.ps1        #   系统更新控制
+│       └── About.ps1         #   关于
 ├── StartGUI.bat              # GUI 快速启动（自动提权）
 ├── Start.bat                 # 启动选择菜单（EXE/GUI/CLI）
 ├── StartAll.bat              # 统一工具箱启动菜单（v2.0 新增）
@@ -142,7 +166,11 @@ PC-Optimizer-7thGen/
 │   ├── 06-PowerPlan.ps1      # 电源计划优化模块
 │   ├── 07-DiskOptimize.ps1   # 磁盘优化模块
 │   ├── 08-NetworkOptimize.ps1# 网络优化模块
-│   └── 09-BackupRestore.ps1  # 备份与恢复模块
+│   ├── 09-BackupRestore.ps1  # 备份与恢复模块
+│   ├── 10-BlockWin1124H2.ps1 # 屏蔽 Windows 更新模块（含 24H2 等功能升级）
+│   ├── 11-ManualUpdateMode.ps1 # 手动更新模式模块（不暂停、不强制重启）
+│   ├── 12-HideUpdates.ps1      # 隐藏指定更新模块（WUAPI 藏起 24H2 等升级）
+│   └── 13-WindowsFeatures.ps1  # Windows 可选功能模块（列出并启用默认未开启功能）
 ├── tools/                    # 实用工具（原 windows-utils 合并）
 │   ├── README.md             # 工具集说明
 │   ├── c-drive-cleaner.bat   # C盘清理启动器
@@ -157,6 +185,8 @@ PC-Optimizer-7thGen/
     ├── startup_backup_*.csv
     ├── visual_backup_*.json
     ├── power_backup_*.txt
+    ├── winupdate_block_*.reg # 屏蔽 Windows 更新的注册表备份
+    ├── manual_update_*.reg   # 手动更新模式的注册表备份
     └── startup_items/        # 启动文件夹项备份
 ```
 
@@ -194,7 +224,8 @@ GUI 版本采用现代化深色主题设计，包含以下区域：
 6. **系统压缩** — `CompactOS` 操作会压缩系统文件，首次执行可能耗时较长
 7. **网络重置** — 如果选择重置网络栈，需要重启电脑才能生效
 8. **Windows 11 用户** — 7代 CPU 官方不支持 Win11，如已安装可能存在兼容性问题
-9. **Python 工具** — `tools/` 目录下的工具需要 Python 3.x 环境
+9. **反复推送升级** — 使用主菜单 `[10]` 屏蔽 Windows 更新，锁定当前版本即可停止反复弹窗（如 24H2）
+10. **Python 工具** — `tools/` 目录下的工具需要 Python 3.x 环境
 
 ## 🔒 安全说明
 
@@ -247,6 +278,54 @@ Compact.exe /CompactOS:never
 ```
 
 ## 📝 更新日志
+
+### v3.0.0 (2026-08-21)
+- **架构重构：CLI / Web / GUI 三套实现统一核心逻辑**
+  - 新增 `lib/Optimize.Core.ps1` 共享库（服务列表、遥测任务、备份/恢复等），CLI、WebUI、GUI 全部复用同一份代码，消除重复与功能漂移
+  - 配置驱动：`config/optimization.json` 的服务列表、DNS 选项等真正生效，不再依赖硬编码
+- **GUI 巨型文件拆分**
+  - `OptimizeGUI.ps1`（原 2400+ 行）拆分为 `gui/pages/*.ps1`（11 个页面函数）+ `gui/UpdateCheck.ps1`（更新检查）
+  - 主窗体仅保留头部、UI 辅助、页面实例化与加载器，可维护性大幅提升
+  - 编译流程 `Build-EXE.ps1` 改为拼接 `lib + gui/pages + 主体` 后编译为单体 EXE
+- **中文乱码修复**
+  - 编译前将源文件转 UTF-16 LE 并配合 `-UNICODEEncoding`，彻底解决 ps2exe 按 ANSI 读取导致的中文损坏
+- **清理开发残留**：临时调试脚本归入 `_scratch/`，消除零 BOM / 双 BOM 隐患
+- 统一全部版本号到 `3.0.0`
+- 更新 README 项目结构与更新日志
+
+### v2.1.3 (2026-08-17)
+- **新增 Windows 可选功能模块** (`scripts/13-WindowsFeatures.ps1`)
+  - 列出微软默认未开启、需手动启用的可选功能（如 .NET Framework 3.5、Hyper-V、WSL、SMB1 等）
+  - 支持勾选后一键 `Enable-WindowsOptionalFeature` 启用，含重启提示
+  - 可查看当前已启用的功能列表
+  - 接入主菜单选项 `[13]`
+- 更新 README 文档
+
+### v2.1.2 (2026-08-17)
+- **新增隐藏指定更新模块** (`scripts/12-HideUpdates.ps1`)
+  - 基于 WUAPI（等同官方 wushowhide.diagcab），列出可隐藏更新供选择
+  - 支持隐藏（如 24H2 升级）与恢复显示已隐藏更新
+  - 隐藏为系统级持久，不影响其他安全更新
+  - 接入主菜单选项 `[12]`
+- 更新 README 文档
+
+### v2.1.1 (2026-08-17)
+- 新增手动更新模式模块（菜单 `[11]`），只改 AUOptions=2 不暂停更新
+- 备份恢复模块识别 `manual_update_*.reg` 备份
+
+### v2.1.0 (2026-08-17)
+- **新增屏蔽 Windows 11 24H2 升级模块** (`scripts/10-BlockWin1124H2.ps1`)
+  - 通过 `TargetReleaseVersion` 策略锁定当前具体版本号（如 23H2）
+  - 写入 `UpdatePolicy` 高优先级通道（组策略等价注册表），抗累积更新重置
+  - 通过 WUAPI 隐藏 24H2 升级项，等效官方 wushowhide 工具
+  - 注册表更改自动备份（`.reg`），可通过 `[R]` 一键恢复
+  - 接入主菜单选项 `[10]` 与一键全面优化列表
+- **新增手动更新模式模块** (`scripts/11-ManualUpdateMode.ps1`)
+  - 仅将 Windows Update 设为"通知下载并通知安装"（AUOptions=2）
+  - 不暂停更新，但不再自动安装 / 强制重启弹窗
+  - 注册表更改自动备份（`.reg`），可通过 `[R]` 一键恢复
+  - 接入主菜单选项 `[11]`
+- 更新 README 文档
 
 ### v2.0.0 (2026-07-07)
 - **合并 windows-utils 仓库** — 4 个实用工具合并到 `tools/` 目录

@@ -19,6 +19,8 @@ Write-Host "============================================" -ForegroundColor Cyan
 # --- 备份当前设置 ---
 $backupFile = Join-Path $PSScriptRoot "..\backups\visual_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
 $backupFile = [System.IO.Path]::GetFullPath($backupFile)
+$backupDir = Split-Path $backupFile -Parent
+if (-not (Test-Path $backupDir)) { New-Item -ItemType Directory -Path $backupDir -Force | Out-Null }
 
 Write-Host "`n[1/3] 备份当前视觉效果设置..." -ForegroundColor Yellow
 

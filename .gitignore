@@ -24,3 +24,6 @@ test-run.ps1
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# 寮€鍙戜复鏃惰剼鏈紙璋冭瘯/楠岃瘉鐢紝涓嶇撼鍏ョ増鏈帶鍒讹級
+_scratch/
