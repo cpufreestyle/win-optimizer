@@ -15,18 +15,23 @@ jobs:
       - name: Validate PowerShell scripts
         shell: pwsh
         run: |
-          $files = @('Optimize.ps1', 'OptimizeGUI.ps1', 'Build-EXE.ps1')
-          foreach ($f in $files) {
-            if (Test-Path $f) {
+          $dirs = @('.', 'lib', 'gui', 'gui/pages', 'scripts', 'webui/ps')
+          $hasError = $false
+          foreach ($d in $dirs) {
+            if (-not (Test-Path $d)) { continue }
+            Get-ChildItem -Path $d -Filter *.ps1 -ErrorAction SilentlyContinue | ForEach-Object {
+              $f = $_.FullName
               $errors = $null
-              $null = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errors)
+              $null = [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$null, [ref]$errors)
               if ($errors.Count -gt 0) {
                 Write-Warning "$f has $($errors.Count) parse error(s)"
+                $hasError = $true
               } else {
-                Write-Host "✓ $f: valid syntax"
+                Write-Host "OK $f"
               }
             }
           }
+          if ($hasError) { exit 1 }
 
       - name: Check config
         shell: pwsh

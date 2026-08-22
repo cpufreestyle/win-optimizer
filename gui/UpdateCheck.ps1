@@ -1,22 +1,39 @@
 ﻿# ============================================================
 #  更新检查（GitHub Releases）
-#  说明：仓库地址从 config/optimization.json 的 "update_repo" 读取，
-#        格式为 "owner/repo"；未配置则返回 $null（不弹窗、不打扰）。
+#  说明：仓库地址优先从 config/optimization.json 的 "update_repo" 读取
+#        （格式 "owner/repo"）；未配置时自动从 git remote 探测；
+#        仍无法识别则返回 $null（不弹窗、不打扰）。
 # ============================================================
 
-function Get-GitHubLatestRelease {
-    $repo = $null
+function Get-GitHubRepo {
+    # 返回 "owner/repo" 或 $null
     try {
         $cfgPath = Join-Path $script:ProjectRoot "config\optimization.json"
         if (Test-Path $cfgPath) {
             $cfg = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ($cfg.update_repo) { $repo = $cfg.update_repo }
+            if ($cfg.update_repo) { return $cfg.update_repo }
         }
     } catch {
         Write-Log "读取更新仓库配置失败: $($_.Exception.Message)" "WARN"
     }
+    # 从 git remote 自动探测
+    try {
+        $remote = & git -C $script:ProjectRoot remote get-url origin 2>$null
+        if ($remote) {
+            if ($remote -match 'github\.com[:/]([^/]+)/(.+?)(?:\.git)?$') {
+                return ($Matches[1] + '/' + $Matches[2])
+            }
+        }
+    } catch {
+        Write-Log "从 git remote 探测仓库失败: $($_.Exception.Message)" "WARN"
+    }
+    return $null
+}
+
+function Get-GitHubLatestRelease {
+    $repo = Get-GitHubRepo
     if ([string]::IsNullOrWhiteSpace($repo)) {
-        Write-Log "未配置 update_repo，跳过更新检查。" "INFO"
+        Write-Log "未配置 update_repo 且无法从 git remote 探测，跳过更新检查。" "INFO"
         return $null
     }
     try {

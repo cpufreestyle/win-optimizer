@@ -69,6 +69,49 @@ $fullText = ($parts -join "`r`n`r`n")
 
 $compileInput = $tmpFile
 
+# ---- 版本号一致性校验：确保 config / GUI / CLI / 编译参数 四者版本统一 ----
+function Get-VersionFromText($text, $pattern) {
+    if ($text -match $pattern) { return $Matches[1] }
+    return $null
+}
+$cfgText  = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "config\optimization.json"), [System.Text.Encoding]::UTF8)
+$guiText  = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "OptimizeGUI.ps1"), [System.Text.Encoding]::UTF8)
+$cliText  = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "Optimize.ps1"), [System.Text.Encoding]::UTF8)
+
+$cfgVer = Get-VersionFromText $cfgText  '"version"\s*:\s*"([^"]+)"'
+$guiVer = Get-VersionFromText $guiText '\$script:Version\s*=\s*"([^"]+)"'
+$cliVer = Get-VersionFromText $cliText  '\$script:Version\s*=\s*"([^"]+)"'
+$exeVerRaw = Get-VersionFromText ([System.IO.File]::ReadAllText($MyInvocation.MyCommand.Path, [System.Text.Encoding]::UTF8)) 'Invoke-ps2exe[^\n]*-version\s+"([^"]+)"'
+# 将四段式 (3.0.0.0) 归一化为三段 (3.0.0) 以便与 config 比较
+$exeVer = ($exeVerRaw -split '\.' | Select-Object -First 3) -join '.'
+
+function Normalize-Version($v) {
+    if (-not $v) { return $null }
+    return (($v -split '\.' | Select-Object -First 3) -join '.')
+}
+
+$versions = @{
+    "config/optimization.json" = $cfgVer
+    "OptimizeGUI.ps1"          = $guiVer
+    "Optimize.ps1"             = $cliVer
+    "Build-EXE (-version)"     = $exeVer
+}
+$baseVer = Normalize-Version $cfgVer
+$verMismatch = $false
+foreach ($k in $versions.Keys) {
+    $v = Normalize-Version $versions[$k]
+    if ($v -ne $baseVer) {
+        Write-Host ("[版本校验] 不一致: {0} = {1} (基准 config = {2})" -f $k, $versions[$k], $cfgVer) -ForegroundColor Red
+        $verMismatch = $true
+    } else {
+        Write-Host ("[版本校验] OK: {0} = {1}" -f $k, $versions[$k]) -ForegroundColor Green
+    }
+}
+if ($verMismatch) {
+    Write-Host "[版本校验] 失败：各文件版本号不一致，请统一后再编译。" -ForegroundColor Red
+    exit 1
+}
+
 Write-Host ""
 Write-Host "  输入: $inputFile"
 Write-Host "  输出: $outputFile"
