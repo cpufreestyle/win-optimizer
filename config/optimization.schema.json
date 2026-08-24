@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/PC-Optimizer/optimization.schema.json",
+  "title": "PC-Optimizer optimization config",
+  "type": "object",
+  "required": ["version", "services", "dns_options", "telemetry_tasks"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "应用版本号，须与 OptimizeGUI.ps1 / Optimize.ps1 / Build-EXE.ps1 保持一致"
+    },
+    "description": { "type": "string" },
+    "update_repo": {
+      "type": "string",
+      "pattern": "^[\\w.-]+/[\\w.-]+$",
+      "description": "可选；GitHub owner/repo，用于更新检查；缺省时自动从 git remote 探测"
+    },
+    "services": {
+      "type": "object",
+      "required": ["safe_to_disable", "recommended_to_disable"],
+      "properties": {
+        "safe_to_disable": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "desc"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "desc": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "recommended_to_disable": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "desc"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "desc": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "dns_options": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "minItems": 1,
+        "maxItems": 2
+      }
+    },
+    "telemetry_tasks": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "additionalProperties": false
+}

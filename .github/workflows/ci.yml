@@ -45,3 +45,48 @@ jobs:
       - name: Check README
         shell: pwsh
         run: Test-Path README.md
+
+      - name: Validate config JSON against schema
+        shell: pwsh
+        run: |
+          $schema = Get-Content 'config/optimization.schema.json' -Raw
+          $cfg = Get-Content 'config/optimization.json' -Raw
+          $result = $cfg | Test-Json -Schema $schema -ErrorAction Stop
+          if (-not $result) { throw "config/optimization.json 不符合 schema" }
+          Write-Host "OK config/optimization.json: schema valid"
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop
+
+      - name: PSScriptAnalyzer scan
+        shell: pwsh
+        run: |
+          $dirs = @('lib', 'gui', 'gui/pages', 'scripts')
+          $issues = @()
+          foreach ($d in $dirs) {
+            if (-not (Test-Path $d)) { continue }
+            Get-ChildItem -Path $d -Filter *.ps1 -ErrorAction SilentlyContinue | ForEach-Object {
+              $issues += Invoke-ScriptAnalyzer -Path $_.FullName -Severity @('Error', 'Warning')
+            }
+          }
+          if ($issues.Count -gt 0) {
+            $issues | ForEach-Object { Write-Warning "$($_.ScriptName): [$($_.RuleName)] $($_.Message)" }
+            exit 1
+          }
+          Write-Host "OK PSScriptAnalyzer: no Error/Warning"
+
+      - name: Install Pester
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+          Install-Module -Name Pester -Force -Scope CurrentUser -MaximumVersion 5.99.99 -ErrorAction Stop
+
+      - name: Run Pester tests
+        shell: pwsh
+        run: |
+          $res = Invoke-Pester tests/Optimize.Core.Tests.ps1 -PassThru
+          if ($res.FailedCount -gt 0) { exit 1 }
+          Write-Host "OK Pester: $($res.PassedCount) passed, $($res.FailedCount) failed"
