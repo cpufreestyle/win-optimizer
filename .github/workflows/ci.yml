@@ -64,11 +64,11 @@ jobs:
       - name: PSScriptAnalyzer scan
         shell: pwsh
         run: |
-          $dirs = @('lib', 'gui', 'gui/pages', 'scripts')
+          $dirs = @('lib', 'gui', 'scripts')
           $issues = @()
           foreach ($d in $dirs) {
             if (-not (Test-Path $d)) { continue }
-            Get-ChildItem -Path $d -Filter *.ps1 -ErrorAction SilentlyContinue | ForEach-Object {
+            Get-ChildItem -Path $d -Filter *.ps1 -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
               $issues += Invoke-ScriptAnalyzer -Path $_.FullName -Severity @('Error', 'Warning')
             }
           }
