@@ -11,6 +11,9 @@ param(
     [string]$Items = "all"
 )
 
+
+# 统一 stdout 为 UTF-8（让 Python subprocess.run 按 utf-8 解码时不乱码；与 OptimizeGUI 同款）
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 function Out-Json {
     param($obj)
     $obj | ConvertTo-Json -Depth 4 -Compress

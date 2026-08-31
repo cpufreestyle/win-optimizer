@@ -9,6 +9,9 @@ param(
     [switch]$AsJson
 )
 
+
+# 统一 stdout 为 UTF-8（让 Python subprocess.run 按 utf-8 解码时不乱码；与 OptimizeGUI 同款）
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 function Out-Json {
     param($obj)
     $obj | ConvertTo-Json -Depth 4 -Compress
@@ -47,8 +50,9 @@ try {
     $cpuGen = ""
     if ($cpu.Name -match "i[3579]-(\d)") {
         $gen = [int]$matches[1]
-        $cpuGen = "第 $gen 代"
-        if ($gen -le 7) { $cpuGen += "（本工具优化目标）" }
+        # 用半角括号与英文/简中混合，避免某些字体回退对全角括号/长中文渲染异常
+        $cpuGen = "i$($matches[0][1]) 第 $gen 代"
+        if ($gen -le 7) { $cpuGen += " [优化目标]" }
     }
 
     $result = [PSCustomObject]@{

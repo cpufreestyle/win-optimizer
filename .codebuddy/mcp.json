@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "pc-optimizer": {
+      "type": "stdio",
+      "command": "C:\\Python313\\python.exe",
+      "args": ["d:\\workspace\\PC-Optimizer-7thGen\\webui\\mcp_stdio.py"],
+      "description": "PC-Optimizer 系统优化工具集（概览/清理/服务/启动项/视觉/电源/磁盘/网络/备份/更新/功能，共 27 个工具）"
+    }
+  }
+}

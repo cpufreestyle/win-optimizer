@@ -22,9 +22,10 @@ if not errorlevel 1 (
     exit /b 0
 )
 
-echo [安装] 正在 pip install mcp ...
-python -m pip install --upgrade pip
-python -m pip install mcp
+echo [安装] 正在 pip install "mcp<2" ...
+echo   注意: mcp 2.x 把 FastMCP 改名为 MCPServer，与本项目代码不兼容，
+echo         因此这里锁定 1.x 版本（客户端生态也最成熟）。
+python -m pip install "mcp<2"
 if errorlevel 1 (
     echo [失败] mcp 安装失败，请检查网络
     pause

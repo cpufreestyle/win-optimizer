@@ -418,31 +418,46 @@ def api_backup_restore():
     return jsonify(run_ps("09_backup.ps1", "-Action", "restore"))
 
 
+def start_mcp_background(port: int = 5001):
+    """在后台线程启动 MCP (WebMCP) SSE server，供 AI 客户端调用优化功能。
+
+    与 Flask 主服务并存：Flask 跑 WSGI(5000)，MCP 跑 ASGI(5001)。
+    缺少 mcp 库时静默跳过，不影响 WebUI。
+    """
+    if not (MCP_AVAILABLE and mcp is not None):
+        print("[MCP] 未安装 mcp 库，跳过 WebMCP。安装方法: pip install 'mcp<2'")
+        return False
+    try:
+        import threading
+
+        import uvicorn
+
+        sse_app = mcp.sse_app()
+
+        def _run_mcp():
+            try:
+                uvicorn.run(sse_app, host="127.0.0.1", port=port,
+                            log_level="warning", access_log=False)
+            except Exception as e:  # noqa: BLE001
+                print(f"[MCP] 启动失败: {e}")
+
+        threading.Thread(target=_run_mcp, daemon=True, name="MCP-SSE").start()
+        print(f"[MCP] WebMCP 已启动: SSE 端点 http://127.0.0.1:{port}/sse "
+              f"(Claude Desktop / Cursor / Cline 可配置)")
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"[MCP] 初始化失败（非致命，WebUI 继续）: {e}")
+        return False
+
+
 if __name__ == "__main__":
     import ctypes
+
     # 提示当前是否管理员（用于前端提示）
     is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0 if os.name == "nt" else True
     print(f"[WebUI] 管理员权限: {'是' if is_admin else '否（部分功能可能失败）'}")
     print(f"[WebUI] 访问地址: http://127.0.0.1:5000")
 
-    # 启动 MCP (WebMCP) SSE server 于后台线程 — 让 AI 客户端（Claude/Cursor/Cline）能调用优化功能
-    if MCP_AVAILABLE and mcp is not None:
-        try:
-            import threading
-            import uvicorn
-            sse_app = mcp.sse_app()
-
-            def _run_mcp():
-                try:
-                    uvicorn.run(sse_app, host="127.0.0.1", port=5001, log_level="warning", access_log=False)
-                except Exception as e:
-                    print(f"[MCP] 启动失败: {e}")
-
-            threading.Thread(target=_run_mcp, daemon=True, name="MCP-SSE").start()
-            print("[MCP] WebMCP 已启动: SSE 端点 http://127.0.0.1:5001/sse (在 Claude Desktop/Cursor/Cline 配置使用)")
-        except Exception as e:
-            print(f"[MCP] 初始化失败（非致命，WebUI 继续）: {e}")
-    else:
-        print("[MCP] 未安装 mcp 库，跳过 WebMCP。安装方法: pip install mcp")
+    start_mcp_background(5001)
 
     app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)

@@ -12,7 +12,10 @@
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{
-    font-family:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;
+    /* 强健字体回退：覆盖 IDE 预览 / 老系统 / 缺中文字体环境；最后 fallback 列出常见中文字体 */
+    font-family:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC",
+                 "Hiragino Sans GB","Source Han Sans CN","Noto Sans CJK SC",
+                 "Segoe UI",system-ui,-apple-system,sans-serif;
     background:var(--bg); color:var(--text); min-height:100vh; line-height:1.5;
   }
   /* 布局：左侧边栏 + 右侧内容，移动端堆叠 */
