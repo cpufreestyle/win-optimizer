@@ -166,3 +166,94 @@ function Restore-Services {
     }
     return @{restored = $restored; backup = $csv.FullName; details = $details; error = $null}
 }
+
+# ============================================================
+#  通用工具函数（CLI / GUI / WebUI 三端共享的单一实现）
+# ============================================================
+
+# 计算文件夹大小（字节）。
+# 已做空路径防御：Test-Path / Get-ChildItem 的 -Path 参数不允许空值，
+# 否则会抛 "无法将参数绑定到参数 Path，因为该参数是空值"。
+function Get-FolderSize {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return 0 }
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) { return 0 }
+        $size = (Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue |
+                 Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
+        if ($null -eq $size) { return 0 }
+        return [double]$size
+    } catch { return 0 }
+}
+
+# 恢复 Windows 自动更新（撤销手动更新模式 / 更新屏蔽）
+# 不依赖 UI，返回 @{ok; details: @(字符串); error}
+# 调用方（CLI 弹 MessageBox、WebUI 输出 JSON）自行决定呈现方式
+function Restore-AutoUpdate {
+    $details = @()
+    try {
+        # 1. 恢复 Windows Update 服务为自动并启动
+        $svc = Get-Service -Name wuauserv -ErrorAction Stop
+        if ($svc.StartType -ne 'Automatic') {
+            Set-Service -Name wuauserv -StartupType Automatic -ErrorAction Stop
+            $details += "已将 wuauserv 启动类型设为 自动"
+        } else {
+            $details += "wuauserv 已经是 自动 启动"
+        }
+        if ($svc.Status -ne 'Running') {
+            Start-Service -Name wuauserv -ErrorAction Stop
+            $details += "已启动 wuauserv 服务"
+        } else {
+            $details += "wuauserv 服务正在运行"
+        }
+
+        # 2. 重新启用与 Windows Update 相关的计划任务
+        $tasks = @(
+            "\Microsoft\Windows\WindowsUpdate\Scheduled Start",
+            "\Microsoft\Windows\UpdateOrchestrator\Schedule Scan",
+            "\Microsoft\Windows\UpdateOrchestrator\Schedule Scan Static Task",
+            "\Microsoft\Windows\UpdateOrchestrator\USO_UxBroker"
+        )
+        foreach ($task in $tasks) {
+            try {
+                $t = Get-ScheduledTask -TaskName $task -ErrorAction Stop
+                if ($t.State -eq 'Disabled') {
+                    Enable-ScheduledTask -TaskName $task -ErrorAction Stop | Out-Null
+                    $details += "已启用计划任务: $task"
+                } else {
+                    $details += "计划任务已启用: $task"
+                }
+            } catch {
+                $details += "计划任务 $task 不存在或无法启用（已跳过）"
+            }
+        }
+
+        # 3. 删除手动更新模式留下的 AUOptions 限制
+        $auPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"
+        if (Test-Path $auPath) {
+            $auOpt = Get-ItemProperty -Path $auPath -Name AUOptions -ErrorAction SilentlyContinue
+            if ($auOpt -and ($auOpt.AUOptions -eq 2 -or $auOpt.AUOptions -eq 3)) {
+                Remove-ItemProperty -Path $auPath -Name AUOptions -Force -ErrorAction SilentlyContinue
+                $details += "已删除 AUOptions 限制，恢复自动安装"
+            }
+        }
+
+        return @{ok = $true; details = $details; error = $null}
+    } catch {
+        return @{ok = $false; details = $details; error = $_.Exception.Message}
+    }
+}
+
+# 删除文件夹内的所有内容（保留文件夹本身），返回成功删除的条目数
+function Remove-FolderContent {
+    param([string]$Path)
+    $cnt = 0
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $cnt }
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) { return $cnt }
+        Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            try { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue; $cnt++ } catch {}
+        }
+    } catch {}
+    return $cnt
+}

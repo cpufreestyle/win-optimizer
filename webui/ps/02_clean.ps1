@@ -26,25 +26,14 @@ $cleanDefs = @(
     @{Key="wer";      Path="$env:PROGRAMDATA\Microsoft\Windows\WER";         Name="Windows 错误报告"}
 )
 
+# 复用共享核心库（Get-FolderSize 返回字节；Remove-FolderContent 返回删除条目数）
+$libPath = Join-Path $PSScriptRoot "..\..\lib\Optimize.Core.ps1"
+if (Test-Path $libPath) { . $libPath }
+
+# MB 版本，基于共享库的 Get-FolderSize 换算
 function Get-FolderSizeMB {
     param([string]$p)
-    if (-not (Test-Path $p)) { return 0 }
-    try {
-        $sz = (Get-ChildItem -Path $p -Recurse -Force -ErrorAction SilentlyContinue |
-               Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
-        if ($null -eq $sz) { return 0 }
-        return [math]::Round($sz / 1MB, 2)
-    } catch { return 0 }
-}
-
-function Remove-FolderContent {
-    param([string]$p)
-    $cnt = 0
-    if (-not (Test-Path $p)) { return $cnt }
-    Get-ChildItem -Path $p -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
-        try { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue; $cnt++ } catch {}
-    }
-    return $cnt
+    return [math]::Round((Get-FolderSize $p) / 1MB, 2)
 }
 
 try {
@@ -65,7 +54,8 @@ try {
         try {
             $shell = New-Object -ComObject Shell.Application
             $rb = $shell.NameSpace(10)
-            $recycle = [math]::Round((Get-FolderSizeMB $rb.Self.Path) , 2)
+            $rbPath = $rb.Self.Path
+            if ([string]::IsNullOrWhiteSpace($rbPath)) { $recycle = 0 } else { $recycle = [math]::Round((Get-FolderSizeMB $rbPath) , 2) }
         } catch {}
         Out-Json ([PSCustomObject]@{
             ok = $true

@@ -113,6 +113,7 @@ function Show-Menu {
         Write-Host "   [11] 手动更新模式         — 不暂停，但不自动安装/重启"
         Write-Host "   [12] 隐藏指定更新         — 把指定升级藏起来不再出现"
         Write-Host "   [13] Windows 可选功能     — 列出并启用微软默认未开启的功能"
+        Write-Host "   [14] 恢复自动更新         — 恢复 Windows Update 服务与计划任务"
         Write-Host ""
         Write-Host " [工具]" -ForegroundColor Yellow
         Write-Host "   [B]  备份当前系统设置"
@@ -137,6 +138,7 @@ function Show-Menu {
             "11" { Invoke-ScriptModule "11-ManualUpdateMode.ps1" }
             "12" { Invoke-ScriptModule "12-HideUpdates.ps1" }
             "13" { Invoke-ScriptModule "13-WindowsFeatures.ps1" }
+            "14" { Invoke-ScriptModule "14-RestoreAutoUpdate.ps1" }
             { $_ -eq "B" -or $_ -eq "b" } { Invoke-ScriptModule "09-BackupRestore.ps1" }
             { $_ -eq "R" -or $_ -eq "r" } { Invoke-ScriptModule "09-BackupRestore.ps1" }
             { $_ -eq "Q" -or $_ -eq "q" } { Write-Host "感谢使用，再见！" -ForegroundColor Green; return }

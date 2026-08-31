@@ -2,8 +2,9 @@
 *.exe
 # 例外：发布用的可执行文件作为 release 资产纳入版本管理
 !PC-Optimizer.exe
+PC-Optimizer.exe.disabled
 
-# 日志文件
+# 日志文件（运行时生成）
 *.log
 
 # 备份目录
@@ -11,6 +12,21 @@ backups/
 
 # 测试文件
 test-run.ps1
+
+# 临时/调试脚本与目录（以下划线开头，仅本地调试用，不纳入版本控制）
+_scratch/
+_*.ps1
+_*.py
+_*.bat
+_*.png
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+venv/
+.venv/
 
 # 临时文件
 *.tmp
@@ -26,6 +42,3 @@ test-run.ps1
 Thumbs.db
 Desktop.ini
 .DS_Store
-
-# 寮€鍙戜复鏃惰剼鏈紙璋冭瘯/楠岃瘉鐢紝涓嶇撼鍏ョ増鏈帶鍒讹級
-_scratch/

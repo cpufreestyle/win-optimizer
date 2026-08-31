@@ -335,6 +335,12 @@ async function renderUpdate(){
         </div>
       </div>
     </div>
+    <div class="card"><h3>🔄 恢复 Windows 自动更新</h3>
+      <p class="muted" id="restoreautost">恢复 Windows Update 服务与计划任务，撤销手动更新模式 / 更新屏蔽。</p>
+      <div class="row">
+        ${btn('恢复自动更新','green',restoreAutoUpdate)}
+      </div>
+    </div>
     <div class="card"><h3>🫥 隐藏/恢复指定更新</h3>
       <div class="row">
         ${btn('列出可隐藏','ghost',listHide)}
@@ -355,6 +361,20 @@ async function renderUpdate(){
     <div class="card"><h3>操作日志</h3><div class="log" id="logbox"></div></div>`;
   bindBtns(content);
   blockStatus(); manualStatus();
+}
+async function restoreAutoUpdate(){
+  if(!confirm('确认恢复 Windows 自动更新？将重启 wuauserv 服务并重新启用更新计划任务。')) return;
+  log('恢复 Windows 自动更新…');
+  const d=await api('/api/update/restore-auto',{method:'POST'});
+  if(d.ok){
+    $('#restoreautost').innerHTML = badge('已恢复','ok')+' '+esc(d.message||'');
+    (d.details||[]).forEach(x=>log(x));
+    log('Windows 自动更新已恢复','ok');
+    blockStatus(); manualStatus();
+  } else {
+    $('#restoreautost').innerHTML = badge('失败','err')+' '+esc(d.error||'');
+    log('恢复失败：'+d.error,'err');
+  }
 }
 async function blockUpdate(){
   if(!confirm('确认屏蔽 Windows 更新（硬锁当前版本）？')) return;

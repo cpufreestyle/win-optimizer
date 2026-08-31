@@ -15,6 +15,7 @@ if %errorLevel% neq 0 (
 echo ================================================
 echo   PC-Optimizer-7thGen WebUI
 echo   访问地址: http://127.0.0.1:5000
+echo   WebMCP   : http://127.0.0.1:5001/sse (需 pip install mcp)
 echo ================================================
 echo.
 cd /d "%WEBUI%"

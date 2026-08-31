@@ -263,16 +263,7 @@ function Test-Administrator {
     return $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Get-FolderSize {
-    param([string]$Path)
-    if (-not (Test-Path $Path)) { return 0 }
-    try {
-        $size = (Get-ChildItem -Path $Path -Recurse -Force -ErrorAction SilentlyContinue |
-                 Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
-        if ($null -eq $size) { return 0 }
-        return $size
-    } catch { return 0 }
-}
+# Get-FolderSize / Remove-FolderContent 统一由共享库 lib/Optimize.Core.ps1 提供（见上方加载段）
 
 function Invoke-ScriptModule {
     param([string]$ScriptName)
@@ -575,6 +566,27 @@ $pageContainer.Controls.Add($pagesHost)
 #  页面集合
 # ============================================================
 $script:Pages = @{}
+
+# ============================================================
+#  加载共享核心库 lib/Optimize.Core.ps1
+#  开发模式 dot-source；编译模式 lib 已由 Build-EXE 内联，路径不存在时自动跳过
+# ============================================================
+$coreLib = Join-Path $script:ProjectRoot "lib\Optimize.Core.ps1"
+if (Test-Path $coreLib) { . $coreLib }
+# 兜底：共享库异常不可用时提供最小实现，避免 Get-FolderSize 未定义导致崩溃
+if (-not (Get-Command Get-FolderSize -ErrorAction SilentlyContinue)) {
+    function Get-FolderSize {
+        param([string]$Path)
+        if ([string]::IsNullOrWhiteSpace($Path)) { return 0 }
+        try {
+            if (-not (Test-Path -LiteralPath $Path)) { return 0 }
+            $s = (Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue |
+                  Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
+            if ($null -eq $s) { return 0 }
+            return [double]$s
+        } catch { return 0 }
+    }
+}
 
 # ============================================================
 #  加载页面函数（开发模式 dot-source；编译模式函数已内联，自动跳过）

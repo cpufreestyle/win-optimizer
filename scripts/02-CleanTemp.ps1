@@ -22,16 +22,9 @@ Write-Host "============================================" -ForegroundColor Cyan
 $totalFreed = 0
 $filesDeleted = 0
 
-function Get-FolderSize {
-    param([string]$Path)
-    if (-not (Test-Path $Path)) { return 0 }
-    try {
-        $size = (Get-ChildItem -Path $Path -Recurse -Force -ErrorAction SilentlyContinue |
-                 Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
-        if ($null -eq $size) { return 0 }
-        return $size
-    } catch { return 0 }
-}
+# 复用共享核心库（Get-FolderSize / Remove-FolderContent 等）
+$coreLib = Join-Path $PSScriptRoot "..\lib\Optimize.Core.ps1"
+if (Test-Path $coreLib) { . $coreLib }
 
 function Clean-Folder {
     param([string]$Path, [string]$Label)
@@ -83,8 +76,10 @@ try {
 Clean-Folder "C:\Windows\Logs\CBS" "CBS 日志"
 
 # 6. 缩略图缓存
-$thumbCachePath = Join-Path $env:LOCALAPPDATA "Microsoft\Windows\Explorer"
-if (Test-Path $thumbCachePath) {
+$_laRoot = if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { "$env:SystemDrive\Users\Public\AppData\Local" } else { $env:LOCALAPPDATA }
+$thumbCachePath = Join-Path $_laRoot "Microsoft\Windows\Explorer"
+if ([string]::IsNullOrWhiteSpace($thumbCachePath)) { $thumbCachePath = "" }
+if (-not [string]::IsNullOrWhiteSpace($thumbCachePath) -and (Test-Path -LiteralPath $thumbCachePath)) {
     $beforeSize = Get-FolderSize $thumbCachePath
     Get-ChildItem -Path $thumbCachePath -Filter "thumbcache_*.db" -ErrorAction SilentlyContinue | ForEach-Object {
         Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue

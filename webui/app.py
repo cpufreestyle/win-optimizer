@@ -16,6 +16,172 @@ STATIC = os.path.join(BASE_DIR, "static")
 app = Flask(__name__, template_folder=TEMPLATES, static_folder=STATIC)
 
 
+# ============================================================
+#  MCP (Model Context Protocol) 支持 — WebMCP
+# ============================================================
+# 将现有 webui/ps/*.ps1 暴露为 MCP 工具（SSE 端点 5001），
+# 让 Claude Desktop / Cursor / Cline 等 AI 客户端能直接调用优化功能。
+# 缺 mcp 库时静默跳过，WebUI 仍可正常使用。
+MCP_AVAILABLE = False
+mcp = None
+try:
+    from mcp.server.fastmcp import FastMCP  # type: ignore
+    MCP_AVAILABLE = True
+except Exception:
+    MCP_AVAILABLE = False
+
+
+def _register_mcp_tools(server):
+    """把所有 run_ps 功能注册为 MCP tools（复用现有 PS 脚本）"""
+
+    @server.tool()
+    def overview() -> dict:
+        """获取系统概览（CPU/内存/磁盘/系统/运行时间等）。"""
+        return run_ps("01_system_info.ps1")
+
+    @server.tool()
+    def clean_scan() -> dict:
+        """扫描可清理的垃圾文件并返回大小估算。"""
+        return run_ps("02_clean.ps1", "-Action", "scan")
+
+    @server.tool()
+    def clean(items: str = "all") -> dict:
+        """清理垃圾文件。items: 'all' 或逗号分隔的 key（temp/usertemp/prefetch/wsus/thumb/wer）。"""
+        return run_ps("02_clean.ps1", "-Action", "clean", "-Items", str(items))
+
+    @server.tool()
+    def services_list() -> dict:
+        """列出可优化的服务项。"""
+        return run_ps("03_services.ps1", "-Action", "list")
+
+    @server.tool()
+    def services_apply(mode: str = "safe") -> dict:
+        """应用服务优化。mode: 'safe' 安全禁用 / 'all' 全部禁用。"""
+        return run_ps("03_services.ps1", "-Action", "apply", "-Mode", str(mode))
+
+    @server.tool()
+    def services_restore() -> dict:
+        """恢复服务到原始状态（从备份）。"""
+        return run_ps("03_services.ps1", "-Action", "restore")
+
+    @server.tool()
+    def startup_list() -> dict:
+        """列出开机启动项。"""
+        return run_ps("04_startup.ps1", "-Action", "list")
+
+    @server.tool()
+    def startup_disable(items: str = "all") -> dict:
+        """禁用启动项。items: 'all' 或逗号分隔 key。"""
+        return run_ps("04_startup.ps1", "-Action", "disable", "-Items", str(items))
+
+    @server.tool()
+    def visual_list() -> dict:
+        """列出视觉效果模式（最佳性能/平衡/自定义）及当前设置。"""
+        return run_ps("05_visual.ps1", "-Action", "list")
+
+    @server.tool()
+    def visual_apply(value: int = 1) -> dict:
+        """应用视觉效果模式。value: 1=最佳性能 / 2=平衡 / 3=自定义。"""
+        return run_ps("05_visual.ps1", "-Action", "apply", "-Value", str(int(value)))
+
+    @server.tool()
+    def power_list() -> dict:
+        """列出电源计划（高性能/卓越性能/平衡/节能）及当前计划。"""
+        return run_ps("06_power.ps1", "-Action", "list")
+
+    @server.tool()
+    def power_apply(value: int = 1, usb: bool = True, pci: bool = True) -> dict:
+        """应用电源计划。value: 1=高性能 / 2=卓越性能 / 3=平衡。"""
+        return run_ps("06_power.ps1", "-Action", "apply", "-Value", str(int(value)),
+                      "-Usb", str(usb).lower(), "-Pci", str(pci).lower())
+
+    @server.tool()
+    def disk_list() -> dict:
+        """列出本机磁盘（类型/大小/文件系统）。"""
+        return run_ps("07_disk.ps1", "-Action", "list")
+
+    @server.tool()
+    def disk_optimize(trim: bool = True, defrag: bool = True, winsxs: bool = True, compact: bool = False) -> dict:
+        """执行磁盘优化。trim=TRIM(SSD), defrag=碎片整理(HDD), winsxs=WinSxS清理, compact=压缩OS。"""
+        return run_ps("07_disk.ps1", "-Action", "optimize",
+                      "-Trim", str(trim).lower(), "-Defrag", str(defrag).lower(),
+                      "-WinSxS", str(winsxs).lower(), "-Compact", str(compact).lower())
+
+    @server.tool()
+    def network_list() -> dict:
+        """列出网络适配器及当前 DNS。"""
+        return run_ps("08_network.ps1", "-Action", "list")
+
+    @server.tool()
+    def network_apply(dns: int = 0, tcp: bool = True, rss: bool = True, rsc: bool = True, dnscache: bool = True) -> dict:
+        """网络优化。dns: 0=自动 / 1=阿里 / 2=DNSPod / 3=114 / 4=Google / 5=Cloudflare。"""
+        return run_ps("08_network.ps1", "-Action", "apply",
+                      "-Dns", str(int(dns)), "-Tcp", str(tcp).lower(), "-Rss", str(rss).lower(),
+                      "-Rsc", str(rsc).lower(), "-DnsCache", str(dnscache).lower())
+
+    @server.tool()
+    def backup_list() -> dict:
+        """列出已存在的备份文件。"""
+        return run_ps("09_backup.ps1", "-Action", "list")
+
+    @server.tool()
+    def backup_create() -> dict:
+        """创建新的系统设置备份。"""
+        return run_ps("09_backup.ps1", "-Action", "create")
+
+    @server.tool()
+    def backup_restore(file: str = "") -> dict:
+        """恢复备份。file: 备份文件名（留空恢复最新）。"""
+        if file:
+            return run_ps("09_backup.ps1", "-Action", "restore", "-File", str(file))
+        return run_ps("09_backup.ps1", "-Action", "restore")
+
+    @server.tool()
+    def update_block(action: str = "status") -> dict:
+        """屏蔽 Windows 更新（如 24H2）。action: status / apply / restore。"""
+        return run_ps("10_block_update.ps1", "-Action", str(action))
+
+    @server.tool()
+    def update_manual(action: str = "status") -> dict:
+        """手动更新模式（不自动下载/安装/重启）。action: status / apply / restore。"""
+        return run_ps("11_manual_mode.ps1", "-Action", str(action))
+
+    @server.tool()
+    def update_restore_auto() -> dict:
+        """恢复 Windows 自动更新（撤销手动更新模式 / 更新屏蔽）。"""
+        return run_ps("14_restore_autoupdate.ps1")
+
+    @server.tool()
+    def update_hide_list() -> dict:
+        """列出可隐藏的更新。"""
+        return run_ps("12_hide_updates.ps1", "-Action", "list")
+
+    @server.tool()
+    def update_hide(items: str = "all") -> dict:
+        """隐藏指定更新。items: 'all' 或逗号分隔 key。"""
+        return run_ps("12_hide_updates.ps1", "-Action", "hide", "-Items", str(items))
+
+    @server.tool()
+    def update_show(items: str = "all") -> dict:
+        """恢复已隐藏的更新。items: 'all' 或逗号分隔 key。"""
+        return run_ps("12_hide_updates.ps1", "-Action", "show", "-Items", str(items))
+
+    @server.tool()
+    def features_list() -> dict:
+        """列出 Windows 可选功能。"""
+        return run_ps("13_features.ps1", "-Action", "list")
+
+    @server.tool()
+    def features_enable(items: str = "all") -> dict:
+        """启用 Windows 可选功能。items: 'all' 或逗号分隔 key。"""
+        return run_ps("13_features.ps1", "-Action", "enable", "-Items", str(items))
+
+
+if MCP_AVAILABLE:
+    mcp = FastMCP("PC-Optimizer-7thGen", host="127.0.0.1", port=5001)
+    _register_mcp_tools(mcp)
+
+
 def run_ps(script_name, *args):
     """调用 PowerShell 脚本，返回解析后的 JSON dict。"""
     script = os.path.join(PS_DIR, script_name)
@@ -160,6 +326,12 @@ def api_features_enable():
     return jsonify(run_ps("13_features.ps1", "-Action", "enable", "-Items", str(items)))
 
 
+@app.route("/api/update/restore-auto", methods=["POST"])
+def api_update_restore_auto():
+    """恢复 Windows 自动更新（撤销手动更新模式 / 更新屏蔽）。"""
+    return jsonify(run_ps("14_restore_autoupdate.ps1"))
+
+
 # ---------------- 视觉效果 ----------------
 @app.route("/api/visual")
 def api_visual():
@@ -252,4 +424,25 @@ if __name__ == "__main__":
     is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0 if os.name == "nt" else True
     print(f"[WebUI] 管理员权限: {'是' if is_admin else '否（部分功能可能失败）'}")
     print(f"[WebUI] 访问地址: http://127.0.0.1:5000")
+
+    # 启动 MCP (WebMCP) SSE server 于后台线程 — 让 AI 客户端（Claude/Cursor/Cline）能调用优化功能
+    if MCP_AVAILABLE and mcp is not None:
+        try:
+            import threading
+            import uvicorn
+            sse_app = mcp.sse_app()
+
+            def _run_mcp():
+                try:
+                    uvicorn.run(sse_app, host="127.0.0.1", port=5001, log_level="warning", access_log=False)
+                except Exception as e:
+                    print(f"[MCP] 启动失败: {e}")
+
+            threading.Thread(target=_run_mcp, daemon=True, name="MCP-SSE").start()
+            print("[MCP] WebMCP 已启动: SSE 端点 http://127.0.0.1:5001/sse (在 Claude Desktop/Cursor/Cline 配置使用)")
+        except Exception as e:
+            print(f"[MCP] 初始化失败（非致命，WebUI 继续）: {e}")
+    else:
+        print("[MCP] 未安装 mcp 库，跳过 WebMCP。安装方法: pip install mcp")
+
     app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)

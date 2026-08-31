@@ -52,19 +52,39 @@ foreach ($pf in $pageFiles) {
 }
 
 $srcText = [System.IO.File]::ReadAllText($inputFile, [System.Text.Encoding]::UTF8)
-# 剥离主窗体中的 dot-source 加载器段（从 "#  加载页面函数" 到其所在 foreach 块结束）
+# 剥离主窗体中的 dot-source 加载器段（"#  加载页面函数" 注释起，到 foreach 块收尾 "}" 行止）
 $loaderStart = $srcText.IndexOf('#  加载页面函数')
 if ($loaderStart -ge 0) {
     $loaderEnd = $srcText.IndexOf('if (Test-Path $pfPath) { . $pfPath }', $loaderStart)
     if ($loaderEnd -ge 0) {
-        $nl = $srcText.IndexOf("`n", $loaderEnd)
-        $loaderEnd = if ($nl -ge 0) { $nl + 1 } else { $loaderEnd }
+        # 必须连同 foreach 的收尾 "}"（含换行）一并剥离，
+        # 否则孤儿大括号会让编译后的脚本在启动时报语法错误
+        $braceLine = $srcText.IndexOf("`n}", $loaderEnd)
+        if ($braceLine -ge 0) {
+            $nl = $srcText.IndexOf("`n", $braceLine + 1)
+            $loaderEnd = if ($nl -ge 0) { $nl + 1 } else { $braceLine + 2 }
+        } else {
+            $nl = $srcText.IndexOf("`n", $loaderEnd)
+            $loaderEnd = if ($nl -ge 0) { $nl + 1 } else { $loaderEnd }
+        }
         $srcText = $srcText.Remove($loaderStart, $loaderEnd - $loaderStart)
     }
 }
 $parts += $srcText
 
 $fullText = ($parts -join "`r`n`r`n")
+
+# 拼接结果先做语法校验，避免把带语法错误的脚本编译进 EXE
+$tok = $null; $parseErrors = $null
+[void][System.Management.Automation.Language.Parser]::ParseInput($fullText, [ref]$tok, [ref]$parseErrors)
+if ($parseErrors -and $parseErrors.Count -gt 0) {
+    Write-Host "[语法校验] 拼接后的脚本存在语法错误，已中止编译：" -ForegroundColor Red
+    $parseErrors | ForEach-Object {
+        Write-Host ("  行 {0}: {1}" -f $_.Extent.StartLineNumber, $_.Message) -ForegroundColor Red
+    }
+    exit 1
+}
+Write-Host "[语法校验] 拼接脚本语法 OK" -ForegroundColor Green
 [System.IO.File]::WriteAllText($tmpFile, $fullText, [System.Text.Encoding]::Unicode)
 
 $compileInput = $tmpFile

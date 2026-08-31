@@ -15,13 +15,17 @@
     $page.Controls.Add($lblScan)
 
     # 用 script 作用域保存变量供事件处理器使用
+    # 环境变量兜底：PS2EXE 编译 EXE 或某些 session 下 $env:TEMP/LOCALAPPDATA/PROGRAMDATA 可能为空，会导致后续 Get-FolderSize 抛"无法将参数绑定到 Path"
+    $_t = if ([string]::IsNullOrWhiteSpace($env:TEMP))         { "C:\Users\Public" } else { $env:TEMP }
+    $_la = if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { "$env:SystemDrive\Users\Public\AppData\Local" } else { $env:LOCALAPPDATA }
+    $_pd = if ([string]::IsNullOrWhiteSpace($env:PROGRAMDATA))  { "$env:SystemDrive\Users\Public\AppData\Roaming" }  else { $env:PROGRAMDATA }
     $script:CleanItems = @(
         @{Path="C:\Windows\Temp";                    Name="Windows 系统临时文件"}
-        @{Path=$env:TEMP;                             Name="用户临时文件"}
+        @{Path=$_t;                                    Name="用户临时文件"}
         @{Path="C:\Windows\Prefetch";                Name="预读取文件"}
         @{Path="C:\Windows\SoftwareDistribution\Download"; Name="Windows Update 下载缓存"}
-        @{Path="$env:LOCALAPPDATA\Microsoft\Windows\Explorer"; Name="缩略图缓存"}
-        @{Path="$env:PROGRAMDATA\Microsoft\Windows\WER"; Name="Windows 错误报告"}
+        @{Path="$_la\Microsoft\Windows\Explorer";     Name="缩略图缓存"}
+        @{Path="$_pd\Microsoft\Windows\WER";          Name="Windows 错误报告"}
     )
 
     $script:CleanListBox = New-Object System.Windows.Forms.CheckedListBox
