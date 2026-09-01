@@ -85,6 +85,50 @@
 5. 推送 tag 触发 GitHub Actions 自动编译并创建 Release（见 `.github/workflows/release.yml`）；
    或本地运行 `tools/publish-release.bat` 手动发布。
 
+## Git 同步与远程配置
+
+本仓库的远程 `origin` 使用 **SSH 协议**：
+
+```
+git@github.com:cpufreestyle/win-optimizer.git
+```
+
+**为什么用 SSH**：部分网络环境下直连 `https://github.com/...` 会被重置，表现为：
+
+```
+fatal: unable to access 'https://github.com/...': Recv failure: Connection was reset
+```
+
+此时 `fetch` / `pull` / `push` 会全部失败；改用 SSH（22 端口）即可正常连通。
+
+### 验证 SSH 连通性
+
+```powershell
+ssh -T git@github.com
+# 成功返回：Hi <username>! You've successfully authenticated, but GitHub does not provide shell access.
+```
+
+若本机尚未配置 SSH key：用 `ssh-keygen -t ed25519` 生成，把公钥 `~/.ssh/id_ed25519.pub` 添加到 GitHub 账户，
+并确保 `ssh-agent` 已启动且加载了私钥（`ssh-add ~/.ssh/id_ed25519`）。
+
+### 从 HTTPS 切换为 SSH
+
+```powershell
+git remote set-url origin git@github.com:cpufreestyle/win-optimizer.git
+git remote -v   # 确认已生效（应显示 git@github.com:... 而非 https://...）
+```
+
+### 日常同步流程
+
+```powershell
+git add <files>
+git commit -m "提交说明"
+git pull --rebase origin main   # 先拉取并 rebase，避免产生多余的 merge 提交
+git push origin main
+```
+
+> 注意：工作区存在未提交改动时 `pull` 会失败，需先 `commit` 或 `git stash`。
+
 ## 编码约定
 
 - 源文件统一使用 **UTF-8 with BOM**（避免 ps2exe 按 ANSI 读取导致中文乱码）
