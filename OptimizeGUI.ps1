@@ -415,8 +415,9 @@ $mainLayout = New-Object System.Windows.Forms.TableLayoutPanel
 $mainLayout.Dock = [System.Windows.Forms.DockStyle]::Fill
 $mainLayout.ColumnCount = 2
 $mainLayout.RowCount = 1
-$mainLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 220)))
-$mainLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+# 注意：ColumnStyles.Add() 返回插入索引(int)，必须抑制，否则脚本顶层会向管道输出 "0"/"1"
+[void]$mainLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 220)))
+[void]$mainLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
 $mainLayout.BackColor = $Theme.BgDark
 $mainLayout.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 0)
 $MainForm.Controls.Add($mainLayout)
