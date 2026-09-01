@@ -6,6 +6,7 @@ import os
 import sys
 import json
 import subprocess
+import webbrowser
 from flask import Flask, render_template, jsonify, request, send_from_directory
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -175,6 +176,60 @@ def _register_mcp_tools(server):
     def features_enable(items: str = "all") -> dict:
         """启用 Windows 可选功能。items: 'all' 或逗号分隔 key。"""
         return run_ps("13_features.ps1", "-Action", "enable", "-Items", str(items))
+
+    @server.tool()
+    def launch_client(kind: str = "gui", admin: bool = True) -> dict:
+        """启动 PC-Optimizer 客户端程序。
+
+        kind:
+          'gui' (默认) 启动桌面端 Windows Forms GUI (OptimizeGUI.ps1)
+          'web'        启动 WebUI (浏览器访问 http://127.0.0.1:5000 并自动打开浏览器)
+        admin: 是否以管理员身份启动 (GUI 的清理/服务等需管理员权限；默认 True，
+               会触发 UAC 提权确认)。设为 False 则以当前权限直接启动。
+        """
+        import time
+        try:
+            root = os.path.dirname(BASE_DIR)  # 项目根目录
+            if kind == "web":
+                webui = BASE_DIR
+                if not os.path.exists(os.path.join(webui, "app.py")):
+                    return {"ok": False, "error": "找不到 webui/app.py"}
+                subprocess.Popen(
+                    [sys.executable, "app.py"],
+                    cwd=webui,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE
+                    | getattr(subprocess, "DETACHED_PROCESS", 0),
+                )
+                time.sleep(3)
+                try:
+                    webbrowser.open("http://127.0.0.1:5000")
+                except Exception:
+                    pass
+                return {
+                    "ok": True,
+                    "launched": "web",
+                    "url": "http://127.0.0.1:5000",
+                    "mcp_sse": "http://127.0.0.1:5001/sse",
+                }
+            else:
+                script = os.path.join(root, "OptimizeGUI.ps1")
+                if not os.path.exists(script):
+                    return {"ok": False, "error": f"找不到客户端: {script}"}
+                if admin:
+                    arg = '-NoProfile -ExecutionPolicy Bypass -File "{0}"'.format(script)
+                    cmd = "Start-Process powershell -ArgumentList '{0}' -Verb RunAs".format(arg)
+                    p = subprocess.Popen(
+                        ["powershell.exe", "-NoProfile", "-Command", cmd],
+                        creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
+                    )
+                else:
+                    p = subprocess.Popen(
+                        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script],
+                        creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
+                    )
+                return {"ok": True, "launched": "gui", "admin": admin, "pid": p.pid}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
 
 if MCP_AVAILABLE:
