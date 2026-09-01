@@ -75,6 +75,18 @@ cd <项目根目录>
 .\Optimize.ps1
 ```
 
+### 方式五：Web 管理界面
+
+1. 双击 `StartWebUI.bat`，或手动启动：
+```powershell
+cd <项目根目录>
+python webui/app.py
+```
+2. 浏览器打开提示的地址（默认 `http://127.0.0.1:5000`）
+3. 在界面中点击对应功能执行优化
+
+> Web 界面复用 `webui/ps/` 下的 PowerShell 脚本，与 CLI / GUI 共享同一份核心逻辑。
+
 ### 重新编译 EXE
 
 如果修改了 `OptimizeGUI.ps1`，可以重新编译 EXE：
@@ -149,14 +161,30 @@ PC-Optimizer-7thGen/
 │       ├── Backup.ps1        #   备份与恢复
 │       ├── Update.ps1        #   系统更新控制
 │       └── About.ps1         #   关于
+├── webui/                    # Web 管理界面（Flask + WebMCP）
+│   ├── app.py                #   Flask Web 服务（启动后浏览器访问）
+│   ├── mcp_stdio.py          #   WebMCP stdio / SSE 服务
+│   ├── _t.py                 #   模板/工具辅助
+│   ├── install_mcp.bat       #   WebMCP 安装器
+│   ├── ps/                   #   Web 版 PowerShell 脚本（与 scripts/ 对应）
+│   └── templates/index.html #   Web 界面模板
 ├── StartGUI.bat              # GUI 快速启动（自动提权）
 ├── Start.bat                 # 启动选择菜单（EXE/GUI/CLI）
 ├── StartAll.bat              # 统一工具箱启动菜单（v2.0 新增）
+├── StartWebUI.bat            # 启动 Web 管理界面（Flask）
+├── EnablePs1DoubleClick.bat # 启用 .ps1 双击运行（调试用）
+├── FixBatAssociation.bat     # 修复 .bat 文件关联
+├── FixBatAssociation.reg     # 修复 .bat 关联的注册表项
+├── PC-Optimizer.exe.disabled # 禁用的 EXE（去 .disabled 后缀启用）
+├── .codebuddy/mcp.json       # WebMCP 配置（CodeBuddy 集成）
+├── docs/                     # 开发文档（DEVELOPMENT.md 等）
+├── _scratch/                 # 临时调试脚本（不纳入 CI 扫描）
 ├── RestoreAll.bat            # 一键恢复所有设置
 ├── optimize.log              # 运行日志（自动生成）
 ├── README.md                 # 本说明文件
 ├── config/
-│   └── optimization.json     # 优化配置文件（服务列表、DNS 等）
+│   ├── optimization.json     # 优化配置文件（服务列表、DNS 等）
+│   └── optimization.schema.json # 配置文件 JSON Schema（CI 自动校验）
 ├── scripts/                  # 命令行模式脚本（系统优化）
 │   ├── 01-SystemInfo.ps1     # 系统信息检测模块
 │   ├── 02-CleanTemp.ps1      # 临时文件清理模块
@@ -176,6 +204,9 @@ PC-Optimizer-7thGen/
 │   ├── c-drive-cleaner.bat   # C盘清理启动器
 │   ├── clipboard-fixer.bat   # 剪贴板修复启动器
 │   ├── network-reset.bat     # 网络重置启动器
+│   ├── gen-notes.ps1         # 自动生成 Release 说明
+│   ├── publish-release.bat   # 发布 Release 辅助
+│   ├── release-notes-v3.0.0.md # v3.0.0 Release 说明
 │   ├── c-drive-cleaner/      # C盘清理源码
 │   ├── clipboard-fixer/      # 剪贴板修复源码
 │   ├── network-reset-tool/   # 网络重置源码
@@ -194,7 +225,7 @@ PC-Optimizer-7thGen/
 
 GUI 版本采用现代化深色主题设计，包含以下区域：
 
-- **左侧导航栏**：10 个功能页面快捷切换
+- **左侧导航栏**：11 个功能页面快捷切换
 - **顶部标题栏**：显示当前页面名称
 - **主内容区**：展示功能卡片、表格和操作按钮
 - **底部日志栏**：实时显示操作日志（带颜色区分）
