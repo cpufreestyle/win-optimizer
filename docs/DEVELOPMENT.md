@@ -134,3 +134,13 @@ git push origin main
 - 源文件统一使用 **UTF-8 with BOM**（避免 ps2exe 按 ANSI 读取导致中文乱码）
 - 中文注释与界面文案保持原样，编译时 `Build-EXE.ps1` 会转 UTF-16 LE 处理
 - 函数优先返回结构化数据，UI 渲染与业务逻辑分离
+- **含中文的 Git 提交信息**：建议用 `git commit -F <file>` 从 UTF-8 文件读取提交说明。
+  直接使用 `git commit -m '中文说明'` 在部分终端（如 Windows PowerShell）下会因编码转换损坏
+  导致单引号被吞、命令解析失败（报错 `字符串缺少终止符: '`）。示例：
+
+  ```powershell
+  # 1) 用 UTF-8 编码写好提交说明文件（如 commit-msg.txt）
+  # 2) 提交并推送
+  git commit -F commit-msg.txt
+  git push origin main
+  ```
