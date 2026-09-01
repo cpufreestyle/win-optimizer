@@ -122,12 +122,51 @@ git remote -v   # 确认已生效（应显示 git@github.com:... 而非 https://
 
 ```powershell
 git add <files>
-git commit -m "提交说明"
+git commit -F commit-msg.txt    # 含中文时用 -F，见「编码约定」
 git pull --rebase origin main   # 先拉取并 rebase，避免产生多余的 merge 提交
 git push origin main
 ```
 
 > 注意：工作区存在未提交改动时 `pull` 会失败，需先 `commit` 或 `git stash`。
+
+## 分支协作规范（推荐）
+
+本仓库曾出现**多个身份同时直接向 `main` 推送**的情况
+（`cpufreestyle@gmail.com` 与 `MichaelQiu <cpufreestyle@qq.com>`），
+导致历史分叉，整理时不得不考虑强制推送，风险很高。建议改用**特性分支 + PR**：
+
+| 分支 | 用途 | 命名示例 |
+|------|------|----------|
+| `main` | 稳定可发布，**禁止直接 push** | — |
+| `feat/*` | 新功能 | `feat/mcp-launch-client` |
+| `fix/*` | 缺陷修复 | `fix/gui-columnstyles` |
+| `docs/*` | 文档 | `docs/git-ssh-setup` |
+| `chore/*` | 构建/杂项 | `chore/bump-version` |
+
+### 工作流
+
+```powershell
+git switch -c feat/xxx origin/main   # 从最新 main 建分支
+# ... 开发与提交（含中文请用 git commit -F <file>）...
+git pull --rebase origin main        # 推送前先同步主干，减少冲突
+git push -u origin feat/xxx          # 推送分支
+# 在 GitHub 发起 Pull Request → Review → 合并（Squash / Rebase）
+```
+
+### 为什么
+
+- `main` 始终可发布，避免半成品直接进入主干
+- PR 提供 code review 与 CI 校验入口（见 `.github/workflows/release.yml`）
+- 并行开发互不干扰，**不再需要靠强制推送来整理历史**
+
+### 强制推送准则
+
+原则：**不对 `main` 强制推送**。若确需整理历史（例如修正提交信息）：
+
+1. 确认无人正在推送，并提前同步所有协作者
+2. 一律使用 `git push --force-with-lease` —— 当远程出现本地未知的新提交时会**拒绝**推送，
+   从而避免覆盖他人工作；**切勿使用 `git push --force`**
+3. 推送后通知协作者执行 `git fetch && git reset --hard origin/main`
 
 ## 编码约定
 
