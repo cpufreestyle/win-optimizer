@@ -139,8 +139,31 @@ git push origin main
   导致单引号被吞、命令解析失败（报错 `字符串缺少终止符: '`）。示例：
 
   ```powershell
-  # 1) 用 UTF-8 编码写好提交说明文件（如 commit-msg.txt）
+  # 1) 用「无 BOM」的 UTF-8 编码写好提交说明文件（如 commit-msg.txt）
   # 2) 提交并推送
   git commit -F commit-msg.txt
   git push origin main
   ```
+
+  > ⚠️ **提交信息文件必须是「无 BOM」的 UTF-8** —— 这与本节第一条
+  > "源文件用 UTF-8 with BOM"的规则**正好相反**，极易混淆。
+  >
+  > `git commit -F` **不会**剥离 BOM：带 BOM 时 `EF BB BF` 会作为提交信息的
+  > 首字符被一并存入，表现为 `git log` 标题前多一个不可见字符（`\ufefffix...`）。
+  >
+  > 生成方式（注意 `[System.Text.Encoding]::UTF8` 默认**带** BOM，不能直接用）：
+  > ```powershell
+  > $enc = New-Object System.Text.UTF8Encoding -ArgumentList $false
+  > [IO.File]::WriteAllText('commit-msg.txt', $text, $enc)
+  > ```
+  >
+  > 校验与修正（仅未推送时可 amend）：
+  > ```bash
+  > git log -1 --pretty=%B | head -c 16 | od -c   # 首字节 357 273 277 即含 BOM
+  > git commit --amend -F commit-msg.txt
+  > ```
+
+- **日常同步不必强求 `pull --rebase`**：本地仓库存在 `.git/refs/` 写入异常，
+  rebase 若被中断可能导致引用丢失、对象被 gc 清理。
+  推送前先用 `git ls-remote origin refs/heads/main` 确认远端真实状态，
+  确认远端无新提交（ahead/behind 均为 0）时直接 `git push` 即可，无需 rebase。
