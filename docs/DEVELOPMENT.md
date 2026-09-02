@@ -129,11 +129,14 @@ git push origin main
 
 > 注意：工作区存在未提交改动时 `pull` 会失败，需先 `commit` 或 `git stash`。
 
-## 分支协作规范（推荐）
+## 分支协作规范（已启用）
+
+> `main` 已在 GitHub 启用分支保护：**禁止直接 push 与强制推送**，必须通过 PR 合并，
+> 且需 `validate`（CI：PowerShell 语法校验 + Pester 测试）检查通过。
 
 本仓库曾出现**多个身份同时直接向 `main` 推送**的情况
 （`cpufreestyle@gmail.com` 与 `MichaelQiu <cpufreestyle@qq.com>`），
-导致历史分叉，整理时不得不考虑强制推送，风险很高。建议改用**特性分支 + PR**：
+导致历史分叉，整理时不得不考虑强制推送，风险很高。现已改用**特性分支 + PR**：
 
 | 分支 | 用途 | 命名示例 |
 |------|------|----------|
