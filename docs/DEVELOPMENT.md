@@ -123,7 +123,8 @@ git remote -v   # 确认已生效（应显示 git@github.com:... 而非 https://
 ```powershell
 git add <files>
 git commit -F commit-msg.txt    # 含中文时用 -F，见「编码约定」
-git pull --rebase origin main   # 先拉取并 rebase，避免产生多余的 merge 提交
+git fetch origin                # 先同步远端（注意 fetch 不更新 tracking ref，见文末准则）
+git merge FETCH_HEAD            # 用 fetch+merge 代替 rebase，避免中断丢引用
 git push origin main
 ```
 
@@ -148,7 +149,8 @@ git push origin main
 ```powershell
 git switch -c feat/xxx origin/main   # 从最新 main 建分支
 # ... 开发与提交（含中文请用 git commit -F <file>）...
-git pull --rebase origin main        # 推送前先同步主干，减少冲突
+git fetch origin                     # 推送前先同步主干，减少冲突
+git merge FETCH_HEAD                 # 本仓库勿用 pull --rebase，见文末「同步安全准则」
 git push -u origin feat/xxx          # 推送分支
 # 在 GitHub 发起 Pull Request → Review → 合并（Squash / Rebase）
 ```
@@ -202,7 +204,17 @@ git push -u origin feat/xxx          # 推送分支
   > git commit --amend -F commit-msg.txt
   > ```
 
-- **日常同步不必强求 `pull --rebase`**：本地仓库存在 `.git/refs/` 写入异常，
-  rebase 若被中断可能导致引用丢失、对象被 gc 清理。
-  推送前先用 `git ls-remote origin refs/heads/main` 确认远端真实状态，
-  确认远端无新提交（ahead/behind 均为 0）时直接 `git push` 即可，无需 rebase。
+- **本仓库同步安全准则（务必遵守）**：本机 `git` 自身无法创建 `.git/refs/...` 目录，
+  由此产生两个必须绕开的坑：
+
+  1. **不要跑 `git pull --rebase` / `git rebase`**：rebase 若被中断可能导致引用丢失、
+     对象被 gc 清理，甚至 `git status` 报 `not a git repository`。
+     同步一律用 `git fetch` + `git merge`（确认无需合并时可直接 push）。
+  2. **`git fetch` 不会更新本地 `origin/main` tracking ref**：它会打印
+     `x..y main -> origin/main` 看似成功，但 `git rev-parse origin/main` 仍停在旧值。
+     于是 `git status -sb` 的 ahead/behind 与 `git merge origin/main` 都基于陈旧引用
+     —— 后者会误报 "Already up to date" 而**空跑、什么都没合**。
+     合并远端改动请用 **`git merge FETCH_HEAD`**（FETCH_HEAD 是 fetch 当次拿到的真实 SHA）。
+
+  推送前建议先用 `git ls-remote origin refs/heads/main` 确认远端真实 HEAD：
+  若远端无新提交（ahead/behind 均为 0），直接 `git push` 即可，无需合并。
