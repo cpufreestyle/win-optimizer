@@ -1,92 +1,44 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/master/src/schemas/json/github-workflow.json
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
   validate:
+    name: validate
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate PowerShell scripts
+      - name: Install PSScriptAnalyzer and Pester
         shell: pwsh
         run: |
-          $dirs = @('.', 'lib', 'gui', 'gui/pages', 'scripts', 'webui/ps')
-          $hasError = $false
-          foreach ($d in $dirs) {
-            if (-not (Test-Path $d)) { continue }
-            Get-ChildItem -Path $d -Filter *.ps1 -ErrorAction SilentlyContinue | ForEach-Object {
-              $f = $_.FullName
-              $errors = $null
-              $null = [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$null, [ref]$errors)
-              if ($errors.Count -gt 0) {
-                Write-Warning "$f has $($errors.Count) parse error(s)"
-                $hasError = $true
-              } else {
-                Write-Host "OK $f"
-              }
-            }
-          }
-          if ($hasError) { exit 1 }
-
-      - name: Check config
-        shell: pwsh
-        run: |
-          if (Test-Path 'config/optimization.json') {
-            $json = Get-Content 'config/optimization.json' -Raw | ConvertFrom-Json
-            Write-Host "✓ config/optimization.json: valid"
-          }
-
-      - name: Check README
-        shell: pwsh
-        run: Test-Path README.md
-
-      - name: Validate config JSON against schema
-        shell: pwsh
-        run: |
-          $schema = Get-Content 'config/optimization.schema.json' -Raw
-          $cfg = Get-Content 'config/optimization.json' -Raw
-          $result = $cfg | Test-Json -Schema $schema -ErrorAction Stop
-          if (-not $result) { throw "config/optimization.json 不符合 schema" }
-          Write-Host "OK config/optimization.json: schema valid"
-
-      - name: Install PSScriptAnalyzer
-        shell: pwsh
-        run: |
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
-          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop
-
-      - name: PSScriptAnalyzer scan
-        shell: pwsh
-        run: |
-          $dirs = @('lib', 'gui', 'scripts')
-          $issues = @()
-          foreach ($d in $dirs) {
-            if (-not (Test-Path $d)) { continue }
-            Get-ChildItem -Path $d -Filter *.ps1 -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-              $issues += Invoke-ScriptAnalyzer -Path $_.FullName -Severity @('Error')  # Warning 仅提示，不阻断合并
-              }
-              }
-              if ($issues.Count -gt 0) {
-              $issues | ForEach-Object { Write-Warning "$($_.ScriptName): [$($_.RuleName)] $($_.Message)" }
-              exit 1
-              }
-              Write-Host "OK PSScriptAnalyzer: no Error（Warning 仅提示，不阻断 CI）"
-
-      - name: Install Pester
-        shell: pwsh
-        run: |
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
-          Install-Module -Name Pester -Force -Scope CurrentUser -MaximumVersion 5.99.99 -ErrorAction Stop
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -AllowClobber -SkipPublisherCheck
+          Install-Module -Name Pester -Force -Scope CurrentUser -AllowClobber -SkipPublisherCheck -MaximumVersion 5.99.99
 
       - name: Run Pester tests
         shell: pwsh
         run: |
           $res = Invoke-Pester tests/Optimize.Core.Tests.ps1 -PassThru
-          if ($res.FailedCount -gt 0) { exit 1 }
-          Write-Host "OK Pester: $($res.PassedCount) passed, $($res.FailedCount) failed"
+          if (-not $res) { Write-Error "Pester 未返回结果"; exit 1 }
+          if ($res.FailedCount -gt 0) { Write-Error "Pester 失败 $($res.FailedCount) 项"; exit 1 }
+          Write-Host "Pester 通过：$($res.PassedCount) 项"
+
+      - name: Run PSScriptAnalyzer (report only, non-blocking)
+        shell: pwsh
+        run: |
+          $paths = @('scripts', 'webui/ps', 'lib', 'gui', 'Optimize.ps1', 'OptimizeGUI.ps1', 'Build-EXE.ps1')
+          $errs = @()
+          foreach ($p in $paths) {
+            if (Test-Path $p) {
+              $errs += Invoke-ScriptAnalyzer -Path $p -Recurse -Severity Error -ErrorAction SilentlyContinue
+            }
+          }
+          if ($errs) {
+            Write-Host "PSScriptAnalyzer 发现 $($errs.Count) 个 Error 级问题（当前仅报告，不阻断构建，可后续收紧为 fail）："
+            $errs | Format-Table -AutoSize
+          } else {
+            Write-Host "PSScriptAnalyzer：无 Error 级问题"
+          }

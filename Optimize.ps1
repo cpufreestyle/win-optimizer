@@ -21,7 +21,7 @@ $script:ScriptsDir  = Join-Path $ProjectRoot "scripts"
 $script:ConfigDir   = Join-Path $ProjectRoot "config"
 $script:BackupDir   = Join-Path $ProjectRoot "backups"
 $script:LogFile     = Join-Path $ProjectRoot "optimize.log"
-$script:Version     = "3.0.0"
+$script:Version     = "3.1.0"
 
 # ============================================================
 #  工具函数
