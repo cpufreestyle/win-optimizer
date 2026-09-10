@@ -20,14 +20,9 @@ function Out-Json {
 
 $ErrorActionPreference = "Stop"
 
-$cleanDefs = @(
-    @{Key="temp";     Path="C:\Windows\Temp";                                Name="Windows 系统临时文件"}
-    @{Key="usertemp"; Path=$env:TEMP;                                         Name="用户临时文件"}
-    @{Key="prefetch"; Path="C:\Windows\Prefetch";                            Name="预读取文件"}
-    @{Key="wsus";     Path="C:\Windows\SoftwareDistribution\Download";       Name="Windows Update 下载缓存"}
-    @{Key="thumb";    Path="$env:LOCALAPPDATA\Microsoft\Windows\Explorer";   Name="缩略图缓存"}
-    @{Key="wer";      Path="$env:PROGRAMDATA\Microsoft\Windows\WER";         Name="Windows 错误报告"}
-)
+# 清理目标清单统一来自 config/optimization.json（经核心库 Get-CleanTargets 解析），
+# 与 CLI(scripts/02-CleanTemp.ps1) 共用同一份数据源，避免两端重复维护。
+$cleanDefs = Get-CleanTargets -Web
 
 # 复用共享核心库（Get-FolderSize 返回字节；Remove-FolderContent 返回删除条目数）
 $libPath = Join-Path $PSScriptRoot "..\..\lib\Optimize.Core.ps1"

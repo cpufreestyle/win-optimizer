@@ -52,30 +52,26 @@ function Clean-Folder {
 
 Write-Host "`n正在清理临时文件，请稍候...`n" -ForegroundColor Yellow
 
-# 1. Windows 临时文件夹 (系统级)
-Clean-Folder "C:\Windows\Temp" "Windows Temp (系统)"
-
-# 2. 用户临时文件夹
-$userTemp = $env:TEMP
-Clean-Folder $userTemp "用户 Temp"
-
-# 3. 预读取文件
-Clean-Folder "C:\Windows\Prefetch" "Prefetch 预读取"
-
-# 4. Windows 更新下载缓存 (SoftwareDistribution\Download)
-Write-Host "  [处理] Windows 更新缓存..." -ForegroundColor Yellow
-try {
-    Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
-    Clean-Folder "C:\Windows\SoftwareDistribution\Download" "Windows Update 下载缓存"
-    Start-Service -Name wuauserv -ErrorAction SilentlyContinue
-} catch {
-    Write-Host "  [跳过] Windows Update 缓存 (服务无法停止)" -ForegroundColor Gray
+# 通用文件夹清理目标（来自 config/optimization.json，经核心库 Get-CleanTargets 解析）
+# CLI 与 WebUI 共用同一份数据源，消除两边重复维护的清单。
+$cleanTargets = Get-CleanTargets -All
+foreach ($t in $cleanTargets) {
+    if ($t.key -eq 'thumb') { continue }  # 缩略图走下方专属保守清理，避免误删其它 Explorer 缓存
+    if ($t.key -eq 'wsus') {
+        # Windows 更新下载缓存：清理前停止服务、清理后重启，避免文件占用
+        try {
+            Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
+            Clean-Folder $t.path $t.name
+            Start-Service -Name wuauserv -ErrorAction SilentlyContinue
+        } catch {
+            Write-Host "  [跳过] Windows Update 缓存 (服务无法停止)" -ForegroundColor Gray
+        }
+    } else {
+        Clean-Folder $t.path $t.name
+    }
 }
 
-# 5. Windows 旧版日志
-Clean-Folder "C:\Windows\Logs\CBS" "CBS 日志"
-
-# 6. 缩略图缓存
+# 缩略图缓存（仅删除 thumbcache_*.db / iconcache_*.db，保留其它 Explorer 缓存）
 $_laRoot = if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { "$env:SystemDrive\Users\Public\AppData\Local" } else { $env:LOCALAPPDATA }
 $thumbCachePath = Join-Path $_laRoot "Microsoft\Windows\Explorer"
 if ([string]::IsNullOrWhiteSpace($thumbCachePath)) { $thumbCachePath = "" }
@@ -92,6 +88,9 @@ if (-not [string]::IsNullOrWhiteSpace($thumbCachePath) -and (Test-Path -LiteralP
     $script:totalFreed += $freed
     Write-Host "  [完成] 缩略图缓存 : 释放 $([math]::Round($freed / 1MB, 2)) MB" -ForegroundColor Green
 }
+
+# Windows 旧版日志 (CBS)
+Clean-Folder "C:\Windows\Logs\CBS" "CBS 日志"
 
 # 7. 清空回收站
 Write-Host "  [处理] 清空回收站..." -ForegroundColor Yellow
@@ -124,8 +123,7 @@ foreach ($dump in $dumpFiles) {
     }
 }
 
-# 10. Windows 错误报告
-Clean-Folder (Join-Path $env:PROGRAMDATA "Microsoft\Windows\WER") "Windows 错误报告"
+# 10. Windows 错误报告（已并入上方共享清理列表 Get-CleanTargets -All 的 wer 项，此处不再重复）
 
 # 11. 传递优化文件 (Delivery Optimization)
 Clean-Folder (Join-Path $env:WINDIR "SoftwareDistribution\DeliveryOptimization") "传递优化缓存"

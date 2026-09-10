@@ -22,10 +22,10 @@ Describe 'Optimize.Core config and lists' {
         Test-Path $p | Should -BeTrue
     }
 
-    It 'Get-OptConfig returns non-null object with version 3.0.0' {
+    It 'Get-OptConfig returns non-null object with version 3.1.0' {
         $cfg = Get-OptConfig
         $cfg | Should -Not -BeNullOrEmpty
-        $cfg.version | Should -Be '3.0.0'
+        $cfg.version | Should -Be '3.1.0'
     }
 
     It 'Get-ServiceList contains at least built-in 21 services' {
@@ -118,6 +118,35 @@ Describe 'Optimize.Core backup and restore (mocked)' {
             $r.restored | Should -BeGreaterOrEqual 1
         } finally {
             Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Describe 'Optimize.Core clean targets (shared with WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+    It 'Get-CleanTargets -All returns at least 6 targets' {
+        $t = Get-CleanTargets -All
+        $t.Count | Should -BeGreaterOrEqual 6
+    }
+    It 'Get-CleanTargets -Web returns a subset exposed to Web' {
+        $w = Get-CleanTargets -Web
+        $all = Get-CleanTargets -All
+        $w.Count | Should -BeLessOrEqual $all.Count
+        $w.Count | Should -BeGreaterOrEqual 1
+    }
+    It 'returned paths are expanded (no %VAR% left)' {
+        foreach ($x in (Get-CleanTargets -All)) {
+            $x.path | Should -Not -Match '%'
+            $x.path | Should -Not -BeNullOrEmpty
+        }
+    }
+    It 'each target has key/name/path' {
+        foreach ($x in (Get-CleanTargets -All)) {
+            $x.key  | Should -Not -BeNullOrEmpty
+            $x.name | Should -Not -BeNullOrEmpty
+            $x.path | Should -Not -BeNullOrEmpty
         }
     }
 }

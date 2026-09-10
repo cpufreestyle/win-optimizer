@@ -63,7 +63,7 @@ if ($PSScriptRoot) {
 $script:ScriptsDir  = Join-Path $script:ProjectRoot "scripts"
 $script:BackupDir   = Join-Path $script:ProjectRoot "backups"
 $script:LogFile     = Join-Path $script:ProjectRoot "optimize.log"
-$script:Version     = "3.0.0"
+$script:Version     = "3.1.0"
 
 # ============================================================
 #  Win7 兼容性检测

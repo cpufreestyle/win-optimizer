@@ -257,3 +257,36 @@ function Remove-FolderContent {
     } catch {}
     return $cnt
 }
+
+# ============================================================
+#  清理目标清单（CLI / WebUI 共享的单一数据源）
+#  从 config/optimization.json 读取；缺失时用内置回退，保证离线可用。
+#  路径中的 %VAR% 环境变量在返回前展开。
+# ============================================================
+function Get-CleanTargets {
+    param([switch]$Web)
+    $cfg = Get-OptConfig
+    $items = $null
+    if ($cfg -and $cfg.clean_targets -and $cfg.clean_targets.Count -gt 0) {
+        $items = $cfg.clean_targets
+    } else {
+        $items = @(
+            @{ key = 'temp';     name = 'Windows 系统临时文件'; path = 'C:\Windows\Temp';                                web = $true }
+            @{ key = 'usertemp'; name = '用户临时文件';         path = '%TEMP%';                                          web = $true }
+            @{ key = 'prefetch'; name = '预读取文件';           path = 'C:\Windows\Prefetch';                            web = $true }
+            @{ key = 'wsus';     name = 'Windows Update 下载缓存'; path = 'C:\Windows\SoftwareDistribution\Download';    web = $true }
+            @{ key = 'thumb';    name = '缩略图缓存';           path = '%LOCALAPPDATA%\Microsoft\Windows\Explorer';      web = $true }
+            @{ key = 'wer';      name = 'Windows 错误报告';     path = '%PROGRAMDATA%\Microsoft\Windows\WER';            web = $true }
+        )
+    }
+    $list = @()
+    foreach ($it in $items) {
+        if ($Web -and $it.web -ne $true) { continue }
+        $list += [PSCustomObject]@{
+            key  = $it.key
+            name = $it.name
+            path = [Environment]::ExpandEnvironmentVariables($it.path)
+        }
+    }
+    return $list
+}

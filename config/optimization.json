@@ -1,5 +1,5 @@
 ﻿{
-    "version": "3.0.0",
+    "version": "3.1.0",
     "description": "7代CPU老电脑优化配置文件",
     "services": {
         "safe_to_disable": [
@@ -41,5 +41,13 @@
         "\\Microsoft\\Windows\\Customer Experience Improvement Program\\Consolidator",
         "\\Microsoft\\Windows\\Customer Experience Improvement Program\\UsbCeip",
         "\\Microsoft\\Windows\\DiskDiagnostic\\Microsoft-Windows-DiskDiagnosticDataCollector"
+    ],
+    "clean_targets": [
+        { "key": "temp",     "name": "Windows 系统临时文件",     "path": "C:\\Windows\\Temp",                                   "web": true },
+        { "key": "usertemp", "name": "用户临时文件",             "path": "%TEMP%",                                              "web": true },
+        { "key": "prefetch", "name": "预读取文件",               "path": "C:\\Windows\\Prefetch",                               "web": true },
+        { "key": "wsus",     "name": "Windows Update 下载缓存",  "path": "C:\\Windows\\SoftwareDistribution\\Download",         "web": true },
+        { "key": "thumb",    "name": "缩略图缓存",               "path": "%LOCALAPPDATA%\\Microsoft\\Windows\\Explorer",        "web": true },
+        { "key": "wer",      "name": "Windows 错误报告",         "path": "%PROGRAMDATA%\\Microsoft\\Windows\\WER",              "web": true }
     ]
 }
