@@ -22,10 +22,15 @@ Describe 'Optimize.Core config and lists' {
         Test-Path $p | Should -BeTrue
     }
 
-    It 'Get-OptConfig returns non-null object with version 3.1.0' {
+    It 'Get-OptConfig returns non-null object with a valid semver version' {
         $cfg = Get-OptConfig
         $cfg | Should -Not -BeNullOrEmpty
-        $cfg.version | Should -Be '3.1.0'
+        $cfg.version | Should -Match '^\d+\.\d+\.\d+$'
+    }
+
+    It 'Get-OptVersion matches config version' {
+        $cfg = Get-OptConfig
+        Get-OptVersion | Should -Be $cfg.version
     }
 
     It 'Get-ServiceList contains at least built-in 21 services' {

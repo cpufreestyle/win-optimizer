@@ -89,48 +89,19 @@ Write-Host "[语法校验] 拼接脚本语法 OK" -ForegroundColor Green
 
 $compileInput = $tmpFile
 
-# ---- 版本号一致性校验：确保 config / GUI / CLI / 编译参数 四者版本统一 ----
-function Get-VersionFromText($text, $pattern) {
-    if ($text -match $pattern) { return $Matches[1] }
-    return $null
+# ---- 版本号单一来源：仅以 config/optimization.json 为准 ----
+# GUI / CLI 运行时也从 config 读取（Get-OptVersion），故构建只需信任 config 版本。
+$cfgPath = Join-Path $PSScriptRoot "config\optimization.json"
+$cfgText = [System.IO.File]::ReadAllText($cfgPath, [System.Text.Encoding]::UTF8)
+$cfgVer  = $null
+if ($cfgText -match '"version"\s*:\s*"([^"]+)"') { $cfgVer = $Matches[1] }
+if (-not $cfgVer) {
+    Write-Host "[版本] 未在 config/optimization.json 找到 version，回退使用 3.1.0" -ForegroundColor Yellow
+    $cfgVer = "3.1.0"
 }
-$cfgText  = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "config\optimization.json"), [System.Text.Encoding]::UTF8)
-$guiText  = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "OptimizeGUI.ps1"), [System.Text.Encoding]::UTF8)
-$cliText  = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "Optimize.ps1"), [System.Text.Encoding]::UTF8)
-
-$cfgVer = Get-VersionFromText $cfgText  '"version"\s*:\s*"([^"]+)"'
-$guiVer = Get-VersionFromText $guiText '\$script:Version\s*=\s*"([^"]+)"'
-$cliVer = Get-VersionFromText $cliText  '\$script:Version\s*=\s*"([^"]+)"'
-$exeVerRaw = Get-VersionFromText ([System.IO.File]::ReadAllText($MyInvocation.MyCommand.Path, [System.Text.Encoding]::UTF8)) 'Invoke-ps2exe[^\n]*-version\s+"([^"]+)"'
-# 将四段式 (3.0.0.0) 归一化为三段 (3.0.0) 以便与 config 比较
-$exeVer = ($exeVerRaw -split '\.' | Select-Object -First 3) -join '.'
-
-function Normalize-Version($v) {
-    if (-not $v) { return $null }
-    return (($v -split '\.' | Select-Object -First 3) -join '.')
-}
-
-$versions = @{
-    "config/optimization.json" = $cfgVer
-    "OptimizeGUI.ps1"          = $guiVer
-    "Optimize.ps1"             = $cliVer
-    "Build-EXE (-version)"     = $exeVer
-}
-$baseVer = Normalize-Version $cfgVer
-$verMismatch = $false
-foreach ($k in $versions.Keys) {
-    $v = Normalize-Version $versions[$k]
-    if ($v -ne $baseVer) {
-        Write-Host ("[版本校验] 不一致: {0} = {1} (基准 config = {2})" -f $k, $versions[$k], $cfgVer) -ForegroundColor Red
-        $verMismatch = $true
-    } else {
-        Write-Host ("[版本校验] OK: {0} = {1}" -f $k, $versions[$k]) -ForegroundColor Green
-    }
-}
-if ($verMismatch) {
-    Write-Host "[版本校验] 失败：各文件版本号不一致，请统一后再编译。" -ForegroundColor Red
-    exit 1
-}
+# EXE 文件版本使用四段式（取前三段 + .0）
+$exeVer = (($cfgVer -split '\.' | Select-Object -First 3) -join '.') + '.0'
+Write-Host ("[版本] 使用版本号: {0}（EXE 文件版本 {1}）" -f $cfgVer, $exeVer) -ForegroundColor Green
 
 Write-Host ""
 Write-Host "  输入: $inputFile"
@@ -139,7 +110,7 @@ Write-Host ""
 Write-Host "  正在编译..." -ForegroundColor Yellow
 
 try {
-    Invoke-ps2exe -inputFile $compileInput -outputFile $outputFile -title "PC-Optimizer-7thGen" -version "3.1.0.0" -noConsole -requireAdmin -UNICODEEncoding
+    Invoke-ps2exe -inputFile $compileInput -outputFile $outputFile -title "PC-Optimizer-7thGen" -version $exeVer -noConsole -requireAdmin -UNICODEEncoding
 } finally {
     if (Test-Path $tmpFile) { Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue }
 }

@@ -574,6 +574,8 @@ $script:Pages = @{}
 # ============================================================
 $coreLib = Join-Path $script:ProjectRoot "lib\Optimize.Core.ps1"
 if (Test-Path $coreLib) { . $coreLib }
+# 版本号单一来源：运行时从 config/optimization.json 读取（回退保留 $script:Version 初值）
+if (Get-Command Get-OptVersion -ErrorAction SilentlyContinue) { $script:Version = Get-OptVersion }
 # 兜底：共享库异常不可用时提供最小实现，避免 Get-FolderSize 未定义导致崩溃
 if (-not (Get-Command Get-FolderSize -ErrorAction SilentlyContinue)) {
     function Get-FolderSize {

@@ -21,7 +21,10 @@ $script:ScriptsDir  = Join-Path $ProjectRoot "scripts"
 $script:ConfigDir   = Join-Path $ProjectRoot "config"
 $script:BackupDir   = Join-Path $ProjectRoot "backups"
 $script:LogFile     = Join-Path $ProjectRoot "optimize.log"
-$script:Version     = "3.1.0"
+# 共享核心库（版本号单一来源 Get-OptVersion 等）
+$coreLib = Join-Path $ProjectRoot "lib\Optimize.Core.ps1"
+if (Test-Path $coreLib) { . $coreLib }
+$script:Version     = Get-OptVersion
 
 # ============================================================
 #  工具函数
@@ -48,7 +51,7 @@ function Test-Administrator {
 }
 
 function Invoke-ScriptModule {
-    param([string]$ScriptName)
+    param([string]$ScriptName, [switch]$NoPause)
     $scriptPath = Join-Path $ScriptsDir $ScriptName
     if (Test-Path $scriptPath) {
         Write-Log "正在执行模块: $ScriptName ..."
@@ -58,7 +61,7 @@ function Invoke-ScriptModule {
         Write-Log "找不到模块文件: $scriptPath" "ERROR"
     }
     Write-Host ""
-    Read-Host "按回车键返回主菜单"
+    if (-not $NoPause) { Read-Host "按回车键返回主菜单" }
 }
 
 function Show-Banner {
@@ -176,7 +179,7 @@ function Invoke-FullOptimization {
         $current++
         Write-Host ""
         Write-Host "[$current/$total] " -NoNewline -ForegroundColor Yellow
-        Invoke-ScriptModule $mod
+        Invoke-ScriptModule $mod -NoPause
     }
 
     Write-Host ""
@@ -200,6 +203,15 @@ if (-not (Test-Administrator)) {
     exit 1
 }
 
+# 日志轮转：超过 5MB 归档为 .old，避免无限增长
+if (Test-Path $script:LogFile) {
+    try {
+        if ((Get-Item $script:LogFile).Length -gt 5MB) {
+            $arc = Join-Path $script:ProjectRoot ("optimize.log." + (Get-Date -Format 'yyyyMMddHHmmss') + ".old")
+            Move-Item $script:LogFile $arc -Force
+        }
+    } catch {}
+}
 Write-Log "===== PC-Optimizer-7thGen v$Version 启动 ====="
 Show-Menu
 Write-Log "===== 程序退出 ====="

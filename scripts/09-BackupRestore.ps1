@@ -49,6 +49,7 @@ $categories = @(
     @{Name="电源计划备份"; Backups=$powerBackups;    Type="power"}
     @{Name="屏蔽Windows更新备份"; Backups=$updateBackups;   Type="update"}
     @{Name="手动更新备份"; Backups=$manualBackups;   Type="update"}
+    @{Name="网络DNS备份"; Backups=(Get-ChildItem -Path $backupDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "network_backup_*" }); Type="network"}
 )
 
 $menuIndex = 1
@@ -189,6 +190,21 @@ function Restore-Update {
     }
 }
 
+function Restore-Network {
+    param([string]$BackupFile)
+    Write-Host "  正在恢复网络 DNS 设置..." -ForegroundColor Yellow
+    try {
+        $data = Get-Content -Path $BackupFile -Raw | ConvertFrom-Json
+        $idx = $data.InterfaceIndex
+        $servers = @($data.DnsServers | Where-Object { $_ })
+        if ($servers.Count -eq 0) { $servers = @('') }
+        Set-DnsClientServerAddress -InterfaceIndex $idx -ServerAddresses $servers -ErrorAction Stop
+        Write-Host "    [完成] DNS 已恢复为: $($servers -join ', ')" -ForegroundColor Green
+    } catch {
+        Write-Host "    [失败] $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
 if ($input -eq "A" -or $input -eq "a") {
     # 恢复所有最近的备份
     foreach ($cat in $categories) {
@@ -201,6 +217,7 @@ if ($input -eq "A" -or $input -eq "a") {
                 "visual"   { Restore-Visual   -BackupFile $latest.FullName }
                 "power"    { Restore-Power    -BackupFile $latest.FullName }
                 "update"   { Restore-Update   -BackupFile $latest.FullName }
+                "network"  { Restore-Network  -BackupFile $latest.FullName }
             }
         }
     }
@@ -228,6 +245,7 @@ else {
             "visual"   { Restore-Visual   -BackupFile $selected.File }
             "power"    { Restore-Power    -BackupFile $selected.File }
             "update"   { Restore-Update   -BackupFile $selected.File }
+            "network"  { Restore-Network  -BackupFile $selected.File }
         }
     } else {
         Write-Host "  无效选择。" -ForegroundColor Red
