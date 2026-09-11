@@ -102,6 +102,23 @@ if ($dnsChoice -match '^\d+$') {
     Write-Host "  无效选择，跳过 DNS 设置" -ForegroundColor Yellow
 }
 
+# 备份原始 DNS，便于后续通过 [B] 备份恢复还原
+try {
+    $origDns = (Get-DnsClientServerAddress -InterfaceIndex $activeAdapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses
+    $netBackupDir = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\backups"))
+    if (-not (Test-Path $netBackupDir)) { New-Item -ItemType Directory -Path $netBackupDir -Force | Out-Null }
+    $netBackup = Join-Path $netBackupDir ("network_backup_" + (Get-Date -Format 'yyyyMMdd_HHmmss') + ".json")
+    [PSCustomObject]@{
+        InterfaceAlias = $activeAdapter.Name
+        InterfaceIndex = $activeAdapter.ifIndex
+        DnsServers     = @($origDns)
+        Date           = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+    } | ConvertTo-Json | Out-File -FilePath $netBackup -Encoding UTF8
+    Write-Host "  [备份] 原始 DNS 已备份: $netBackup" -ForegroundColor DarkGray
+} catch {
+    Write-Host "  [跳过] DNS 备份失败: $($_.Exception.Message)" -ForegroundColor Yellow
+}
+
 if ($dnsPrimary) {
     Write-Host "`n  正在设置 DNS..." -ForegroundColor Yellow
     try {

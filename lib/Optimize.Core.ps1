@@ -23,15 +23,31 @@ function Get-OptConfigPath {
 }
 
 # 读取配置文件；失败时返回 $null
+# 会话内缓存：避免循环/多次调用时反复读盘+解析 JSON
+$script:_optConfigCache    = $null
+$script:_optConfigCachePath = $null
 function Get-OptConfig {
     $p = Get-OptConfigPath
+    if (-not $p) { return $null }
+    if ($script:_optConfigCache -and $script:_optConfigCachePath -eq $p -and (Test-Path $p)) {
+        return $script:_optConfigCache
+    }
     if (-not (Test-Path $p)) { return $null }
     try {
-        return (Get-Content -Path $p -Raw -Encoding UTF8 | ConvertFrom-Json)
+        $script:_optConfigCache    = (Get-Content -Path $p -Raw -Encoding UTF8 | ConvertFrom-Json)
+        $script:_optConfigCachePath = $p
+        return $script:_optConfigCache
     } catch {
         Write-Warning ("配置文件解析失败: " + $_.Exception.Message)
         return $null
     }
+}
+
+# 版本号单一来源：优先取 config/optimization.json 的 version，缺失时回退 3.1.0
+function Get-OptVersion {
+    $cfg = Get-OptConfig
+    if ($cfg -and $cfg.version) { return [string]$cfg.version }
+    return "3.1.0"
 }
 
 # 返回可禁用服务列表: @( @{Name; Desc; Level} )
@@ -120,13 +136,18 @@ function Backup-ServiceStates {
 # 参数: Services(过滤后的列表), Mode("all"|"safe")
 # 返回: @{ disabled; skipped; details: @(@{name; result}) }
 function Disable-Services {
-    param([array]$Services, [string]$Mode = "all")
+    param([array]$Services, [string]$Mode = "all", [switch]$WhatIf)
     $toProcess = if ($Mode -eq "all") { $Services }
                  else { $Services | Where-Object { $_.Level -eq "安全禁用" } }
     $disabled = 0; $skipped = 0; $details = @()
     foreach ($svc in $toProcess) {
         $service = Get-Service -Name $svc.Name -ErrorAction SilentlyContinue
         if (-not $service) { $skipped++; continue }
+        if ($WhatIf) {
+            $disabled++
+            $details += @{name = $svc.Name; result = "将禁用(预览)"}
+            continue
+        }
         try {
             if ($service.Status -eq "Running") {
                 Stop-Service -Name $svc.Name -Force -ErrorAction SilentlyContinue
@@ -246,12 +267,13 @@ function Restore-AutoUpdate {
 
 # 删除文件夹内的所有内容（保留文件夹本身），返回成功删除的条目数
 function Remove-FolderContent {
-    param([string]$Path)
+    param([string]$Path, [switch]$WhatIf)
     $cnt = 0
     if ([string]::IsNullOrWhiteSpace($Path)) { return $cnt }
     try {
         if (-not (Test-Path -LiteralPath $Path)) { return $cnt }
         Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($WhatIf) { $cnt++; return }
             try { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue; $cnt++ } catch {}
         }
     } catch {}
