@@ -200,11 +200,37 @@ function Get-FolderSize {
     if ([string]::IsNullOrWhiteSpace($Path)) { return 0 }
     try {
         if (-not (Test-Path -LiteralPath $Path)) { return 0 }
-        $size = (Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue |
+        # -File：只枚举文件，避免把无 Length 的目录对象也送进 Measure-Object，减少遍历开销
+        $size = (Get-ChildItem -LiteralPath $Path -Recurse -Force -File -ErrorAction SilentlyContinue |
                  Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
         if ($null -eq $size) { return 0 }
         return [double]$size
     } catch { return 0 }
+}
+
+# 统一日志写入：文件追加 + 控制台彩色输出。
+# 相比原先 CLI 每次 Add-Content（反复开关文件句柄），此处用 AppendAllText 单次写入，
+# 高频调用时 IO 开销更低；三端共用同一份实现，避免日志格式漂移。
+function Write-OptLog {
+    param(
+        [string]$Message,
+        [string]$Level = 'INFO',
+        [string]$Path
+    )
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        $Path = Join-Path (Split-Path -Parent $PSScriptRoot) 'optimize.log'
+    }
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $line = "[$timestamp] [$Level] $Message"
+    try {
+        [System.IO.File]::AppendAllText($Path, $line + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
+    } catch { }
+    switch ($Level) {
+        'ERROR'   { Write-Host $line -ForegroundColor Red }
+        'WARN'    { Write-Host $line -ForegroundColor Yellow }
+        'SUCCESS' { Write-Host $line -ForegroundColor Green }
+        default   { Write-Host $line -ForegroundColor Cyan }
+    }
 }
 
 # 恢复 Windows 自动更新（撤销手动更新模式 / 更新屏蔽）
