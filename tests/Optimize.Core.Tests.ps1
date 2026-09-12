@@ -155,3 +155,56 @@ Describe 'Optimize.Core clean targets (shared with WebUI)' {
         }
     }
 }
+
+Describe 'Optimize.Core folder sizing and logging' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+
+    It 'Get-FolderSize returns 0 for empty path' {
+        (Get-FolderSize '') | Should -Be 0
+    }
+
+    It 'Get-FolderSize returns 0 for non-existent path' {
+        $missing = Join-Path $env:TEMP ('nofolder_' + (New-Guid).ToString('N'))
+        (Get-FolderSize $missing) | Should -Be 0
+    }
+
+    It 'Get-FolderSize sums only file lengths, ignoring directory entries' {
+        $tmp = Join-Path $env:TEMP ('size_test_' + (New-Guid).ToString('N'))
+        New-Item -ItemType Directory -Path (Join-Path $tmp 'subdir') -Force | Out-Null
+        try {
+            $a = Join-Path $tmp 'a.txt'
+            $b = Join-Path $tmp 'subdir\b.txt'
+            Set-Content -Path $a -Value ('A' * 100) -NoNewline
+            Set-Content -Path $b -Value ('B' * 50) -NoNewline
+            $expected = (Get-Item $a).Length + (Get-Item $b).Length
+            (Get-FolderSize $tmp) | Should -Be $expected
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Write-OptLog appends a line containing level and message' {
+        $log = Join-Path $env:TEMP ('optlog_' + (New-Guid).ToString('N') + '.log')
+        try {
+            Write-OptLog -Message 'unit test message' -Level 'WARN' -Path $log 6>&1 | Out-Null
+            Test-Path $log | Should -BeTrue
+            $content = Get-Content $log -Raw
+            $content | Should -Match 'unit test message'
+            $content | Should -Match '\[WARN\]'
+        } finally {
+            Remove-Item $log -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Write-OptLog defaults to INFO level' {
+        $log = Join-Path $env:TEMP ('optlog2_' + (New-Guid).ToString('N') + '.log')
+        try {
+            Write-OptLog -Message 'default level test' -Path $log 6>&1 | Out-Null
+            (Get-Content $log -Raw) | Should -Match '\[INFO\]'
+        } finally {
+            Remove-Item $log -Force -ErrorAction SilentlyContinue
+        }
+    }
+}

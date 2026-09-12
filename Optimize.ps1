@@ -32,6 +32,12 @@ $script:Version     = Get-OptVersion
 
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
+    # 优先复用共享库实现（AppendAllText 单次写入，高频调用比 Add-Content 更省 IO）
+    if (Get-Command Write-OptLog -ErrorAction SilentlyContinue) {
+        Write-OptLog -Message $Message -Level $Level -Path $LogFile
+        return
+    }
+    # 共享库不可用时的等价兜底
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $line = "[$timestamp] [$Level] $Message"
     Add-Content -Path $LogFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
@@ -199,7 +205,7 @@ if (-not (Test-Administrator)) {
     Write-Host "  然后执行: cd $ProjectRoot; .\Optimize.ps1" -ForegroundColor Red
     Write-Host "================================================" -ForegroundColor Red
     Write-Host ""
-    pause
+    Read-Host "按回车键退出"
     exit 1
 }
 
