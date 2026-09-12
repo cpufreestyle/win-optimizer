@@ -2,6 +2,8 @@
 
 > 专为 **7 代及更老 CPU** 的 Windows 10/11 电脑设计的系统优化工具集
 > v2.0 已合并 `windows-utils` 仓库的所有实用工具
+>
+> 当前对外版本号以 `config/optimization.json` 的 `version` 字段为准（运行时由 `lib/Optimize.Core.ps1` 的 `Get-OptVersion` 统一读取，修改版本只需改这一处）。
 
 ## 📋 项目简介
 

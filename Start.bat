@@ -25,9 +25,13 @@ REM ============================================================
 REM  选择启动模式
 REM ============================================================
 cd /d "%~dp0"
+set "APP_VER=3.2.0"
+for /f "tokens=2 delims=:," %%v in ('findstr /i "version" "%~dp0config\optimization.json"') do set "APP_VER=%%v"
+set "APP_VER=%APP_VER:"=%"
+set "APP_VER=%APP_VER: =%"
 echo.
 echo   ================================================================
-echo     PC-Optimizer-7thGen  v1.0.0
+echo     PC-Optimizer-7thGen  v%APP_VER%
 echo     7代CPU老电脑 Windows 优化工具
 echo   ================================================================
 echo.
