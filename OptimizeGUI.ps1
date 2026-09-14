@@ -594,6 +594,9 @@ if (-not (Get-Command Get-FolderSize -ErrorAction SilentlyContinue)) {
 # ============================================================
 #  加载页面函数（开发模式 dot-source；编译模式函数已内联，自动跳过）
 # ============================================================
+# 注意：Build-EXE.ps1 依赖下面的 #region/#endregion 标记来剥离本段，
+# 请勿删除或修改标记名称（标记内注释文字可随意修改）。
+#region GUI-PAGE-LOADER
 $pageLoader = @(
     "gui/pages/Dashboard.ps1", "gui/pages/Clean.ps1", "gui/pages/Services.ps1",
     "gui/pages/Startup.ps1", "gui/pages/Visual.ps1", "gui/pages/Power.ps1",
@@ -604,6 +607,7 @@ foreach ($pf in $pageLoader) {
     $pfPath = Join-Path $script:ProjectRoot $pf
     if (Test-Path $pfPath) { . $pfPath }
 }
+#endregion
 
 
 # --- 辅助：创建页面面板 ---

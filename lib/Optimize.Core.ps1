@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     PC-Optimizer 共享核心逻辑库 (lib/Optimize.Core.ps1)
 .DESCRIPTION
@@ -43,11 +43,11 @@ function Get-OptConfig {
     }
 }
 
-# 版本号单一来源：优先取 config/optimization.json 的 version，缺失时回退 3.1.0
+# 版本号单一来源：优先取 config/optimization.json 的 version，缺失时回退 3.3.0
 function Get-OptVersion {
     $cfg = Get-OptConfig
     if ($cfg -and $cfg.version) { return [string]$cfg.version }
-    return "3.1.0"
+    return "3.3.0"
 }
 
 # 返回可禁用服务列表: @( @{Name; Desc; Level} )
@@ -200,11 +200,37 @@ function Get-FolderSize {
     if ([string]::IsNullOrWhiteSpace($Path)) { return 0 }
     try {
         if (-not (Test-Path -LiteralPath $Path)) { return 0 }
-        $size = (Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue |
+        # -File：只枚举文件，避免把无 Length 的目录对象也送进 Measure-Object，减少遍历开销
+        $size = (Get-ChildItem -LiteralPath $Path -Recurse -Force -File -ErrorAction SilentlyContinue |
                  Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
         if ($null -eq $size) { return 0 }
         return [double]$size
     } catch { return 0 }
+}
+
+# 统一日志写入：文件追加 + 控制台彩色输出。
+# 相比原先 CLI 每次 Add-Content（反复开关文件句柄），此处用 AppendAllText 单次写入，
+# 高频调用时 IO 开销更低；三端共用同一份实现，避免日志格式漂移。
+function Write-OptLog {
+    param(
+        [string]$Message,
+        [string]$Level = 'INFO',
+        [string]$Path
+    )
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        $Path = Join-Path (Split-Path -Parent $PSScriptRoot) 'optimize.log'
+    }
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $line = "[$timestamp] [$Level] $Message"
+    try {
+        [System.IO.File]::AppendAllText($Path, $line + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
+    } catch { }
+    switch ($Level) {
+        'ERROR'   { Write-Host $line -ForegroundColor Red }
+        'WARN'    { Write-Host $line -ForegroundColor Yellow }
+        'SUCCESS' { Write-Host $line -ForegroundColor Green }
+        default   { Write-Host $line -ForegroundColor Cyan }
+    }
 }
 
 # 恢复 Windows 自动更新（撤销手动更新模式 / 更新屏蔽）
@@ -311,4 +337,477 @@ function Get-CleanTargets {
         }
     }
     return $list
+}
+
+# ============================================================
+#  启动项（CLI / GUI / WebUI 三端统一实现）
+# ============================================================
+# 背景：此前三端各写一份，且备份 CSV 列名不一致
+#   CLI   : Name,Value,Scope,Source,Path
+#   GUI   : Name,Command,Scope,Source        （缺 Path）
+#   WebUI : name,value,scope,source,path     （全小写）
+# 导致 GUI / WebUI 产生的备份无法被 CLI 的恢复流程读取（真会丢备份）。
+# 现统一为单一字段集与单一 CSV 列名：Name,Value,Scope,Source,Path
+
+# 统一的备份目录：<root>/backups。显式传参优先，避免 PS2EXE 下 $PSScriptRoot 为空。
+function Get-OptBackupDir {
+    param([string]$BackupDir)
+    if ($BackupDir) { return [System.IO.Path]::GetFullPath($BackupDir) }
+    $cfgPath = Get-OptConfigPath
+    if ($cfgPath) {
+        # <root>/config/optimization.json -> <root>/backups
+        return (Join-Path (Split-Path -Parent (Split-Path -Parent $cfgPath)) 'backups')
+    }
+    return (Join-Path (Get-Location).Path 'backups')
+}
+
+# 列出全部启动项：5 个注册表项 + 2 个启动文件夹 + WMI 系统启动命令（按名称去重）
+# 返回 @( @{Index;Name;Value;Scope;Source;Path} )
+function Get-StartupItems {
+    $items = @()
+
+    $regPaths = @(
+        @{Path='HKCU:\Software\Microsoft\Windows\CurrentVersion\Run';                Scope='当前用户'}
+        @{Path='HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce';            Scope='当前用户'}
+        @{Path='HKLM:\Software\Microsoft\Windows\CurrentVersion\Run';                Scope='所有用户'}
+        @{Path='HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce';            Scope='所有用户'}
+        @{Path='HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run';    Scope='所有用户(32位)'}
+    )
+    foreach ($reg in $regPaths) {
+        if (-not (Test-Path $reg.Path)) { continue }
+        $props = Get-ItemProperty -Path $reg.Path -ErrorAction SilentlyContinue
+        if (-not $props) { continue }
+        foreach ($prop in ($props.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' -and $_.Value })) {
+            $items += [PSCustomObject]@{
+                Name   = $prop.Name
+                Value  = $prop.Value
+                Scope  = $reg.Scope
+                Source = '注册表'
+                Path   = $reg.Path
+            }
+        }
+    }
+
+    $folders = @(
+        @{Path="$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup";     Scope='当前用户'}
+        @{Path="$env:PROGRAMDATA\Microsoft\Windows\Start Menu\Programs\Startup"; Scope='所有用户'}
+    )
+    foreach ($f in $folders) {
+        if (-not (Test-Path $f.Path)) { continue }
+        foreach ($child in (Get-ChildItem -Path $f.Path -ErrorAction SilentlyContinue)) {
+            $items += [PSCustomObject]@{
+                Name   = $child.Name
+                Value  = $child.FullName
+                Scope  = $f.Scope
+                Source = '启动文件夹'
+                Path   = $f.Path
+            }
+        }
+    }
+
+    try {
+        $apps = Get-CimInstance Win32_StartupCommand -ErrorAction SilentlyContinue
+        foreach ($app in $apps) {
+            if ($items.Count -gt 0 -and ($items.Name -contains $app.Name)) { continue }
+            $items += [PSCustomObject]@{
+                Name   = $app.Name
+                Value  = $app.Command
+                Scope  = $app.Location
+                Source = '系统启动命令'
+                Path   = $app.Location
+            }
+        }
+    } catch { }
+
+    # 统一编号
+    $i = 0
+    foreach ($it in $items) {
+        $i++
+        Add-Member -InputObject $it -NotePropertyName Index -NotePropertyValue $i -Force
+    }
+    return $items
+}
+
+# 解析选择器：'all' 或 '1,3,5'，返回选中的启动项数组
+function Select-StartupItems {
+    param([array]$Items, [string]$Selector)
+    if (-not $Items -or $Items.Count -eq 0) { return @() }
+    if ([string]::IsNullOrWhiteSpace($Selector)) { return @() }
+    if ($Selector.Trim().ToLower() -eq 'all') { return $Items }
+    $idxs = $Selector -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^\d+$' }
+    $picked = @()
+    foreach ($it in $Items) {
+        if ($idxs -contains ([string]$it.Index)) { $picked += $it }
+    }
+    return $picked
+}
+
+# 备份启动项到 CSV（列名统一为 Name,Value,Scope,Source,Path），返回备份文件路径
+function Backup-StartupItems {
+    param([string]$BackupDir, [array]$Items)
+    $dir = Get-OptBackupDir -BackupDir $BackupDir
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $file = Join-Path $dir ('startup_backup_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.csv')
+    if ($Items -and $Items.Count -gt 0) {
+        $Items | Select-Object Name, Value, Scope, Source, Path |
+            Export-Csv -Path $file -NoTypeInformation -Encoding UTF8
+    } else {
+        # 空列表也写出表头，避免下游读取时因缺列而报错
+        Set-Content -Path $file -Value 'Name,Value,Scope,Source,Path' -Encoding UTF8
+    }
+    return $file
+}
+
+# 禁用启动项（先备份，再按来源禁用）。返回 @{disabled;failed;backup;details}
+# -WhatIf 只做试算不改动系统，便于测试与预演
+function Disable-StartupItems {
+    param(
+        [string]$BackupDir,
+        [array]$Items,
+        [switch]$SkipBackup,
+        [switch]$WhatIf
+    )
+    $result = [PSCustomObject]@{
+        disabled = 0
+        failed   = 0
+        backup   = $null
+        details  = @()
+    }
+    if (-not $Items -or $Items.Count -eq 0) { return $result }
+
+    if (-not $SkipBackup) {
+        $result.backup = Backup-StartupItems -BackupDir $BackupDir -Items $Items
+    }
+
+    foreach ($item in $Items) {
+        try {
+            if ($item.Source -eq '注册表') {
+                # 先确认键仍存在，避免对已删除项误报成功
+                $key = Get-Item -Path $item.Path -ErrorAction SilentlyContinue
+                if (-not $key) {
+                    $result.failed++
+                    $result.details += [PSCustomObject]@{ Name = $item.Name; Source = $item.Source; Result = '失败: 注册表键不存在' }
+                    continue
+                }
+                if (-not $WhatIf) { Remove-ItemProperty -Path $item.Path -Name $item.Name -ErrorAction Stop }
+                $result.disabled++
+                $result.details += [PSCustomObject]@{ Name = $item.Name; Source = $item.Source; Result = '已禁用' }
+            }
+            elseif ($item.Source -eq '启动文件夹') {
+                # 移动到备份目录而非直接删除，保证可恢复
+                $dir = Get-OptBackupDir -BackupDir $BackupDir
+                $moveDir = Join-Path $dir 'startup_items'
+                if (-not (Test-Path $moveDir)) { New-Item -ItemType Directory -Path $moveDir -Force | Out-Null }
+                $dest = Join-Path $moveDir (Split-Path $item.Value -Leaf)
+                if (-not $WhatIf) { Move-Item -Path $item.Value -Destination $dest -Force -ErrorAction Stop }
+                $result.disabled++
+                $result.details += [PSCustomObject]@{ Name = $item.Name; Source = $item.Source; Result = '已禁用(已备份文件)' }
+            }
+            else {
+                $result.failed++
+                $result.details += [PSCustomObject]@{ Name = $item.Name; Source = $item.Source; Result = '跳过: 需通过任务管理器手动禁用' }
+            }
+        } catch {
+            $result.failed++
+            $result.details += [PSCustomObject]@{ Name = $item.Name; Source = $item.Source; Result = ('失败: ' + $_.Exception.Message) }
+        }
+    }
+    return $result
+}
+
+# ============================================================
+#  视觉效果（CLI / GUI / WebUI 三端统一实现）
+# ============================================================
+# 背景：此前只有 CLI 会备份并写入完整设置；GUI / WebUI 既不备份，
+# 也缺少 UserPreferencesMask / FontSmoothingType / MinAnimate /
+# AlwaysHibernateThumbnails 与 HKLM 系统级设置，
+# 导致其「最佳性能」名不副实且不可恢复。现统一到下列函数。
+
+# 三端共用的模式清单
+function Get-VisualEffectProfiles {
+    return @(
+        [PSCustomObject]@{ Value = 1; Title = '最佳性能'; Desc = '关闭所有动画和特效，仅保留字体平滑。适合老旧电脑，最大化响应速度。'; Safe = $true }
+        [PSCustomObject]@{ Value = 2; Title = '平衡模式'; Desc = '关闭大部分动画，保留基本效果。适合日常使用。'; Safe = $true }
+        [PSCustomObject]@{ Value = 3; Title = '自定义';   Desc = '逐项选择要关闭的效果，精细控制。'; Safe = $false }
+    )
+}
+
+# 自定义模式可逐项选择的开关（供三端展示与传参）
+function Get-VisualEffectToggles {
+    $adv = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+    $desktop = 'HKCU:\Control Panel\Desktop'
+    return @(
+        [PSCustomObject]@{ Key = 'taskbar';   Name = '禁用任务栏动画';     RegKey = $adv;                              RegValue = 'TaskbarAnimations';   RegData = 0;   RegType = 'DWord' }
+        [PSCustomObject]@{ Key = 'listview';  Name = '禁用列表透明选择';   RegKey = $adv;                              RegValue = 'ListviewAlphaSelect'; RegData = 0;   RegType = 'DWord' }
+        [PSCustomObject]@{ Key = 'dragfull';  Name = '禁用拖拽完整窗口';   RegKey = $desktop;                          RegValue = 'DragFullWindows';     RegData = '0'; RegType = 'String' }
+        [PSCustomObject]@{ Key = 'minanim';   Name = '禁用窗口最小化动画'; RegKey = 'HKCU:\Control Panel\Desktop\WindowMetrics'; RegValue = 'MinAnimate'; RegData = '0'; RegType = 'String' }
+        [PSCustomObject]@{ Key = 'aeropeek';  Name = '禁用 Aero Peek';     RegKey = 'HKCU:\Software\Microsoft\Windows\DWM';   RegValue = 'EnableAeroPeek';    RegData = 0;   RegType = 'DWord' }
+        [PSCustomObject]@{ Key = 'menudelay'; Name = '菜单延迟设为0';      RegKey = $desktop;                          RegValue = 'MenuShowDelay';       RegData = '0'; RegType = 'String' }
+    )
+}
+
+# 当前 VisualFXSetting（0=让Windows选择 / 1=最佳外观 / 2=自定义平衡 / 3=自定义）
+function Get-VisualEffectState {
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
+    try {
+        if (Test-Path $key) {
+            $v = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).VisualFXSetting
+            if ($null -ne $v) { return [int]$v }
+        }
+    } catch { }
+    return $null
+}
+
+# 备份视觉效果相关注册表键到 JSON，返回备份文件路径
+function Backup-VisualEffects {
+    param([string]$BackupDir)
+    $dir = Get-OptBackupDir -BackupDir $BackupDir
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $file = Join-Path $dir ('visual_backup_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.json')
+
+    $keys = [ordered]@{
+        VisualEffects = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
+        DWM           = 'HKCU:\Software\Microsoft\Windows\DWM'
+        Advanced      = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+        Desktop       = 'HKCU:\Control Panel\Desktop'
+    }
+    $backup = @{}
+    foreach ($k in $keys.Keys) {
+        $path = $keys[$k]
+        if (Test-Path $path) {
+            $backup[$k] = (Get-ItemProperty -Path $path -ErrorAction SilentlyContinue)
+        }
+    }
+    try {
+        ($backup | ConvertTo-Json -Depth 3) | Set-Content -Path $file -Encoding UTF8
+    } catch { }
+    return $file
+}
+
+# 写入单个注册表值（内部辅助：自动建键、按类型写入、吞掉可忽略错误）
+function Set-VisualRegValue {
+    param($RegKey, $RegValue, $RegData, $RegType = 'DWord', [switch]$WhatIf)
+    if ($WhatIf) { return $true }
+    try {
+        if (-not (Test-Path $RegKey)) { New-Item -Path $RegKey -Force | Out-Null }
+        Set-ItemProperty -Path $RegKey -Name $RegValue -Value $RegData -Type $RegType -ErrorAction Stop
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+# 应用视觉效果方案。
+# -Profile 1=最佳性能 / 2=平衡 / 3=自定义（配合 -Toggles）
+# -BackupDir 传入则先备份（强烈建议三端都传，否则不可恢复）
+# 返回 @{ ok; profile; backup; details = @() }
+function Set-VisualEffectProfile {
+    param(
+        [ValidateSet(1, 2, 3)][int]$Profile,
+        [string[]]$Toggles,
+        [string]$BackupDir,
+        [switch]$SkipExplorerRestart,
+        [switch]$WhatIf
+    )
+    $res = [PSCustomObject]@{
+        ok      = $true
+        profile = $Profile
+        backup  = $null
+        details = @()
+    }
+
+    if ($BackupDir) { $res.backup = Backup-VisualEffects -BackupDir $BackupDir }
+
+    $visualKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
+    $perfKey   = 'HKCU:\Control Panel\Desktop'
+    $advKey    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+    $dwmKey    = 'HKCU:\Software\Microsoft\Windows\DWM'
+    $minKey    = 'HKCU:\Control Panel\Desktop\WindowMetrics'
+
+    # 始终用「自定义(3)」承载我们的细项设置
+    if (-not (Set-VisualRegValue $visualKey 'VisualFXSetting' 3 'DWord' -WhatIf:$WhatIf)) {
+        $res.details += 'VisualFXSetting 写入失败'
+        $res.ok = $false
+    }
+
+    if ($Profile -eq 1) {
+        # 最佳性能：完整写入（含 GUI/WebUI 此前缺失的项）
+        Set-VisualRegValue $perfKey 'DragFullWindows'     '0' 'String' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $perfKey 'FontSmoothing'       '2' 'String' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $perfKey 'FontSmoothingType'   '2' 'String' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $perfKey 'MenuShowDelay'       '0' 'String' -WhatIf:$WhatIf | Out-Null
+        # UserPreferencesMask 是「最佳性能」真正生效的关键掩码，此前 GUI/WebUI 未写入
+        if (-not $WhatIf) {
+            try {
+                Set-ItemProperty -Path $perfKey -Name 'UserPreferencesMask' `
+                    -Value ([byte[]](0x90, 0x12, 0x01, 0x80, 0x10, 0x00, 0x00, 0x00)) -ErrorAction Stop
+            } catch { }
+        }
+        Set-VisualRegValue $advKey 'TaskbarAnimations'   0 'DWord' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $advKey 'ListviewAlphaSelect' 0 'DWord' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $minKey 'MinAnimate'          '0' 'String' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $dwmKey 'EnableAeroPeek'      0 'DWord' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $dwmKey 'AlwaysHibernateThumbnails' 0 'DWord' -WhatIf:$WhatIf | Out-Null
+        # 系统级
+        Set-VisualRegValue 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' `
+            'VisualFXSetting' 3 'DWord' -WhatIf:$WhatIf | Out-Null
+        $res.details += '最佳性能'
+    }
+    elseif ($Profile -eq 2) {
+        Set-VisualRegValue $perfKey 'DragFullWindows'    '1'   'String' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $perfKey 'FontSmoothing'      '2'   'String' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $perfKey 'MenuShowDelay'      '100' 'String' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $advKey  'TaskbarAnimations'   0 'DWord' -WhatIf:$WhatIf | Out-Null
+        # 与 CLI 对齐：平衡模式同样关闭列表透明选择（此前 GUI/WebUI 漏掉）
+        Set-VisualRegValue $advKey  'ListviewAlphaSelect' 0 'DWord' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $dwmKey  'EnableAeroPeek'      0 'DWord' -WhatIf:$WhatIf | Out-Null
+        $res.details += '平衡模式'
+    }
+    else {
+        $all = Get-VisualEffectToggles
+        $picked = @()
+        if ($Toggles -and $Toggles.Count -gt 0) {
+            foreach ($t in $all) { if ($Toggles -contains $t.Key) { $picked += $t } }
+        } else {
+            # 未指定时保持向后兼容：仅关任务栏动画
+            $picked = @($all | Where-Object { $_.Key -eq 'taskbar' })
+        }
+        foreach ($t in $picked) {
+            Set-VisualRegValue $t.RegKey $t.RegValue $t.RegData $t.RegType -WhatIf:$WhatIf | Out-Null
+            $res.details += $t.Name
+        }
+    }
+
+    if (-not $SkipExplorerRestart) { Restart-Explorer -WhatIf:$WhatIf | Out-Null }
+    return $res
+}
+
+# 重启资源管理器使视觉效果生效，返回是否成功
+function Restart-Explorer {
+    param([int]$DelaySeconds = 1, [switch]$WhatIf)
+    if ($WhatIf) { return $true }
+    try {
+        Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds $DelaySeconds
+        Start-Process explorer
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+# ============================================================
+#  电源计划（CLI / GUI / WebUI 三端统一实现）
+# ============================================================
+# 背景：此前只有 CLI 会备份并处理「卓越性能解锁失败回退」，
+# 也只有 CLI 会设置 DISKIDLE / WIRELESS_PWRSAV；GUI / WebUI 既无备份，
+# 也不做回退，且只在高性能模式下设置 CPU 频率。现统一到下列函数。
+
+# 三端共用的电源计划清单（GUID 为 Windows 内置计划固定值）
+function Get-PowerPlanCatalog {
+    return @(
+        [PSCustomObject]@{ Value = 1; Title = '高性能模式';   Desc = '最大化 CPU 性能，CPU 始终保持最高频率。适合台式机或插电笔记本。'; GUID = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c' }
+        [PSCustomObject]@{ Value = 2; Title = '卓越性能模式'; Desc = '比高性能更高，需解锁后可用。极限性能优先。';                     GUID = 'e9a42b02-d5df-448d-aa00-03f14749eb61' }
+        [PSCustomObject]@{ Value = 3; Title = '平衡优化模式'; Desc = '平衡基础上优化，禁用 USB 挂起。适合笔记本电池模式。';             GUID = '381b4222-f694-41f0-9685-ff5bb260df2e' }
+    )
+}
+
+# 当前生效计划的 GUID
+function Get-ActivePowerPlan {
+    try {
+        $out = @(powercfg /getactivescheme 2>&1) -join ' '
+        if ($out -match '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') {
+            return $matches[1]
+        }
+    } catch { }
+    return $null
+}
+
+# 备份当前电源计划（powercfg /query 全文），返回备份文件路径
+function Backup-PowerPlan {
+    param([string]$BackupDir)
+    $dir = Get-OptBackupDir -BackupDir $BackupDir
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $file = Join-Path $dir ('power_backup_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.txt')
+    try { powercfg /query 2>&1 | Out-File -FilePath $file -Encoding UTF8 } catch { }
+    return $file
+}
+
+# 内部：调用 powercfg（-WhatIf 时不真正执行），返回合并输出文本
+function Invoke-PowerCfg {
+    param([string[]]$CfgArgs, [switch]$WhatIf)
+    if ($WhatIf) { return '' }
+    try { return (@(& powercfg @CfgArgs 2>&1) -join "`n") } catch { return '' }
+}
+
+# 应用电源方案。所有「改不改」的项用哨兵值表示不改：
+#   MinPercent/MaxPercent/DiskIdleSeconds = -1 表示不改
+# 返回 @{ ok; guid; appliedGuid; backup; fallback; details = @() }
+function Set-PowerPlan {
+    param(
+        [string]$Guid,
+        [int]$MinPercent = -1,
+        [int]$MaxPercent = -1,
+        [bool]$UsbSuspendOff = $false,
+        [bool]$PciAspmOff = $false,
+        [int]$DiskIdleSeconds = -1,
+        [bool]$WirelessMaxPerf = $false,
+        [string]$BackupDir,
+        [switch]$UnlockUltimate,
+        [switch]$FallbackToHighPerf,
+        [switch]$SkipBackup,
+        [switch]$WhatIf
+    )
+    $res = [PSCustomObject]@{
+        ok          = $true
+        guid        = $Guid
+        appliedGuid = $Guid
+        backup      = $null
+        fallback    = $false
+        details     = @()
+    }
+    $highPerf = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
+
+    if ($BackupDir -and -not $SkipBackup) { $res.backup = Backup-PowerPlan -BackupDir $BackupDir }
+
+    # 卓越性能需先解锁；解锁失败时可回退高性能
+    if ($UnlockUltimate) {
+        Invoke-PowerCfg @(' /duplicatescheme'.Trim(), $Guid) -WhatIf:$WhatIf | Out-Null
+        $listed = if ($WhatIf) { $true } else {
+            (@(Invoke-PowerCfg @('/list') -WhatIf:$WhatIf) -join "`n") -match [regex]::Escape($Guid)
+        }
+        if (-not $listed -and $FallbackToHighPerf) {
+            $res.fallback    = $true
+            $res.appliedGuid = $highPerf
+            $res.details    += '卓越性能解锁失败，已回退高性能计划'
+            $Guid = $highPerf
+        }
+    }
+
+    Invoke-PowerCfg @('/setactive', $Guid) -WhatIf:$WhatIf | Out-Null
+
+    if ($MinPercent -ge 0) { Invoke-PowerCfg @('/setacvalueindex', $Guid, 'SUB_PROCESSOR', 'PROCTHROTTLEMIN', [string]$MinPercent) -WhatIf:$WhatIf | Out-Null }
+    if ($MaxPercent -ge 0) { Invoke-PowerCfg @('/setacvalueindex', $Guid, 'SUB_PROCESSOR', 'PROCTHROTTLEMAX', [string]$MaxPercent) -WhatIf:$WhatIf | Out-Null }
+    if ($MinPercent -ge 0 -or $MaxPercent -ge 0) { $res.details += ("CPU 处理器状态: 最低 {0}% / 最高 {1}%" -f $MinPercent, $MaxPercent) }
+    if ($UsbSuspendOff) { Invoke-PowerCfg @('/setacvalueindex', $Guid, 'SUB_USB', 'USBSELSUSP', '0') -WhatIf:$WhatIf | Out-Null; $res.details += 'USB 选择性挂起: 已禁用' }
+    if ($PciAspmOff)    { Invoke-PowerCfg @('/setacvalueindex', $Guid, 'SUB_PCIEXPRESS', 'ASPM', '0') -WhatIf:$WhatIf | Out-Null; $res.details += 'PCI Express 电源管理: 已关闭' }
+    if ($DiskIdleSeconds -ge 0) { Invoke-PowerCfg @('/setacvalueindex', $Guid, 'SUB_DISK', 'DISKIDLE', [string]$DiskIdleSeconds) -WhatIf:$WhatIf | Out-Null; $res.details += ("硬盘休眠: " + $(if ($DiskIdleSeconds -eq 0) { '从不' } else { "$DiskIdleSeconds 秒" })) }
+    if ($WirelessMaxPerf) { Invoke-PowerCfg @('/setacvalueindex', $Guid, 'SUB_NONE', 'WIRELESS_PWRSAV', '0') -WhatIf:$WhatIf | Out-Null; $res.details += '无线适配器电源模式: 最高性能' }
+
+    Invoke-PowerCfg @('/setactive', $Guid) -WhatIf:$WhatIf | Out-Null
+    return $res
+}
+
+# 设置当前（或指定）计划的 CPU 频率上下限（CLI 自定义模式）
+function Set-CpuThrottle {
+    param([int]$MinPercent, [int]$MaxPercent, [string]$Guid, [switch]$WhatIf)
+    if ($MinPercent -lt 1 -or $MinPercent -gt 100 -or $MaxPercent -lt 1 -or $MaxPercent -gt 100) {
+        return [PSCustomObject]@{ ok = $false; error = '值必须在 1-100 之间' }
+    }
+    if (-not $Guid) { $Guid = Get-ActivePowerPlan }
+    if (-not $Guid) { return [PSCustomObject]@{ ok = $false; error = '无法获取当前电源计划 GUID' } }
+    Invoke-PowerCfg @('/setacvalueindex', $Guid, 'SUB_PROCESSOR', 'PROCTHROTTLEMIN', [string]$MinPercent) -WhatIf:$WhatIf | Out-Null
+    Invoke-PowerCfg @('/setacvalueindex', $Guid, 'SUB_PROCESSOR', 'PROCTHROTTLEMAX', [string]$MaxPercent) -WhatIf:$WhatIf | Out-Null
+    Invoke-PowerCfg @('/setactive', $Guid) -WhatIf:$WhatIf | Out-Null
+    return [PSCustomObject]@{ ok = $true; guid = $Guid; min = $MinPercent; max = $MaxPercent }
 }
