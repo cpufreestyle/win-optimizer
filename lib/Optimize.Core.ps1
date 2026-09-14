@@ -514,3 +514,184 @@ function Disable-StartupItems {
     }
     return $result
 }
+
+# ============================================================
+#  视觉效果（CLI / GUI / WebUI 三端统一实现）
+# ============================================================
+# 背景：此前只有 CLI 会备份并写入完整设置；GUI / WebUI 既不备份，
+# 也缺少 UserPreferencesMask / FontSmoothingType / MinAnimate /
+# AlwaysHibernateThumbnails 与 HKLM 系统级设置，
+# 导致其「最佳性能」名不副实且不可恢复。现统一到下列函数。
+
+# 三端共用的模式清单
+function Get-VisualEffectProfiles {
+    return @(
+        [PSCustomObject]@{ Value = 1; Title = '最佳性能'; Desc = '关闭所有动画和特效，仅保留字体平滑。适合老旧电脑，最大化响应速度。'; Safe = $true }
+        [PSCustomObject]@{ Value = 2; Title = '平衡模式'; Desc = '关闭大部分动画，保留基本效果。适合日常使用。'; Safe = $true }
+        [PSCustomObject]@{ Value = 3; Title = '自定义';   Desc = '逐项选择要关闭的效果，精细控制。'; Safe = $false }
+    )
+}
+
+# 自定义模式可逐项选择的开关（供三端展示与传参）
+function Get-VisualEffectToggles {
+    $adv = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+    $desktop = 'HKCU:\Control Panel\Desktop'
+    return @(
+        [PSCustomObject]@{ Key = 'taskbar';   Name = '禁用任务栏动画';     RegKey = $adv;                              RegValue = 'TaskbarAnimations';   RegData = 0;   RegType = 'DWord' }
+        [PSCustomObject]@{ Key = 'listview';  Name = '禁用列表透明选择';   RegKey = $adv;                              RegValue = 'ListviewAlphaSelect'; RegData = 0;   RegType = 'DWord' }
+        [PSCustomObject]@{ Key = 'dragfull';  Name = '禁用拖拽完整窗口';   RegKey = $desktop;                          RegValue = 'DragFullWindows';     RegData = '0'; RegType = 'String' }
+        [PSCustomObject]@{ Key = 'minanim';   Name = '禁用窗口最小化动画'; RegKey = 'HKCU:\Control Panel\Desktop\WindowMetrics'; RegValue = 'MinAnimate'; RegData = '0'; RegType = 'String' }
+        [PSCustomObject]@{ Key = 'aeropeek';  Name = '禁用 Aero Peek';     RegKey = 'HKCU:\Software\Microsoft\Windows\DWM';   RegValue = 'EnableAeroPeek';    RegData = 0;   RegType = 'DWord' }
+        [PSCustomObject]@{ Key = 'menudelay'; Name = '菜单延迟设为0';      RegKey = $desktop;                          RegValue = 'MenuShowDelay';       RegData = '0'; RegType = 'String' }
+    )
+}
+
+# 当前 VisualFXSetting（0=让Windows选择 / 1=最佳外观 / 2=自定义平衡 / 3=自定义）
+function Get-VisualEffectState {
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
+    try {
+        if (Test-Path $key) {
+            $v = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).VisualFXSetting
+            if ($null -ne $v) { return [int]$v }
+        }
+    } catch { }
+    return $null
+}
+
+# 备份视觉效果相关注册表键到 JSON，返回备份文件路径
+function Backup-VisualEffects {
+    param([string]$BackupDir)
+    $dir = Get-OptBackupDir -BackupDir $BackupDir
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $file = Join-Path $dir ('visual_backup_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.json')
+
+    $keys = [ordered]@{
+        VisualEffects = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
+        DWM           = 'HKCU:\Software\Microsoft\Windows\DWM'
+        Advanced      = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+        Desktop       = 'HKCU:\Control Panel\Desktop'
+    }
+    $backup = @{}
+    foreach ($k in $keys.Keys) {
+        $path = $keys[$k]
+        if (Test-Path $path) {
+            $backup[$k] = (Get-ItemProperty -Path $path -ErrorAction SilentlyContinue)
+        }
+    }
+    try {
+        ($backup | ConvertTo-Json -Depth 3) | Set-Content -Path $file -Encoding UTF8
+    } catch { }
+    return $file
+}
+
+# 写入单个注册表值（内部辅助：自动建键、按类型写入、吞掉可忽略错误）
+function Set-VisualRegValue {
+    param($RegKey, $RegValue, $RegData, $RegType = 'DWord', [switch]$WhatIf)
+    if ($WhatIf) { return $true }
+    try {
+        if (-not (Test-Path $RegKey)) { New-Item -Path $RegKey -Force | Out-Null }
+        Set-ItemProperty -Path $RegKey -Name $RegValue -Value $RegData -Type $RegType -ErrorAction Stop
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+# 应用视觉效果方案。
+# -Profile 1=最佳性能 / 2=平衡 / 3=自定义（配合 -Toggles）
+# -BackupDir 传入则先备份（强烈建议三端都传，否则不可恢复）
+# 返回 @{ ok; profile; backup; details = @() }
+function Set-VisualEffectProfile {
+    param(
+        [ValidateSet(1, 2, 3)][int]$Profile,
+        [string[]]$Toggles,
+        [string]$BackupDir,
+        [switch]$SkipExplorerRestart,
+        [switch]$WhatIf
+    )
+    $res = [PSCustomObject]@{
+        ok      = $true
+        profile = $Profile
+        backup  = $null
+        details = @()
+    }
+
+    if ($BackupDir) { $res.backup = Backup-VisualEffects -BackupDir $BackupDir }
+
+    $visualKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
+    $perfKey   = 'HKCU:\Control Panel\Desktop'
+    $advKey    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+    $dwmKey    = 'HKCU:\Software\Microsoft\Windows\DWM'
+    $minKey    = 'HKCU:\Control Panel\Desktop\WindowMetrics'
+
+    # 始终用「自定义(3)」承载我们的细项设置
+    if (-not (Set-VisualRegValue $visualKey 'VisualFXSetting' 3 'DWord' -WhatIf:$WhatIf)) {
+        $res.details += 'VisualFXSetting 写入失败'
+        $res.ok = $false
+    }
+
+    if ($Profile -eq 1) {
+        # 最佳性能：完整写入（含 GUI/WebUI 此前缺失的项）
+        Set-VisualRegValue $perfKey 'DragFullWindows'     '0' 'String' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $perfKey 'FontSmoothing'       '2' 'String' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $perfKey 'FontSmoothingType'   '2' 'String' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $perfKey 'MenuShowDelay'       '0' 'String' -WhatIf:$WhatIf | Out-Null
+        # UserPreferencesMask 是「最佳性能」真正生效的关键掩码，此前 GUI/WebUI 未写入
+        if (-not $WhatIf) {
+            try {
+                Set-ItemProperty -Path $perfKey -Name 'UserPreferencesMask' `
+                    -Value ([byte[]](0x90, 0x12, 0x01, 0x80, 0x10, 0x00, 0x00, 0x00)) -ErrorAction Stop
+            } catch { }
+        }
+        Set-VisualRegValue $advKey 'TaskbarAnimations'   0 'DWord' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $advKey 'ListviewAlphaSelect' 0 'DWord' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $minKey 'MinAnimate'          '0' 'String' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $dwmKey 'EnableAeroPeek'      0 'DWord' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $dwmKey 'AlwaysHibernateThumbnails' 0 'DWord' -WhatIf:$WhatIf | Out-Null
+        # 系统级
+        Set-VisualRegValue 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' `
+            'VisualFXSetting' 3 'DWord' -WhatIf:$WhatIf | Out-Null
+        $res.details += '最佳性能'
+    }
+    elseif ($Profile -eq 2) {
+        Set-VisualRegValue $perfKey 'DragFullWindows'    '1'   'String' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $perfKey 'FontSmoothing'      '2'   'String' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $perfKey 'MenuShowDelay'      '100' 'String' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $advKey  'TaskbarAnimations'   0 'DWord' -WhatIf:$WhatIf | Out-Null
+        # 与 CLI 对齐：平衡模式同样关闭列表透明选择（此前 GUI/WebUI 漏掉）
+        Set-VisualRegValue $advKey  'ListviewAlphaSelect' 0 'DWord' -WhatIf:$WhatIf | Out-Null
+        Set-VisualRegValue $dwmKey  'EnableAeroPeek'      0 'DWord' -WhatIf:$WhatIf | Out-Null
+        $res.details += '平衡模式'
+    }
+    else {
+        $all = Get-VisualEffectToggles
+        $picked = @()
+        if ($Toggles -and $Toggles.Count -gt 0) {
+            foreach ($t in $all) { if ($Toggles -contains $t.Key) { $picked += $t } }
+        } else {
+            # 未指定时保持向后兼容：仅关任务栏动画
+            $picked = @($all | Where-Object { $_.Key -eq 'taskbar' })
+        }
+        foreach ($t in $picked) {
+            Set-VisualRegValue $t.RegKey $t.RegValue $t.RegData $t.RegType -WhatIf:$WhatIf | Out-Null
+            $res.details += $t.Name
+        }
+    }
+
+    if (-not $SkipExplorerRestart) { Restart-Explorer -WhatIf:$WhatIf | Out-Null }
+    return $res
+}
+
+# 重启资源管理器使视觉效果生效，返回是否成功
+function Restart-Explorer {
+    param([int]$DelaySeconds = 1, [switch]$WhatIf)
+    if ($WhatIf) { return $true }
+    try {
+        Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds $DelaySeconds
+        Start-Process explorer
+        return $true
+    } catch {
+        return $false
+    }
+}

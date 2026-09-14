@@ -305,3 +305,65 @@ Describe 'Optimize.Core startup items (shared by CLI/GUI/WebUI)' {
         }
     }
 }
+
+Describe 'Optimize.Core visual effects (shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+
+    It 'Get-VisualEffectProfiles returns three profiles' {
+        $p = @(Get-VisualEffectProfiles)
+        $p.Count | Should -Be 3
+        $p.Value | Should -Contain 1
+        $p.Value | Should -Contain 2
+        $p.Value | Should -Contain 3
+        foreach ($x in $p) { $x.Title | Should -Not -BeNullOrEmpty }
+    }
+
+    It 'Get-VisualEffectToggles exposes registry target for each toggle' {
+        $t = @(Get-VisualEffectToggles)
+        $t.Count | Should -BeGreaterOrEqual 6
+        foreach ($x in $t) {
+            $x.Key | Should -Not -BeNullOrEmpty
+            $x.RegKey | Should -Not -BeNullOrEmpty
+            $x.RegValue | Should -Not -BeNullOrEmpty
+            $x.RegType | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    It 'Get-VisualEffectState returns an int or null' {
+        $s = Get-VisualEffectState
+        if ($null -ne $s) { $s | Should -BeOfType [int] }
+    }
+
+    It 'Backup-VisualEffects creates a json backup file' {
+        $tmp = Join-Path $env:TEMP ('vis_' + (New-Guid).ToString('N'))
+        try {
+            $f = Backup-VisualEffects -BackupDir $tmp
+            Test-Path $f | Should -BeTrue
+            $f | Should -Match '\.json$'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Set-VisualEffectProfile -WhatIf reports backup without modifying system' {
+        $tmp = Join-Path $env:TEMP ('vis2_' + (New-Guid).ToString('N'))
+        try {
+            $r = Set-VisualEffectProfile -Profile 1 -BackupDir $tmp -SkipExplorerRestart -WhatIf
+            $r.profile | Should -Be 1
+            $r.backup | Should -Not -BeNullOrEmpty
+            $r.details.Count | Should -BeGreaterOrEqual 1
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Set-VisualEffectProfile rejects invalid profile value' {
+        { Set-VisualEffectProfile -Profile 9 -WhatIf } | Should -Throw
+    }
+
+    It 'Restart-Explorer -WhatIf returns true without touching explorer' {
+        Restart-Explorer -WhatIf | Should -BeTrue
+    }
+}
