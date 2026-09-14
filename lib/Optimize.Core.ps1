@@ -695,3 +695,119 @@ function Restart-Explorer {
         return $false
     }
 }
+
+# ============================================================
+#  电源计划（CLI / GUI / WebUI 三端统一实现）
+# ============================================================
+# 背景：此前只有 CLI 会备份并处理「卓越性能解锁失败回退」，
+# 也只有 CLI 会设置 DISKIDLE / WIRELESS_PWRSAV；GUI / WebUI 既无备份，
+# 也不做回退，且只在高性能模式下设置 CPU 频率。现统一到下列函数。
+
+# 三端共用的电源计划清单（GUID 为 Windows 内置计划固定值）
+function Get-PowerPlanCatalog {
+    return @(
+        [PSCustomObject]@{ Value = 1; Title = '高性能模式';   Desc = '最大化 CPU 性能，CPU 始终保持最高频率。适合台式机或插电笔记本。'; GUID = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c' }
+        [PSCustomObject]@{ Value = 2; Title = '卓越性能模式'; Desc = '比高性能更高，需解锁后可用。极限性能优先。';                     GUID = 'e9a42b02-d5df-448d-aa00-03f14749eb61' }
+        [PSCustomObject]@{ Value = 3; Title = '平衡优化模式'; Desc = '平衡基础上优化，禁用 USB 挂起。适合笔记本电池模式。';             GUID = '381b4222-f694-41f0-9685-ff5bb260df2e' }
+    )
+}
+
+# 当前生效计划的 GUID
+function Get-ActivePowerPlan {
+    try {
+        $out = @(powercfg /getactivescheme 2>&1) -join ' '
+        if ($out -match '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') {
+            return $matches[1]
+        }
+    } catch { }
+    return $null
+}
+
+# 备份当前电源计划（powercfg /query 全文），返回备份文件路径
+function Backup-PowerPlan {
+    param([string]$BackupDir)
+    $dir = Get-OptBackupDir -BackupDir $BackupDir
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $file = Join-Path $dir ('power_backup_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.txt')
+    try { powercfg /query 2>&1 | Out-File -FilePath $file -Encoding UTF8 } catch { }
+    return $file
+}
+
+# 内部：调用 powercfg（-WhatIf 时不真正执行），返回合并输出文本
+function Invoke-PowerCfg {
+    param([string[]]$CfgArgs, [switch]$WhatIf)
+    if ($WhatIf) { return '' }
+    try { return (@(& powercfg @CfgArgs 2>&1) -join "`n") } catch { return '' }
+}
+
+# 应用电源方案。所有「改不改」的项用哨兵值表示不改：
+#   MinPercent/MaxPercent/DiskIdleSeconds = -1 表示不改
+# 返回 @{ ok; guid; appliedGuid; backup; fallback; details = @() }
+function Set-PowerPlan {
+    param(
+        [string]$Guid,
+        [int]$MinPercent = -1,
+        [int]$MaxPercent = -1,
+        [bool]$UsbSuspendOff = $false,
+        [bool]$PciAspmOff = $false,
+        [int]$DiskIdleSeconds = -1,
+        [bool]$WirelessMaxPerf = $false,
+        [string]$BackupDir,
+        [switch]$UnlockUltimate,
+        [switch]$FallbackToHighPerf,
+        [switch]$SkipBackup,
+        [switch]$WhatIf
+    )
+    $res = [PSCustomObject]@{
+        ok          = $true
+        guid        = $Guid
+        appliedGuid = $Guid
+        backup      = $null
+        fallback    = $false
+        details     = @()
+    }
+    $highPerf = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
+
+    if ($BackupDir -and -not $SkipBackup) { $res.backup = Backup-PowerPlan -BackupDir $BackupDir }
+
+    # 卓越性能需先解锁；解锁失败时可回退高性能
+    if ($UnlockUltimate) {
+        Invoke-PowerCfg @(' /duplicatescheme'.Trim(), $Guid) -WhatIf:$WhatIf | Out-Null
+        $listed = if ($WhatIf) { $true } else {
+            (@(Invoke-PowerCfg @('/list') -WhatIf:$WhatIf) -join "`n") -match [regex]::Escape($Guid)
+        }
+        if (-not $listed -and $FallbackToHighPerf) {
+            $res.fallback    = $true
+            $res.appliedGuid = $highPerf
+            $res.details    += '卓越性能解锁失败，已回退高性能计划'
+            $Guid = $highPerf
+        }
+    }
+
+    Invoke-PowerCfg @('/setactive', $Guid) -WhatIf:$WhatIf | Out-Null
+
+    if ($MinPercent -ge 0) { Invoke-PowerCfg @('/setacvalueindex', $Guid, 'SUB_PROCESSOR', 'PROCTHROTTLEMIN', [string]$MinPercent) -WhatIf:$WhatIf | Out-Null }
+    if ($MaxPercent -ge 0) { Invoke-PowerCfg @('/setacvalueindex', $Guid, 'SUB_PROCESSOR', 'PROCTHROTTLEMAX', [string]$MaxPercent) -WhatIf:$WhatIf | Out-Null }
+    if ($MinPercent -ge 0 -or $MaxPercent -ge 0) { $res.details += ("CPU 处理器状态: 最低 {0}% / 最高 {1}%" -f $MinPercent, $MaxPercent) }
+    if ($UsbSuspendOff) { Invoke-PowerCfg @('/setacvalueindex', $Guid, 'SUB_USB', 'USBSELSUSP', '0') -WhatIf:$WhatIf | Out-Null; $res.details += 'USB 选择性挂起: 已禁用' }
+    if ($PciAspmOff)    { Invoke-PowerCfg @('/setacvalueindex', $Guid, 'SUB_PCIEXPRESS', 'ASPM', '0') -WhatIf:$WhatIf | Out-Null; $res.details += 'PCI Express 电源管理: 已关闭' }
+    if ($DiskIdleSeconds -ge 0) { Invoke-PowerCfg @('/setacvalueindex', $Guid, 'SUB_DISK', 'DISKIDLE', [string]$DiskIdleSeconds) -WhatIf:$WhatIf | Out-Null; $res.details += ("硬盘休眠: " + $(if ($DiskIdleSeconds -eq 0) { '从不' } else { "$DiskIdleSeconds 秒" })) }
+    if ($WirelessMaxPerf) { Invoke-PowerCfg @('/setacvalueindex', $Guid, 'SUB_NONE', 'WIRELESS_PWRSAV', '0') -WhatIf:$WhatIf | Out-Null; $res.details += '无线适配器电源模式: 最高性能' }
+
+    Invoke-PowerCfg @('/setactive', $Guid) -WhatIf:$WhatIf | Out-Null
+    return $res
+}
+
+# 设置当前（或指定）计划的 CPU 频率上下限（CLI 自定义模式）
+function Set-CpuThrottle {
+    param([int]$MinPercent, [int]$MaxPercent, [string]$Guid, [switch]$WhatIf)
+    if ($MinPercent -lt 1 -or $MinPercent -gt 100 -or $MaxPercent -lt 1 -or $MaxPercent -gt 100) {
+        return [PSCustomObject]@{ ok = $false; error = '值必须在 1-100 之间' }
+    }
+    if (-not $Guid) { $Guid = Get-ActivePowerPlan }
+    if (-not $Guid) { return [PSCustomObject]@{ ok = $false; error = '无法获取当前电源计划 GUID' } }
+    Invoke-PowerCfg @('/setacvalueindex', $Guid, 'SUB_PROCESSOR', 'PROCTHROTTLEMIN', [string]$MinPercent) -WhatIf:$WhatIf | Out-Null
+    Invoke-PowerCfg @('/setacvalueindex', $Guid, 'SUB_PROCESSOR', 'PROCTHROTTLEMAX', [string]$MaxPercent) -WhatIf:$WhatIf | Out-Null
+    Invoke-PowerCfg @('/setactive', $Guid) -WhatIf:$WhatIf | Out-Null
+    return [PSCustomObject]@{ ok = $true; guid = $Guid; min = $MinPercent; max = $MaxPercent }
+}

@@ -367,3 +367,59 @@ Describe 'Optimize.Core visual effects (shared by CLI/GUI/WebUI)' {
         Restart-Explorer -WhatIf | Should -BeTrue
     }
 }
+
+Describe 'Optimize.Core power plans (shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+
+    It 'Get-PowerPlanCatalog returns three plans with GUIDs' {
+        $p = @(Get-PowerPlanCatalog)
+        $p.Count | Should -Be 3
+        foreach ($x in $p) {
+            $x.GUID | Should -Match '^[0-9a-f-]{36}$'
+            $x.Title | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    It 'Get-ActivePowerPlan returns a GUID or null' {
+        $g = Get-ActivePowerPlan
+        if ($null -ne $g) { $g | Should -Match '^[0-9a-fA-F-]{36}$' }
+    }
+
+    It 'Backup-PowerPlan writes a txt backup file' {
+        $tmp = Join-Path $env:TEMP ('pwr_' + (New-Guid).ToString('N'))
+        try {
+            $f = Backup-PowerPlan -BackupDir $tmp
+            Test-Path $f | Should -BeTrue
+            $f | Should -Match '\.txt$'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Set-PowerPlan -WhatIf reports plan, backup and details without modifying system' {
+        $tmp = Join-Path $env:TEMP ('pwr2_' + (New-Guid).ToString('N'))
+        try {
+            $r = Set-PowerPlan -Guid '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c' -MinPercent 100 -MaxPercent 100 `
+                -DiskIdleSeconds 0 -UsbSuspendOff $true -PciAspmOff $true -BackupDir $tmp -WhatIf
+            $r.ok | Should -BeTrue
+            $r.appliedGuid | Should -Be '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
+            $r.details.Count | Should -BeGreaterOrEqual 3
+            $r.backup | Should -Not -BeNullOrEmpty
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Set-PowerPlan ultimate unlock does not throw under -WhatIf' {
+        $r = Set-PowerPlan -Guid 'e9a42b02-d5df-448d-aa00-03f14749eb61' -UnlockUltimate -FallbackToHighPerf -SkipBackup -WhatIf
+        $r | Should -Not -BeNullOrEmpty
+        $r.ok | Should -BeTrue
+    }
+
+    It 'Set-CpuThrottle rejects out-of-range values' {
+        $r = Set-CpuThrottle -MinPercent 0 -MaxPercent 100 -WhatIf
+        $r.ok | Should -BeFalse
+    }
+}

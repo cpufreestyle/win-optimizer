@@ -21,23 +21,16 @@ function Out-Json {
     $obj | ConvertTo-Json -Depth 4 -Compress
 }
 
+# 复用共享核心库（电源计划统一实现，与 CLI / GUI 同源）
+$libPath = Join-Path $PSScriptRoot "..\..\lib\Optimize.Core.ps1"
+if (Test-Path $libPath) { . $libPath }
+$backupDir = Join-Path $PSScriptRoot "..\..\backups"
+$backupDir = [System.IO.Path]::GetFullPath($backupDir)
+
 $ErrorActionPreference = "Stop"
 
-$plans = @(
-    @{Value=1; Title="高性能模式";  Desc="最大化 CPU 性能，CPU 始终保持最高频率。适合台式机或插电笔记本。"; GUID="8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"}
-    @{Value=2; Title="卓越性能模式"; Desc="比高性能更高，需解锁后可用。极限性能优先。"; GUID="e9a42b02-d5df-448d-aa00-03f14749eb61"}
-    @{Value=3; Title="平衡优化模式"; Desc="平衡基础上优化，禁用 USB 挂起。适合笔记本电池模式。"; GUID="381b4222-f694-41f0-9685-ff5bb260df2e"}
-)
-
-function Get-ActivePlan {
-    try {
-        $out = @(powercfg /getactivescheme 2>&1) -join ' '
-        if ($out -match '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') {
-            return $matches[1]
-        }
-    } catch {}
-    return $null
-}
+# 计划清单统一由共享库提供
+$plans = Get-PowerPlanCatalog
 
 try {
     if ($Action -eq "list") {
@@ -53,36 +46,34 @@ try {
         Out-Json ([PSCustomObject]@{
             ok = $true
             plans = $list
-            current = Get-ActivePlan
+            current = Get-ActivePowerPlan
         })
     }
     elseif ($Action -eq "current") {
-        Out-Json ([PSCustomObject]@{ ok = $true; current = Get-ActivePlan })
+        Out-Json ([PSCustomObject]@{ ok = $true; current = Get-ActivePowerPlan })
     }
     elseif ($Action -eq "apply") {
         $target = $plans | Where-Object { $_.Value -eq $Value }
         if (-not $target) { Out-Json ([PSCustomObject]@{ ok=$false; error="无效计划: $Value" }); exit }
         $guid = $target.GUID
 
-        if ($Value -eq 2) {
-            # 卓越性能需先解锁
-            powercfg /duplicatescheme $guid 2>&1 | Out-Null
+        # 统一走共享库：先备份，支持卓越性能解锁与失败回退。
+        # 三种模式都设置 CPU 上下限与 DISKIDLE（此前只有 value=1 设置 CPU，且完全没有备份与回退）。
+        $params = @{
+            Guid               = $guid
+            UsbSuspendOff      = [bool]$Usb
+            PciAspmOff         = [bool]$Pci
+            BackupDir          = $backupDir
+            UnlockUltimate     = ($Value -eq 2)
+            FallbackToHighPerf = ($Value -eq 2)
         }
-        powercfg /setactive $guid 2>&1 | Out-Null
-
-        if ($Value -eq 1) {
-            powercfg /setacvalueindex $guid SUB_PROCESSOR PROCTHROTTLEMIN 100 2>&1 | Out-Null
-            powercfg /setacvalueindex $guid SUB_PROCESSOR PROCTHROTTLEMAX 100 2>&1 | Out-Null
+        switch ($Value) {
+            1 { $params.MinPercent = 100; $params.MaxPercent = 100; $params.DiskIdleSeconds = 0 }
+            2 { $params.MinPercent = 100; $params.MaxPercent = 100; $params.DiskIdleSeconds = 0 }
+            3 { $params.MinPercent = 5;   $params.MaxPercent = 100; $params.DiskIdleSeconds = 1800 }
         }
-        if ($Usb) {
-            powercfg /setacvalueindex $guid SUB_USB USBSELSUSP 0 2>&1 | Out-Null
-        }
-        if ($Pci) {
-            powercfg /setacvalueindex $guid SUB_PCIEXPRESS ASPM 0 2>&1 | Out-Null
-        }
-        powercfg /setactive $guid 2>&1 | Out-Null
-
-        Out-Json ([PSCustomObject]@{ ok = $true; applied = $target.Title; guid = $guid })
+        $r = Set-PowerPlan @params
+        Out-Json ([PSCustomObject]@{ ok = $r.ok; applied = $target.Title; guid = $r.appliedGuid; backup = $r.backup; fallback = $r.fallback })
     }
 } catch {
     Out-Json ([PSCustomObject]@{ ok = $false; error = $_.Exception.Message })
