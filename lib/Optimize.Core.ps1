@@ -338,3 +338,179 @@ function Get-CleanTargets {
     }
     return $list
 }
+
+# ============================================================
+#  启动项（CLI / GUI / WebUI 三端统一实现）
+# ============================================================
+# 背景：此前三端各写一份，且备份 CSV 列名不一致
+#   CLI   : Name,Value,Scope,Source,Path
+#   GUI   : Name,Command,Scope,Source        （缺 Path）
+#   WebUI : name,value,scope,source,path     （全小写）
+# 导致 GUI / WebUI 产生的备份无法被 CLI 的恢复流程读取（真会丢备份）。
+# 现统一为单一字段集与单一 CSV 列名：Name,Value,Scope,Source,Path
+
+# 统一的备份目录：<root>/backups。显式传参优先，避免 PS2EXE 下 $PSScriptRoot 为空。
+function Get-OptBackupDir {
+    param([string]$BackupDir)
+    if ($BackupDir) { return [System.IO.Path]::GetFullPath($BackupDir) }
+    $cfgPath = Get-OptConfigPath
+    if ($cfgPath) {
+        # <root>/config/optimization.json -> <root>/backups
+        return (Join-Path (Split-Path -Parent (Split-Path -Parent $cfgPath)) 'backups')
+    }
+    return (Join-Path (Get-Location).Path 'backups')
+}
+
+# 列出全部启动项：5 个注册表项 + 2 个启动文件夹 + WMI 系统启动命令（按名称去重）
+# 返回 @( @{Index;Name;Value;Scope;Source;Path} )
+function Get-StartupItems {
+    $items = @()
+
+    $regPaths = @(
+        @{Path='HKCU:\Software\Microsoft\Windows\CurrentVersion\Run';                Scope='当前用户'}
+        @{Path='HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce';            Scope='当前用户'}
+        @{Path='HKLM:\Software\Microsoft\Windows\CurrentVersion\Run';                Scope='所有用户'}
+        @{Path='HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce';            Scope='所有用户'}
+        @{Path='HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run';    Scope='所有用户(32位)'}
+    )
+    foreach ($reg in $regPaths) {
+        if (-not (Test-Path $reg.Path)) { continue }
+        $props = Get-ItemProperty -Path $reg.Path -ErrorAction SilentlyContinue
+        if (-not $props) { continue }
+        foreach ($prop in ($props.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' -and $_.Value })) {
+            $items += [PSCustomObject]@{
+                Name   = $prop.Name
+                Value  = $prop.Value
+                Scope  = $reg.Scope
+                Source = '注册表'
+                Path   = $reg.Path
+            }
+        }
+    }
+
+    $folders = @(
+        @{Path="$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup";     Scope='当前用户'}
+        @{Path="$env:PROGRAMDATA\Microsoft\Windows\Start Menu\Programs\Startup"; Scope='所有用户'}
+    )
+    foreach ($f in $folders) {
+        if (-not (Test-Path $f.Path)) { continue }
+        foreach ($child in (Get-ChildItem -Path $f.Path -ErrorAction SilentlyContinue)) {
+            $items += [PSCustomObject]@{
+                Name   = $child.Name
+                Value  = $child.FullName
+                Scope  = $f.Scope
+                Source = '启动文件夹'
+                Path   = $f.Path
+            }
+        }
+    }
+
+    try {
+        $apps = Get-CimInstance Win32_StartupCommand -ErrorAction SilentlyContinue
+        foreach ($app in $apps) {
+            if ($items.Count -gt 0 -and ($items.Name -contains $app.Name)) { continue }
+            $items += [PSCustomObject]@{
+                Name   = $app.Name
+                Value  = $app.Command
+                Scope  = $app.Location
+                Source = '系统启动命令'
+                Path   = $app.Location
+            }
+        }
+    } catch { }
+
+    # 统一编号
+    $i = 0
+    foreach ($it in $items) {
+        $i++
+        Add-Member -InputObject $it -NotePropertyName Index -NotePropertyValue $i -Force
+    }
+    return $items
+}
+
+# 解析选择器：'all' 或 '1,3,5'，返回选中的启动项数组
+function Select-StartupItems {
+    param([array]$Items, [string]$Selector)
+    if (-not $Items -or $Items.Count -eq 0) { return @() }
+    if ([string]::IsNullOrWhiteSpace($Selector)) { return @() }
+    if ($Selector.Trim().ToLower() -eq 'all') { return $Items }
+    $idxs = $Selector -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^\d+$' }
+    $picked = @()
+    foreach ($it in $Items) {
+        if ($idxs -contains ([string]$it.Index)) { $picked += $it }
+    }
+    return $picked
+}
+
+# 备份启动项到 CSV（列名统一为 Name,Value,Scope,Source,Path），返回备份文件路径
+function Backup-StartupItems {
+    param([string]$BackupDir, [array]$Items)
+    $dir = Get-OptBackupDir -BackupDir $BackupDir
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $file = Join-Path $dir ('startup_backup_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.csv')
+    if ($Items -and $Items.Count -gt 0) {
+        $Items | Select-Object Name, Value, Scope, Source, Path |
+            Export-Csv -Path $file -NoTypeInformation -Encoding UTF8
+    } else {
+        # 空列表也写出表头，避免下游读取时因缺列而报错
+        Set-Content -Path $file -Value 'Name,Value,Scope,Source,Path' -Encoding UTF8
+    }
+    return $file
+}
+
+# 禁用启动项（先备份，再按来源禁用）。返回 @{disabled;failed;backup;details}
+# -WhatIf 只做试算不改动系统，便于测试与预演
+function Disable-StartupItems {
+    param(
+        [string]$BackupDir,
+        [array]$Items,
+        [switch]$SkipBackup,
+        [switch]$WhatIf
+    )
+    $result = [PSCustomObject]@{
+        disabled = 0
+        failed   = 0
+        backup   = $null
+        details  = @()
+    }
+    if (-not $Items -or $Items.Count -eq 0) { return $result }
+
+    if (-not $SkipBackup) {
+        $result.backup = Backup-StartupItems -BackupDir $BackupDir -Items $Items
+    }
+
+    foreach ($item in $Items) {
+        try {
+            if ($item.Source -eq '注册表') {
+                # 先确认键仍存在，避免对已删除项误报成功
+                $key = Get-Item -Path $item.Path -ErrorAction SilentlyContinue
+                if (-not $key) {
+                    $result.failed++
+                    $result.details += [PSCustomObject]@{ Name = $item.Name; Source = $item.Source; Result = '失败: 注册表键不存在' }
+                    continue
+                }
+                if (-not $WhatIf) { Remove-ItemProperty -Path $item.Path -Name $item.Name -ErrorAction Stop }
+                $result.disabled++
+                $result.details += [PSCustomObject]@{ Name = $item.Name; Source = $item.Source; Result = '已禁用' }
+            }
+            elseif ($item.Source -eq '启动文件夹') {
+                # 移动到备份目录而非直接删除，保证可恢复
+                $dir = Get-OptBackupDir -BackupDir $BackupDir
+                $moveDir = Join-Path $dir 'startup_items'
+                if (-not (Test-Path $moveDir)) { New-Item -ItemType Directory -Path $moveDir -Force | Out-Null }
+                $dest = Join-Path $moveDir (Split-Path $item.Value -Leaf)
+                if (-not $WhatIf) { Move-Item -Path $item.Value -Destination $dest -Force -ErrorAction Stop }
+                $result.disabled++
+                $result.details += [PSCustomObject]@{ Name = $item.Name; Source = $item.Source; Result = '已禁用(已备份文件)' }
+            }
+            else {
+                $result.failed++
+                $result.details += [PSCustomObject]@{ Name = $item.Name; Source = $item.Source; Result = '跳过: 需通过任务管理器手动禁用' }
+            }
+        } catch {
+            $result.failed++
+            $result.details += [PSCustomObject]@{ Name = $item.Name; Source = $item.Source; Result = ('失败: ' + $_.Exception.Message) }
+        }
+    }
+    return $result
+}

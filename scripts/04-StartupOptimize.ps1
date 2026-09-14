@@ -6,6 +6,14 @@
     以加快开机速度并减少后台资源占用。
 #>
 
+# 复用共享核心库（启动项统一实现，与 GUI / WebUI 同源）
+$coreLib = Join-Path $PSScriptRoot "..\lib\Optimize.Core.ps1"
+if (Test-Path $coreLib) { . $coreLib }
+if (-not (Get-Command Get-StartupItems -ErrorAction SilentlyContinue)) {
+    Write-Host "错误：未找到共享核心库 lib\Optimize.Core.ps1，无法枚举启动项。" -ForegroundColor Red
+    return
+}
+
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "         启动项优化" -ForegroundColor Cyan
@@ -14,74 +22,8 @@ Write-Host "============================================" -ForegroundColor Cyan
 # --- 获取启动项 ---
 Write-Host "`n[1/2] 正在扫描启动项...`n" -ForegroundColor Yellow
 
-$startupItems = @()
-
-# 1. 注册表 - 当前用户
-$regPaths = @(
-    @{Path="HKCU:\Software\Microsoft\Windows\CurrentVersion\Run";              Scope="当前用户"}
-    @{Path="HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce";          Scope="当前用户"}
-    @{Path="HKLM:\Software\Microsoft\Windows\CurrentVersion\Run";              Scope="所有用户"}
-    @{Path="HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce";          Scope="所有用户"}
-    @{Path="HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run";   Scope="所有用户(32位)"}
-)
-
-foreach ($reg in $regPaths) {
-    if (Test-Path $reg.Path) {
-        $properties = Get-ItemProperty -Path $reg.Path -ErrorAction SilentlyContinue
-        if ($properties) {
-            $properties.PSObject.Properties | Where-Object {
-                $_.Name -notlike "PS*" -and $_.Value
-            } | ForEach-Object {
-                $startupItems += [PSCustomObject]@{
-                    Index  = $startupItems.Count + 1
-                    Name   = $_.Name
-                    Value  = $_.Value
-                    Scope  = $reg.Scope
-                    Source = "注册表"
-                    Path   = $reg.Path
-                }
-            }
-        }
-    }
-}
-
-# 2. 启动文件夹
-$startupFolders = @(
-    @{Path="$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup";        Scope="当前用户"}
-    @{Path="$env:PROGRAMDATA\Microsoft\Windows\Start Menu\Programs\Startup";    Scope="所有用户"}
-)
-foreach ($folder in $startupFolders) {
-    if (Test-Path $folder.Path) {
-        Get-ChildItem -Path $folder.Path -ErrorAction SilentlyContinue | ForEach-Object {
-            $startupItems += [PSCustomObject]@{
-                Index  = $startupItems.Count + 1
-                Name   = $_.Name
-                Value  = $_.FullName
-                Scope  = $folder.Scope
-                Source = "启动文件夹"
-                Path   = $folder.Path
-            }
-        }
-    }
-}
-
-# 3. 任务管理器启动项 (通过 Get-CimInstance)
-try {
-    $startupApps = Get-CimInstance Win32_StartupCommand -ErrorAction SilentlyContinue
-    foreach ($app in $startupApps) {
-        # 避免重复
-        if ($startupItems.Name -notcontains $app.Name) {
-            $startupItems += [PSCustomObject]@{
-                Index  = $startupItems.Count + 1
-                Name   = $app.Name
-                Value  = $app.Command
-                Scope  = $app.Location
-                Source = "系统启动命令"
-                Path   = $app.Location
-            }
-        }
-    }
-} catch {}
+# 统一走共享库：5 个注册表项 + 2 个启动文件夹 + WMI 系统启动命令（去重、统一编号）
+$startupItems = @(Get-StartupItems)
 
 # --- 显示启动项 ---
 if ($startupItems.Count -eq 0) {
@@ -115,16 +57,15 @@ Write-Host "  输入 N 取消"
 $input = Read-Host "选择"
 
 $toDisable = @()
-switch -Wildcard ($input) {
-    { $_ -eq "A" -or $_ -eq "a" } { $toDisable = $startupItems }
-    { $_ -eq "N" -or $_ -eq "n" } { Write-Host "  操作已取消。" -ForegroundColor Gray; Write-Host "============================================" -ForegroundColor Cyan; return }
-    default {
-        $indices = $input -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ -match "^\d+$" }
-        foreach ($idx in $indices) {
-            $item = $startupItems | Where-Object { $_.Index -eq [int]$idx }
-            if ($item) { $toDisable += $item }
-        }
-    }
+if ($input -eq "A" -or $input -eq "a") {
+    $toDisable = $startupItems
+} elseif ($input -eq "N" -or $input -eq "n") {
+    Write-Host "  操作已取消。" -ForegroundColor Gray
+    Write-Host "============================================" -ForegroundColor Cyan
+    return
+} else {
+    # 统一解析 "1,3,5" 形式的选择器
+    $toDisable = @(Select-StartupItems -Items $startupItems -Selector $input)
 }
 
 if ($toDisable.Count -eq 0) {
@@ -133,46 +74,23 @@ if ($toDisable.Count -eq 0) {
     return
 }
 
-# --- 备份 ---
-$backupFile = Join-Path $PSScriptRoot "..\backups\startup_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
-$backupFile = [System.IO.Path]::GetFullPath($backupFile)
-$toDisable | Select-Object Name, Value, Scope, Source, Path | Export-Csv -Path $backupFile -NoTypeInformation -Encoding UTF8
+# --- 备份 + 执行禁用（统一走共享库，与 GUI / WebUI 同逻辑、同备份格式）---
+$backupDir = Join-Path (Split-Path -Parent $PSScriptRoot) "backups"
+
+Write-Host "`n正在禁用启动项..." -ForegroundColor Yellow
+$res = Disable-StartupItems -BackupDir $backupDir -Items $toDisable
+$backupFile = $res.backup
 Write-Host "`n  备份已保存: $backupFile" -ForegroundColor Green
 
-# --- 执行禁用 ---
-Write-Host "`n正在禁用启动项..." -ForegroundColor Yellow
-$disabledCount = 0
-$failedCount = 0
-
-foreach ($item in $toDisable) {
-    try {
-        if ($item.Source -eq "注册表") {
-            # 从注册表删除（先备份值）
-            $regKey = Get-Item -Path $item.Path -ErrorAction SilentlyContinue
-            if ($regKey) {
-                Remove-ItemProperty -Path $item.Path -Name $item.Name -ErrorAction Stop
-                Write-Host "  [已禁用] $($item.Name) (注册表)" -ForegroundColor Green
-                $disabledCount++
-            }
-        }
-        elseif ($item.Source -eq "启动文件夹") {
-            # 移动到备份文件夹而非删除
-            $backupStartupDir = Join-Path $PSScriptRoot "..\backups\startup_items"
-            if (-not (Test-Path $backupStartupDir)) {
-                New-Item -ItemType Directory -Path $backupStartupDir -Force | Out-Null
-            }
-            $destPath = Join-Path $backupStartupDir (Split-Path $item.Value -Leaf)
-            Move-Item -Path $item.Value -Destination $destPath -Force -ErrorAction Stop
-            Write-Host "  [已禁用] $($item.Name) (启动文件夹->已备份)" -ForegroundColor Green
-            $disabledCount++
-        }
-        else {
-            Write-Host "  [跳过] $($item.Name) — 无法自动禁用此类型" -ForegroundColor Yellow
-            $failedCount++
-        }
-    } catch {
-        Write-Host "  [失败] $($item.Name) — $($_.Exception.Message)" -ForegroundColor Red
-        $failedCount++
+$disabledCount = $res.disabled
+$failedCount   = $res.failed
+foreach ($d in $res.details) {
+    if ($d.Result -like "已禁用*") {
+        Write-Host "  [已禁用] $($d.Name) — $($d.Result)" -ForegroundColor Green
+    } elseif ($d.Result -like "跳过*") {
+        Write-Host "  [跳过] $($d.Name) — $($d.Result)" -ForegroundColor Yellow
+    } else {
+        Write-Host "  [失败] $($d.Name) — $($d.Result)" -ForegroundColor Red
     }
 }
 

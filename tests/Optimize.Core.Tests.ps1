@@ -1,4 +1,4 @@
-# Pester unit tests for lib/Optimize.Core.ps1 pure logic
+﻿# Pester unit tests for lib/Optimize.Core.ps1 pure logic
 # Run: Invoke-Pester tests/Optimize.Core.Tests.ps1
 
 # Resolve lib path robustly (Pester may change $PSScriptRoot scope)
@@ -205,6 +205,103 @@ Describe 'Optimize.Core folder sizing and logging' {
             (Get-Content $log -Raw) | Should -Match '\[INFO\]'
         } finally {
             Remove-Item $log -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Describe 'Optimize.Core startup items (shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+        $script:FakeItems = @(
+            [PSCustomObject]@{ Index = 1; Name = 'AppOne';   Value = 'C:\a.exe'; Scope = '当前用户'; Source = '注册表';       Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' }
+            [PSCustomObject]@{ Index = 2; Name = 'AppTwo';   Value = 'C:\b.lnk'; Scope = '当前用户'; Source = '启动文件夹';   Path = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup" }
+            [PSCustomObject]@{ Index = 3; Name = 'AppThree'; Value = 'cmd';      Scope = '某处';     Source = '系统启动命令'; Path = '某处' }
+        )
+    }
+
+    It 'Get-OptBackupDir defaults to a folder named backups' {
+        Split-Path (Get-OptBackupDir) -Leaf | Should -Be 'backups'
+    }
+
+    It 'Get-OptBackupDir honours explicit BackupDir' {
+        (Get-OptBackupDir -BackupDir 'C:\custom\bk') | Should -Be 'C:\custom\bk'
+    }
+
+    It 'Select-StartupItems returns everything for all' {
+        (Select-StartupItems -Items $script:FakeItems -Selector 'all').Count | Should -Be 3
+    }
+
+    It 'Select-StartupItems picks by index list' {
+        $picked = Select-StartupItems -Items $script:FakeItems -Selector '1,3'
+        $picked.Count | Should -Be 2
+        $picked.Name | Should -Contain 'AppOne'
+        $picked.Name | Should -Contain 'AppThree'
+    }
+
+    It 'Select-StartupItems returns empty for blank or unknown selector' {
+        (Select-StartupItems -Items $script:FakeItems -Selector '').Count | Should -Be 0
+        (Select-StartupItems -Items $script:FakeItems -Selector '999').Count | Should -Be 0
+    }
+
+    It 'Backup-StartupItems writes CSV with unified columns incl. Path' {
+        $tmp = Join-Path $env:TEMP ('bk_' + (New-Guid).ToString('N'))
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        try {
+            $file = Backup-StartupItems -BackupDir $tmp -Items $script:FakeItems
+            Test-Path $file | Should -BeTrue
+            $rows = @(Import-Csv $file)
+            $rows.Count | Should -Be 3
+            # Path 列此前 GUI 导出时缺失，导致备份无法被恢复流程读取
+            $rows[0].PSObject.Properties.Name | Should -Contain 'Path'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Backup-StartupItems still writes header when list is empty' {
+        $tmp = Join-Path $env:TEMP ('bk2_' + (New-Guid).ToString('N'))
+        try {
+            $file = Backup-StartupItems -BackupDir $tmp -Items @()
+            Test-Path $file | Should -BeTrue
+            (Get-Content $file -TotalCount 1) | Should -Match 'Path'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Disable-StartupItems does not throw for missing registry key' {
+        $fake = @(
+            [PSCustomObject]@{ Index = 1; Name = 'NoSuchApp'; Value = 'x'; Scope = '当前用户'; Source = '注册表'; Path = 'HKCU:\Software\NoSuchKeyForUnitTest' }
+        )
+        $tmp = Join-Path $env:TEMP ('bk3_' + (New-Guid).ToString('N'))
+        try {
+            $r = Disable-StartupItems -BackupDir $tmp -Items $fake
+            $r.failed | Should -Be 1
+            $r.backup | Should -Not -BeNullOrEmpty
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Disable-StartupItems treats unknown source as failed' {
+        $tmp = Join-Path $env:TEMP ('bk4_' + (New-Guid).ToString('N'))
+        try {
+            $r = Disable-StartupItems -BackupDir $tmp -Items @($script:FakeItems[2])
+            $r.failed | Should -Be 1
+            $r.disabled | Should -Be 0
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Get-StartupItems exposes unified fields on every item' {
+        foreach ($it in @(Get-StartupItems)) {
+            $it.Index | Should -Not -BeNullOrEmpty
+            $it.Name | Should -Not -BeNullOrEmpty
+            $it.PSObject.Properties.Name | Should -Contain 'Value'
+            $it.PSObject.Properties.Name | Should -Contain 'Scope'
+            $it.PSObject.Properties.Name | Should -Contain 'Source'
+            $it.PSObject.Properties.Name | Should -Contain 'Path'
         }
     }
 }
