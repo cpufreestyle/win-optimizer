@@ -423,3 +423,110 @@ Describe 'Optimize.Core power plans (shared by CLI/GUI/WebUI)' {
         $r.ok | Should -BeFalse
     }
 }
+
+Describe 'Optimize.Core network (shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+
+    # 编号被 WebUI 前端 index.html 硬编码，改动会直接破坏界面 —— 这里锁死
+    It 'Get-DnsOptions locks stable numbering (1=Cloudflare 2=Google 3=Ali 4=114)' {
+        $o = @(Get-DnsOptions)
+        $o.Count | Should -BeGreaterOrEqual 4
+        (@($o | Where-Object { $_.Value -eq 1 })[0]).Primary | Should -Be '1.1.1.1'
+        (@($o | Where-Object { $_.Value -eq 2 })[0]).Primary | Should -Be '8.8.8.8'
+        (@($o | Where-Object { $_.Value -eq 3 })[0]).Primary | Should -Be '223.5.5.5'
+        (@($o | Where-Object { $_.Value -eq 4 })[0]).Primary | Should -Be '114.114.114.114'
+    }
+
+    It 'Get-DnsOptions exposes required properties on every option' {
+        foreach ($o in @(Get-DnsOptions)) {
+            $o.PSObject.Properties.Name | Should -Contain 'Value'
+            $o.PSObject.Properties.Name | Should -Contain 'Key'
+            $o.PSObject.Properties.Name | Should -Contain 'Label'
+            $o.PSObject.Properties.Name | Should -Contain 'Primary'
+            $o.PSObject.Properties.Name | Should -Contain 'Secondary'
+        }
+    }
+
+    It 'Get-ActiveNetAdapters does not throw' {
+        { @(Get-ActiveNetAdapters) } | Should -Not -Throw
+    }
+
+    It 'Get-ActiveNetAdapters items expose Name and IfIndex' {
+        foreach ($a in @(Get-ActiveNetAdapters)) {
+            $a.Name | Should -Not -BeNullOrEmpty
+            $a.IfIndex | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    It 'Get-AdapterDns does not throw for unknown adapter' {
+        { @(Get-AdapterDns -IfIndex 0 -Name 'NoSuchAdapter') } | Should -Not -Throw
+    }
+
+    It 'Backup-NetworkSettings writes JSON containing Date and Adapters' {
+        $tmp = Join-Path $env:TEMP ('netbk_' + (New-Guid).ToString('N'))
+        try {
+            $f = Backup-NetworkSettings -BackupDir $tmp
+            Test-Path $f | Should -BeTrue
+            $j = Get-Content $f -Raw | ConvertFrom-Json
+            $j.Date | Should -Not -BeNullOrEmpty
+            $j.PSObject.Properties.Name | Should -Contain 'Adapters'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Set-AdapterDns rejects empty server list' {
+        $r = Set-AdapterDns -Name 'x' -DnsServers @()
+        $r.ok | Should -BeFalse
+    }
+
+    It 'Set-AdapterDns -WhatIf previews without touching system' {
+        $r = Set-AdapterDns -Name 'NoSuchAdapter' -IfIndex 0 -DnsServers @('1.1.1.1', '1.0.0.1') -WhatIf
+        $r.ok | Should -BeTrue
+        $r.whatif | Should -BeTrue
+    }
+
+    It 'Set-TcpAutoTuning -WhatIf reports ok' {
+        (Set-TcpAutoTuning -WhatIf).ok | Should -BeTrue
+    }
+
+    It 'Enable-NetworkRss -WhatIf reports ok' {
+        (Enable-NetworkRss -Name 'x' -WhatIf).ok | Should -BeTrue
+    }
+
+    It 'Enable-NetworkRsc -WhatIf reports ok' {
+        (Enable-NetworkRsc -Name 'x' -WhatIf).ok | Should -BeTrue
+    }
+
+    It 'Clear-NetDnsCache -WhatIf reports ok' {
+        (Clear-NetDnsCache -WhatIf).ok | Should -BeTrue
+    }
+
+    It 'Invoke-NetworkOptimization -WhatIf returns a result without throwing' {
+        $tmp = Join-Path $env:TEMP ('netop_' + (New-Guid).ToString('N'))
+        try {
+            # 注意：不要用 { $r = ... } | Should -Not -Throw —— 该脚本块在子作用域执行，
+            # 赋值不会回写到父作用域，$r 会一直是 $null。直接调用即可（抛错则测试自然失败）。
+            $r = Invoke-NetworkOptimization -BackupDir $tmp -DnsOption 0 -WhatIf
+            $r | Should -Not -BeNullOrEmpty
+            $r.details | Should -Not -BeNull
+            $r.adapters | Should -BeGreaterOrEqual 0
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Invoke-NetworkOptimization reports invalid DNS option when adapters exist' {
+        if (@(Get-ActiveNetAdapters).Count -gt 0) {
+            $tmp = Join-Path $env:TEMP ('netop2_' + (New-Guid).ToString('N'))
+            try {
+                $r = Invoke-NetworkOptimization -BackupDir $tmp -DnsOption 999 -SkipBackup -WhatIf
+                ($r.details -join ' ') | Should -Match '无效'
+            } finally {
+                Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}

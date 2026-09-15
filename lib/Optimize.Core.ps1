@@ -811,3 +811,294 @@ function Set-CpuThrottle {
     Invoke-PowerCfg @('/setactive', $Guid) -WhatIf:$WhatIf | Out-Null
     return [PSCustomObject]@{ ok = $true; guid = $Guid; min = $MinPercent; max = $MaxPercent }
 }
+
+# ============================================================
+#  网络（CLI / GUI / WebUI 三端统一实现）
+# ============================================================
+# 背景：此前三端各写一份，且已实际漂移出缺陷
+#   1) CLI 改 DNS 会备份到 JSON，而 GUI / WebUI 完全没有备份 → 改坏无法恢复
+#   2) DNS 选项三端各写一套：CLI 从 config 读(阿里/腾讯/114/Google/Cloudflare)，
+#      GUI/WebUI 硬编码(Cloudflare/Google/阿里/114)，编号含义不一致
+#   3) 适配器选择不一致：CLI 只取第一个活动适配器，GUI 用 WMI 取全部，
+#      WebUI 取全部并把数组传给 -Name（多网卡时行为不可预期）
+#   4) 实现路径不一致：CLI/GUI 混用 NetAdapter 系列 cmdlet 与 netsh，WebUI 全用 cmdlet
+#
+# 统一策略：
+#   - 编号保持稳定（1=Cloudflare / 2=Google / 3=阿里 / 4=114 / 5=腾讯），
+#     因为 WebUI 前端 index.html 硬编码了这些编号，改动会直接破坏界面；
+#     config/optimization.json 的 dns_options 只覆盖"地址"，不改编号。
+#   - 三端统一"对所有活动物理网卡"生效（与 GUI/WebUI 一致，CLI 此前只改第一个）。
+#   - 统一先备份再修改；所有变更函数支持 -WhatIf 预演。
+
+# 虚拟网卡关键词：默认排除，避免把 DNS 改到 VPN/虚拟机网卡上导致断网
+$script:VirtualAdapterPatterns = @('Virtual', 'VMware', 'VirtualBox', 'Hyper-V', 'TAP-', 'Tunnel', 'Loopback', 'WAN Miniport', 'Bluetooth', 'Wi-Fi Direct')
+
+# 获取活动网络适配器。优先 NetAdapter cmdlet，失败回退 CIM（Win7）。
+# -IncludeVirtual 默认关闭，排除虚拟/隧道类网卡。
+function Get-ActiveNetAdapters {
+    param([switch]$IncludeVirtual)
+    $result = @()
+    try {
+        $nets = @(Get-NetAdapter -ErrorAction Stop | Where-Object { $_.Status -eq 'Up' })
+        foreach ($n in $nets) {
+            $result += [PSCustomObject]@{
+                Name        = $n.Name
+                IfIndex     = [int]$n.ifIndex
+                Description = $n.InterfaceDescription
+                MacAddress  = $n.MacAddress
+                LinkSpeed   = $n.LinkSpeed
+            }
+        }
+    } catch { }
+    if ($result.Count -eq 0) {
+        # Win7 回退：CIM（与 GUI 的 Get-NetAdapterCompat 同思路）
+        try {
+            $cims = @(Get-CimInstance Win32_NetworkAdapter -Filter 'NetEnabled=True' -ErrorAction Stop)
+            foreach ($c in $cims) {
+                if (-not $c.NetConnectionID) { continue }
+                $result += [PSCustomObject]@{
+                    Name        = $c.NetConnectionID
+                    IfIndex     = [int]$c.InterfaceIndex
+                    Description = $c.Description
+                    MacAddress  = $c.MacAddress
+                    LinkSpeed   = $null
+                }
+            }
+        } catch { }
+    }
+    if (-not $IncludeVirtual) {
+        $result = @($result | Where-Object {
+            $text = ($_.Name + ' ' + $_.Description)
+            -not ($script:VirtualAdapterPatterns | Where-Object { $text -like ('*' + $_ + '*') })
+        })
+    }
+    return $result
+}
+
+# 统一 DNS 选项清单。编号稳定，地址可被 config 覆盖。
+# 返回 @{Value;Key;Label;Primary;Secondary}
+function Get-DnsOptions {
+    $canonical = @(
+        [PSCustomObject]@{ Value = 1; Key = 'cloudflare'; Label = 'Cloudflare'; Primary = '1.1.1.1';         Secondary = '1.0.0.1' }
+        [PSCustomObject]@{ Value = 2; Key = 'google';     Label = 'Google';     Primary = '8.8.8.8';         Secondary = '8.8.4.4' }
+        [PSCustomObject]@{ Value = 3; Key = 'aliyun';     Label = '阿里 DNS';   Primary = '223.5.5.5';       Secondary = '223.6.6.6' }
+        [PSCustomObject]@{ Value = 4; Key = '114';        Label = '114 DNS';    Primary = '114.114.114.114'; Secondary = '114.114.115.115' }
+        [PSCustomObject]@{ Value = 5; Key = 'tencent';    Label = '腾讯 DNS';   Primary = '119.29.29.29';    Secondary = '119.28.28.28' }
+    )
+    # config 只覆盖地址，不改编号（WebUI 前端硬编码了编号，改动会破坏界面）
+    try {
+        $cfg = Get-OptConfig
+        if ($cfg -and $cfg.dns_options) {
+            foreach ($o in $canonical) {
+                $p = @($cfg.dns_options.PSObject.Properties | Where-Object { $_.Name -eq $o.Key })[0]
+                if ($p) {
+                    $addrs = @($p.Value)
+                    if ($addrs.Count -gt 0 -and $addrs[0]) {
+                        $o.Primary   = [string]$addrs[0]
+                        $o.Secondary = if ($addrs.Count -gt 1) { [string]$addrs[1] } else { [string]$addrs[0] }
+                    }
+                }
+            }
+        }
+    } catch { }
+    return $canonical
+}
+
+# 读取指定适配器当前 DNS（现代 cmdlet 优先，回退 CIM）
+function Get-AdapterDns {
+    param([int]$IfIndex = 0, [string]$Name = '')
+    if ($IfIndex -gt 0) {
+        try {
+            $a = Get-DnsClientServerAddress -InterfaceIndex $IfIndex -AddressFamily IPv4 -ErrorAction Stop
+            return @($a.ServerAddresses)
+        } catch { }
+    }
+    try {
+        $cfgs = @(Get-CimInstance Win32_NetworkAdapterConfiguration -Filter 'IPEnabled=True' -ErrorAction Stop)
+        foreach ($c in $cfgs) {
+            if (($IfIndex -gt 0 -and [int]$c.InterfaceIndex -eq $IfIndex) -or ($Name -and $c.Description -eq $Name)) {
+                return @($c.DNSServerSearchOrder)
+            }
+        }
+    } catch { }
+    return @()
+}
+
+# 备份所有活动适配器的 DNS 到 JSON（三端统一，CLI 此前独有）
+function Backup-NetworkSettings {
+    param([string]$BackupDir)
+    $dir = Get-OptBackupDir -BackupDir $BackupDir
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $adapters = @()
+    foreach ($a in (Get-ActiveNetAdapters)) {
+        $adapters += [PSCustomObject]@{
+            InterfaceAlias = $a.Name
+            InterfaceIndex = $a.IfIndex
+            DnsServers     = @(Get-AdapterDns -IfIndex $a.IfIndex -Name $a.Name)
+        }
+    }
+    $file = Join-Path $dir ('network_backup_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.json')
+    [PSCustomObject]@{
+        Date     = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        Adapters = $adapters
+    } | ConvertTo-Json -Depth 5 | Out-File -FilePath $file -Encoding UTF8
+    return $file
+}
+
+# 设置适配器 DNS（现代 cmdlet 优先，回退 netsh）。支持 -WhatIf。
+function Set-AdapterDns {
+    param([string]$Name, [int]$IfIndex = 0, [string[]]$DnsServers, [switch]$WhatIf)
+    if (-not $DnsServers -or $DnsServers.Count -eq 0) {
+        return [PSCustomObject]@{ ok = $false; error = '未提供 DNS 服务器' }
+    }
+    $joined = ($DnsServers -join ', ')
+    if ($WhatIf) { return [PSCustomObject]@{ ok = $true; whatif = $true; method = '(预演)'; applied = $joined } }
+    if ($IfIndex -gt 0) {
+        try {
+            Set-DnsClientServerAddress -InterfaceIndex $IfIndex -ServerAddresses $DnsServers -ErrorAction Stop
+            return [PSCustomObject]@{ ok = $true; method = 'Set-DnsClientServerAddress'; applied = $joined }
+        } catch { }
+    }
+    try {
+        netsh interface ip set dns name="$Name" static $DnsServers[0] 2>&1 | Out-Null
+        if ($DnsServers.Count -gt 1) { netsh interface ip add dns name="$Name" $DnsServers[1] index=2 2>&1 | Out-Null }
+        return [PSCustomObject]@{ ok = $true; method = 'netsh'; applied = $joined }
+    } catch {
+        return [PSCustomObject]@{ ok = $false; error = $_.Exception.Message }
+    }
+}
+
+# TCP 自动调优（现代 cmdlet 优先，回退 netsh）
+function Set-TcpAutoTuning {
+    param([string]$Level = 'Normal', [switch]$WhatIf)
+    if ($WhatIf) { return [PSCustomObject]@{ ok = $true; whatif = $true; method = '(预演)'; level = $Level } }
+    try {
+        Set-NetTCPSetting -SettingName Internet -AutoTuningLevelLocal $Level -ErrorAction Stop
+        return [PSCustomObject]@{ ok = $true; method = 'Set-NetTCPSetting'; level = $Level }
+    } catch {
+        try {
+            netsh int tcp set global autotuninglevel=normal 2>&1 | Out-Null
+            return [PSCustomObject]@{ ok = $true; method = 'netsh'; level = 'normal' }
+        } catch { return [PSCustomObject]@{ ok = $false; error = $_.Exception.Message } }
+    }
+}
+
+# RSS 接收端缩放（逐适配器；不支持时回退 netsh 全局）
+function Enable-NetworkRss {
+    param([string]$Name, [switch]$WhatIf)
+    if ($WhatIf) { return [PSCustomObject]@{ ok = $true; whatif = $true; method = '(预演)' } }
+    if ($Name) {
+        try {
+            if (Get-NetAdapterRss -Name $Name -ErrorAction Stop) {
+                Enable-NetAdapterRss -Name $Name -ErrorAction Stop
+                return [PSCustomObject]@{ ok = $true; method = 'Enable-NetAdapterRss' }
+            }
+        } catch { }
+    }
+    try { netsh int tcp set global rss=enabled 2>&1 | Out-Null; return [PSCustomObject]@{ ok = $true; method = 'netsh' } }
+    catch { return [PSCustomObject]@{ ok = $false; error = $_.Exception.Message } }
+}
+
+# RSC 接收段合并
+function Enable-NetworkRsc {
+    param([string]$Name, [switch]$WhatIf)
+    if ($WhatIf) { return [PSCustomObject]@{ ok = $true; whatif = $true; method = '(预演)' } }
+    if ($Name) {
+        try {
+            if (Get-NetAdapterRsc -Name $Name -ErrorAction Stop) {
+                Enable-NetAdapterRsc -Name $Name -ErrorAction Stop
+                return [PSCustomObject]@{ ok = $true; method = 'Enable-NetAdapterRsc' }
+            }
+        } catch { }
+    }
+    try { netsh int tcp set global rsc=enabled 2>&1 | Out-Null; return [PSCustomObject]@{ ok = $true; method = 'netsh' } }
+    catch { return [PSCustomObject]@{ ok = $false; error = $_.Exception.Message } }
+}
+
+# 清除 DNS 缓存
+function Clear-NetDnsCache {
+    param([switch]$WhatIf)
+    if ($WhatIf) { return [PSCustomObject]@{ ok = $true; whatif = $true; method = '(预演)' } }
+    try { Clear-DnsClientCache -ErrorAction Stop; return [PSCustomObject]@{ ok = $true; method = 'Clear-DnsClientCache' } }
+    catch {
+        try { ipconfig /flushdns 2>&1 | Out-Null; return [PSCustomObject]@{ ok = $true; method = 'ipconfig /flushdns' } }
+        catch { return [PSCustomObject]@{ ok = $false; error = $_.Exception.Message } }
+    }
+}
+
+# 编排：先备份，再按开关应用网络优化。
+# 返回 @{ok;backup;details;adapters}
+function Invoke-NetworkOptimization {
+    param(
+        [string]$BackupDir,
+        [int]$DnsOption = 0,
+        [bool]$Tcp = $true,
+        [bool]$Rss = $true,
+        [bool]$Rsc = $true,
+        [bool]$DnsCache = $true,
+        [switch]$SkipBackup,
+        [switch]$WhatIf
+    )
+    $adapters = @(Get-ActiveNetAdapters)
+    if ($adapters.Count -eq 0) {
+        return [PSCustomObject]@{ ok = $false; error = '未检测到活动网络适配器'; backup = $null; details = @(); adapters = 0 }
+    }
+
+    $details = @()
+    $backup  = $null
+    $ok      = $true
+
+    # 统一先备份（此前 GUI / WebUI 完全没有备份，改坏无法恢复）
+    if (-not $SkipBackup) {
+        try { $backup = Backup-NetworkSettings -BackupDir $BackupDir }
+        catch { $details += "备份失败: $($_.Exception.Message)" }
+    }
+
+    if ($DnsOption -gt 0) {
+        $opt = @(Get-DnsOptions | Where-Object { $_.Value -eq $DnsOption })[0]
+        if (-not $opt) {
+            $details += "DNS 选项无效: $DnsOption"
+            $ok = $false
+        } else {
+            foreach ($a in $adapters) {
+                $r = Set-AdapterDns -Name $a.Name -IfIndex $a.IfIndex -DnsServers @($opt.Primary, $opt.Secondary) -WhatIf:$WhatIf
+                if ($r.ok) { $details += "DNS [$($a.Name)] -> $($opt.Label) ($($r.applied))" }
+                else { $details += "DNS [$($a.Name)] 失败: $($r.error)"; $ok = $false }
+            }
+        }
+    } else {
+        $details += 'DNS 保持当前设置'
+    }
+
+    if ($Tcp) {
+        $r = Set-TcpAutoTuning -WhatIf:$WhatIf
+        $details += if ($r.ok) { "TCP 自动调优已启用 ($($r.method))" } else { "TCP 自动调优失败: $($r.error)" }
+        if (-not $r.ok) { $ok = $false }
+    }
+    if ($Rss) {
+        foreach ($a in $adapters) {
+            $r = Enable-NetworkRss -Name $a.Name -WhatIf:$WhatIf
+            $details += if ($r.ok) { "RSS [$($a.Name)] 已启用 ($($r.method))" } else { "RSS [$($a.Name)] 失败: $($r.error)" }
+            if (-not $r.ok) { $ok = $false }
+        }
+    }
+    if ($Rsc) {
+        foreach ($a in $adapters) {
+            $r = Enable-NetworkRsc -Name $a.Name -WhatIf:$WhatIf
+            $details += if ($r.ok) { "RSC [$($a.Name)] 已启用 ($($r.method))" } else { "RSC [$($a.Name)] 失败: $($r.error)" }
+            if (-not $r.ok) { $ok = $false }
+        }
+    }
+    if ($DnsCache) {
+        $r = Clear-NetDnsCache -WhatIf:$WhatIf
+        $details += if ($r.ok) { "DNS 缓存已刷新 ($($r.method))" } else { "DNS 缓存刷新失败: $($r.error)" }
+        if (-not $r.ok) { $ok = $false }
+    }
+
+    return [PSCustomObject]@{
+        ok       = $ok
+        backup   = $backup
+        details  = $details
+        adapters = $adapters.Count
+    }
+}
