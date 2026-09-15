@@ -52,23 +52,42 @@ foreach ($pf in $pageFiles) {
 }
 
 $srcText = [System.IO.File]::ReadAllText($inputFile, [System.Text.Encoding]::UTF8)
-# 剥离主窗体中的 dot-source 加载器段（"#  加载页面函数" 注释起，到 foreach 块收尾 "}" 行止）
-$loaderStart = $srcText.IndexOf('#  加载页面函数')
+# 剥离主窗体中的 dot-source 加载器段。
+# 优先用 #region GUI-PAGE-LOADER / #endregion 标记定位（稳定，不依赖注释文字与代码形态）；
+# 找不到标记时回退到旧的文本锚点，保证未加标记的老脚本仍可编译。
+$loaderStart = $srcText.IndexOf('#region GUI-PAGE-LOADER')
+$loaderEnd   = -1
 if ($loaderStart -ge 0) {
-    $loaderEnd = $srcText.IndexOf('if (Test-Path $pfPath) { . $pfPath }', $loaderStart)
-    if ($loaderEnd -ge 0) {
-        # 必须连同 foreach 的收尾 "}"（含换行）一并剥离，
-        # 否则孤儿大括号会让编译后的脚本在启动时报语法错误
-        $braceLine = $srcText.IndexOf("`n}", $loaderEnd)
-        if ($braceLine -ge 0) {
-            $nl = $srcText.IndexOf("`n", $braceLine + 1)
-            $loaderEnd = if ($nl -ge 0) { $nl + 1 } else { $braceLine + 2 }
-        } else {
-            $nl = $srcText.IndexOf("`n", $loaderEnd)
-            $loaderEnd = if ($nl -ge 0) { $nl + 1 } else { $loaderEnd }
-        }
-        $srcText = $srcText.Remove($loaderStart, $loaderEnd - $loaderStart)
+    $markerEnd = $srcText.IndexOf('#endregion', $loaderStart)
+    if ($markerEnd -ge 0) {
+        # 连同 #endregion 所在行一并剥离
+        $nl = $srcText.IndexOf("`n", $markerEnd)
+        $loaderEnd = if ($nl -ge 0) { $nl + 1 } else { $markerEnd + 10 }
     }
+}
+if ($loaderStart -lt 0 -or $loaderEnd -lt 0) {
+    $loaderStart = $srcText.IndexOf('#  加载页面函数')
+    if ($loaderStart -ge 0) {
+        $loaderEnd = $srcText.IndexOf('if (Test-Path $pfPath) { . $pfPath }', $loaderStart)
+        if ($loaderEnd -ge 0) {
+            # 必须连同 foreach 的收尾 "}"（含换行）一并剥离，
+            # 否则孤儿大括号会让编译后的脚本在启动时报语法错误
+            $braceLine = $srcText.IndexOf("`n}", $loaderEnd)
+            if ($braceLine -ge 0) {
+                $nl = $srcText.IndexOf("`n", $braceLine + 1)
+                $loaderEnd = if ($nl -ge 0) { $nl + 1 } else { $braceLine + 2 }
+            } else {
+                $nl = $srcText.IndexOf("`n", $loaderEnd)
+                $loaderEnd = if ($nl -ge 0) { $nl + 1 } else { $loaderEnd }
+            }
+        }
+    }
+}
+if ($loaderStart -ge 0 -and $loaderEnd -gt $loaderStart) {
+    $srcText = $srcText.Remove($loaderStart, $loaderEnd - $loaderStart)
+    Write-Host "[构建] 已剥离页面加载器段" -ForegroundColor DarkGray
+} else {
+    Write-Host "[构建] 警告：未能定位页面加载器段，若重复加载页面函数请检查 #region 标记" -ForegroundColor Yellow
 }
 $parts += $srcText
 

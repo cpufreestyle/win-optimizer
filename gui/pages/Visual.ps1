@@ -49,52 +49,16 @@
         $selectedMode = 1
         for ($i = 0; $i -lt 3; $i++) { if ($script:radioBtns[$i].Checked) { $selectedMode = $script:modes[$i].Value } }
 
-        $backupFile = Join-Path $script:BackupDir "visual_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
-
         $this.Enabled = $false
         $this.Text = "应用中..."
         Invoke-UIRefresh
 
-        $visualKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
-        if (-not (Test-Path $visualKey)) { New-Item -Path $visualKey -Force | Out-Null }
-
-        if ($selectedMode -eq 1) {
-            # 最佳性能
-            Set-ItemProperty -Path $visualKey -Name "VisualFXSetting" -Value 3 -Type DWord
-            $perfKey = "HKCU:\Control Panel\Desktop"
-            Set-ItemProperty -Path $perfKey -Name "DragFullWindows" -Value "0" -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path $perfKey -Name "FontSmoothing" -Value "2" -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path $perfKey -Name "MenuShowDelay" -Value "0" -ErrorAction SilentlyContinue
-            $advKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
-            Set-ItemProperty -Path $advKey -Name "TaskbarAnimations" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path $advKey -Name "ListviewAlphaSelect" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-            $dwmKey = "HKCU:\Software\Microsoft\Windows\DWM"
-            Set-ItemProperty -Path $dwmKey -Name "EnableAeroPeek" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-            Write-Log "视觉效果: 最佳性能模式已应用" "SUCCESS"
-        }
-        elseif ($selectedMode -eq 2) {
-            # 平衡
-            Set-ItemProperty -Path $visualKey -Name "VisualFXSetting" -Value 3 -Type DWord
-            $perfKey = "HKCU:\Control Panel\Desktop"
-            Set-ItemProperty -Path $perfKey -Name "DragFullWindows" -Value "1" -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path $perfKey -Name "FontSmoothing" -Value "2" -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path $perfKey -Name "MenuShowDelay" -Value "100" -ErrorAction SilentlyContinue
-            $advKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
-            Set-ItemProperty -Path $advKey -Name "TaskbarAnimations" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-            $dwmKey = "HKCU:\Software\Microsoft\Windows\DWM"
-            Set-ItemProperty -Path $dwmKey -Name "EnableAeroPeek" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-            Write-Log "视觉效果: 平衡模式已应用" "SUCCESS"
-        }
-        else {
-            # 自定义 — 简化版
-            Set-ItemProperty -Path $visualKey -Name "VisualFXSetting" -Value 3 -Type DWord
-            $advKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
-            Set-ItemProperty -Path $advKey -Name "TaskbarAnimations" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-            Write-Log "视觉效果: 自定义模式已应用" "SUCCESS"
-        }
-
-        # 重启资源管理器
-        try { Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue; Start-Sleep 1; Start-Process explorer } catch {}
+        # 统一走共享库：先备份再应用。
+        # 此前 GUI 里的 $backupFile 只是个死变量，从未真正备份，导致视觉效果不可恢复；
+        # 且「最佳性能」缺少 UserPreferencesMask / MinAnimate / AlwaysHibernateThumbnails 等项——一并修复。
+        $r = Set-VisualEffectProfile -Profile $selectedMode -BackupDir $script:BackupDir
+        Write-Log "视觉效果备份: $($r.backup)"
+        Write-Log "视觉效果: $($r.details -join "、") 已应用" "SUCCESS"
 
         $this.Enabled = $true
         $this.Text = "应用视觉效果"
