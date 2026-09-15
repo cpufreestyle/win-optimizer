@@ -1102,3 +1102,245 @@ function Invoke-NetworkOptimization {
         adapters = $adapters.Count
     }
 }
+
+# ============================================================
+#  磁盘（CLI / GUI / WebUI 三端统一实现）
+# ============================================================
+# 背景：三端的实现路径与"正确性"都已漂移
+#   1) CLI 用 WMI + defrag.exe（Win7 可用）；WebUI 用 Storage 模块的
+#      Get-PhysicalDisk / Get-Volume / Optimize-Volume —— 该模块在 Win7 上
+#      根本不存在，WebUI 在 Win7 会直接失败。
+#   2) GUI / WebUI 对"每个卷同时执行 TRIM 和碎片整理"，且不区分 SSD/HDD
+#      —— 对 SSD 做碎片整理是无谓写入、损耗寿命。
+#   3) GUI 的 SSD 判定（Get-PhysicalDiskCompat）把 WMI 的
+#      "Fixed hard disk media" 一律判成 HDD，导致 SSD 也被当成 HDD 整理。
+#
+# 统一策略（按要求优先保证 Win7 兼容）：
+#   - 全部走 WMI + defrag.exe + fsutil，不使用 Storage 模块。
+#   - TRIM 只用于 SSD；碎片整理只用于 HDD。
+#   - defrag /L（TRIM）在 Win7 不可用，自动跳过（Win7 会自动执行 TRIM）。
+
+# Win7 及更早（defrag /L 不可用）。版本号 < 6.2 视为旧系统。
+function Test-IsLegacyWindows {
+    try {
+        $os = Get-WmiObject -Class Win32_OperatingSystem -ErrorAction Stop
+        $v = [version]$os.Version
+        return ($v.Major -lt 6 -or ($v.Major -eq 6 -and $v.Minor -lt 2))
+    } catch { return $false }
+}
+
+# 物理磁盘（WMI Win32_DiskDrive，Win7 可用）
+# 注意：WMI 的 MediaType 对 SSD 通常也返回 "Fixed hard disk media"，
+# 因此这里只在"明确匹配到 SSD"时才判 SSD，其余一律 Unknown，交由后续手段判定。
+function Get-PhysicalDiskInfo {
+    $disks = @()
+    try {
+        foreach ($d in @(Get-WmiObject -Class Win32_DiskDrive -ErrorAction Stop)) {
+            $media = 'Unknown'
+            if ($d.MediaType -match 'SSD|Solid State') { $media = 'SSD' }
+            $disks += [PSCustomObject]@{
+                DeviceId     = [int]$d.Index
+                FriendlyName = $d.Model
+                MediaType    = $media
+                Size         = $d.Size
+            }
+        }
+    } catch { }
+
+    # 增强：Win8+ 的 MSFT_PhysicalDisk 能准确区分 SSD(4) / HDD(3)。
+    # Win7 没有该命名空间，Get-WmiObject 会失败并被 catch 忽略 —— 不影响 Win7 兼容。
+    # 该类不提供与 Win32_DiskDrive.Index 的直接对应，这里按"容量"匹配回写。
+    try {
+        $msft = @(Get-WmiObject -Namespace 'root\Microsoft\Windows\Storage' -Class MSFT_PhysicalDisk -ErrorAction Stop)
+        if ($msft.Count -gt 0) {
+            # MSFT_PhysicalDisk.DeviceId 与 Win32_DiskDrive.Index 实测是一一对应的，
+            # 按此对应即可。（注意：两者 Size 有数 MB 级差异，不能用来做匹配依据。）
+            foreach ($d in $disks) {
+                if ($d.MediaType -ne 'Unknown') { continue }
+                $match = @($msft | Where-Object { [string]$_.DeviceId -eq [string]$d.DeviceId })[0]
+                if (-not $match) { continue }
+                if ($match.MediaType -eq 4) { $d.MediaType = 'SSD' }
+                elseif ($match.MediaType -eq 3) { $d.MediaType = 'HDD' }
+                # 0 = Unspecified（Windows 自身也无法判定）→ 保持 Unknown，
+                # 交给后面的 defrag /A 分析或 fsutil 兜底
+            }
+        }
+    } catch { }
+
+    return $disks
+}
+
+# 固定卷（WMI Win32_LogicalDisk DriveType=3，Win7 可用）
+function Get-FixedVolumeList {
+    $vols = @()
+    try {
+        foreach ($ld in @(Get-WmiObject -Class Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop)) {
+            $vols += [PSCustomObject]@{
+                DriveLetter   = $ld.DeviceID.Substring(0, 1)
+                Size          = $ld.Size
+                SizeRemaining = $ld.FreeSpace
+            }
+        }
+    } catch { }
+    return $vols
+}
+
+# 盘符 -> 介质类型（WMI 关联：逻辑盘 → 分区 → 物理盘）
+function Get-DriveMediaMap {
+    $map = @{}
+    try {
+        $diskMedia = @{}
+        foreach ($d in (Get-PhysicalDiskInfo)) { $diskMedia[[string]$d.DeviceId] = $d.MediaType }
+        foreach ($ld in @(Get-WmiObject -Class Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop)) {
+            $letter = $ld.DeviceID.Substring(0, 1)
+            $media  = 'Unknown'
+            try {
+                $parts = @(Get-WmiObject -Query ("ASSOCIATORS OF {Win32_LogicalDisk.DeviceID='" + $ld.DeviceID + "'} WHERE AssocClass=Win32_LogicalDiskToPartition") -ErrorAction Stop)
+                foreach ($p in $parts) {
+                    $drives = @(Get-WmiObject -Query ("ASSOCIATORS OF {Win32_DiskPartition.DeviceID='" + $p.DeviceID + "'} WHERE AssocClass=Win32_DiskDriveToDiskPartition") -ErrorAction Stop)
+                    foreach ($drv in $drives) {
+                        $m = $diskMedia[[string]$drv.Index]
+                        if ($m -and $m -ne 'Unknown') { $media = $m; break }
+                    }
+                    if ($media -ne 'Unknown') { break }
+                }
+            } catch { }
+            $map[$letter] = $media
+        }
+    } catch { }
+    return $map
+}
+
+# 判断单个卷是 SSD 还是 HDD（Win7 兼容的多级回退）
+# 顺序：WMI 显式 SSD → defrag /A 分析（Win8+ 逐卷精确）→ fsutil → 兜底 HDD
+function Get-VolumeMediaType {
+    param([string]$DriveLetter, [hashtable]$MediaMap)
+    $letter = $DriveLetter.Substring(0, 1).ToUpper()
+
+    if ($MediaMap -and $MediaMap.ContainsKey($letter) -and $MediaMap[$letter] -eq 'SSD') { return 'SSD' }
+
+    # defrag /A 分析报告：Win8+ 会给出媒体类型，Win7 无此信息（会落空继续往下）
+    try {
+        $info = (defrag.exe "$letter`:" /A /U /V 2>&1 | Out-String)
+        if ($info -match 'SSD|固态|Solid') { return 'SSD' }
+        if ($info -match 'HDD|硬盘|机械|Hard disk') { return 'HDD' }
+    } catch { }
+
+    # fsutil：DisableDeleteNotify=0 表示系统启用了 TRIM（通常即存在 SSD）
+    try {
+        $out = (fsutil behavior query disabledeletenotify 2>&1 | Out-String)
+        if ($out -match 'DisableDeleteNotify\s*=\s*0') { return 'SSD' }
+    } catch { }
+
+    return 'HDD'
+}
+
+# 对单个卷执行优化：SSD→TRIM，HDD→碎片整理（避免对 SSD 做碎片整理）
+function Invoke-VolumeOptimization {
+    param(
+        [string]$DriveLetter,
+        [string]$MediaType,
+        [switch]$Trim,
+        [switch]$Defrag,
+        [switch]$WhatIf
+    )
+    $letter = $DriveLetter.Substring(0, 1).ToUpper()
+    $drive  = "$letter`:"
+    $result = [PSCustomObject]@{ drive = $drive; media = $MediaType; action = '无'; ok = $true; note = '' }
+
+    if ($MediaType -eq 'SSD') {
+        if (-not $Trim) { return $result }
+        if (Test-IsLegacyWindows) {
+            $result.action = 'TRIM(跳过)'
+            $result.note   = 'Win7 及更早不支持 defrag /L；Win7 会自动执行 TRIM'
+        } elseif ($WhatIf) {
+            $result.action = 'TRIM(预演)'
+        } else {
+            defrag.exe $drive /L /O /U /V 2>&1 | Out-Null
+            $result.action = 'TRIM'
+        }
+    } else {
+        if (-not $Defrag) { return $result }
+        if ($WhatIf) {
+            $result.action = '碎片整理(预演)'
+        } else {
+            # 不带 /D：纯 defrag 在 Win7 及以后均可用
+            defrag.exe $drive /U /V 2>&1 | Out-Null
+            $result.action = '碎片整理'
+        }
+    }
+    return $result
+}
+
+# 清理 WinSxS 组件存储
+function Invoke-WinSxSCleanup {
+    param([switch]$WhatIf)
+    if ($WhatIf) { return 'WinSxS 组件清理(预演)' }
+    Dism.exe /Online /Cleanup-Image /StartComponentCleanup 2>&1 | Out-Null
+    return 'WinSxS 组件清理完成'
+}
+
+# CompactOS 系统文件压缩（可选；-Enable 关闭时表示取消压缩）
+function Set-CompactOSState {
+    param([switch]$Enable, [switch]$WhatIf)
+    if ($WhatIf) { return 'CompactOS(预演)' }
+    if ($Enable) {
+        Compact.exe /CompactOS:always 2>&1 | Out-Null
+        return '系统文件压缩完成'
+    }
+    Compact.exe /CompactOS:never 2>&1 | Out-Null
+    return '已取消系统文件压缩'
+}
+
+# 编排：逐卷判定介质后择优优化 + 可选的 WinSxS / CompactOS。
+# 返回 @{ok;details;volumes;mediaMap}
+function Invoke-DiskOptimization {
+    param(
+        [bool]$Trim = $true,
+        [bool]$Defrag = $true,
+        [bool]$WinSxS = $true,
+        [bool]$Compact = $false,
+        [string[]]$DriveLetters,
+        [switch]$WhatIf
+    )
+    $vols = @(Get-FixedVolumeList)
+    if ($DriveLetters -and $DriveLetters.Count -gt 0) {
+        $set = @($DriveLetters | ForEach-Object { $_.Substring(0, 1).ToUpper() })
+        $vols = @($vols | Where-Object { $set -contains $_.DriveLetter.ToUpper() })
+    }
+
+    $details = @()
+    $ok      = $true
+    $mediaMap = Get-DriveMediaMap
+
+    foreach ($v in $vols) {
+        $media = Get-VolumeMediaType -DriveLetter $v.DriveLetter -MediaMap $mediaMap
+        try {
+            $r = Invoke-VolumeOptimization -DriveLetter $v.DriveLetter -MediaType $media `
+                                           -Trim:$Trim -Defrag:$Defrag -WhatIf:$WhatIf
+            $line = "$($r.drive) [$($r.media)] $($r.action)"
+            if ($r.note) { $line += " — $($r.note)" }
+            $details += $line
+            if (-not $r.ok) { $ok = $false }
+        } catch {
+            $details += "$($v.DriveLetter): [$media] 失败: $($_.Exception.Message)"
+            $ok = $false
+        }
+    }
+
+    if ($WinSxS) {
+        try { $details += (Invoke-WinSxSCleanup -WhatIf:$WhatIf) }
+        catch { $details += "WinSxS 清理失败: $($_.Exception.Message)"; $ok = $false }
+    }
+    if ($Compact) {
+        try { $details += (Set-CompactOSState -Enable -WhatIf:$WhatIf) }
+        catch { $details += "CompactOS 失败: $($_.Exception.Message)"; $ok = $false }
+    }
+
+    return [PSCustomObject]@{
+        ok       = $ok
+        details  = $details
+        volumes  = $vols.Count
+        mediaMap = $mediaMap
+    }
+}

@@ -530,3 +530,81 @@ Describe 'Optimize.Core network (shared by CLI/GUI/WebUI)' {
         }
     }
 }
+
+Describe 'Optimize.Core disk (shared by CLI/GUI/WebUI, Win7 compatible)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+
+    It 'Test-IsLegacyWindows returns a boolean' {
+        (Test-IsLegacyWindows) | Should -BeOfType [bool]
+    }
+
+    It 'Get-PhysicalDiskInfo exposes required properties' {
+        foreach ($d in @(Get-PhysicalDiskInfo)) {
+            $d.PSObject.Properties.Name | Should -Contain 'DeviceId'
+            $d.PSObject.Properties.Name | Should -Contain 'FriendlyName'
+            $d.PSObject.Properties.Name | Should -Contain 'MediaType'
+            $d.PSObject.Properties.Name | Should -Contain 'Size'
+        }
+    }
+
+    It 'Get-FixedVolumeList exposes DriveLetter and sizes' {
+        $vols = @(Get-FixedVolumeList)
+        $vols.Count | Should -BeGreaterThan 0
+        foreach ($v in $vols) {
+            $v.DriveLetter | Should -Not -BeNullOrEmpty
+            $v.PSObject.Properties.Name | Should -Contain 'Size'
+            $v.PSObject.Properties.Name | Should -Contain 'SizeRemaining'
+        }
+    }
+
+    It 'Get-DriveMediaMap returns a hashtable' {
+        (Get-DriveMediaMap) | Should -BeOfType [hashtable]
+    }
+
+    It 'Get-VolumeMediaType resolves to SSD or HDD' {
+        $vols = @(Get-FixedVolumeList)
+        $m = Get-VolumeMediaType -DriveLetter $vols[0].DriveLetter -MediaMap (Get-DriveMediaMap)
+        @('SSD', 'HDD') | Should -Contain $m
+    }
+
+    # ---- 关键回归：SSD 只做 TRIM，绝不做碎片整理 ----
+    # 对 SSD 做碎片整理是无谓写入、损耗寿命；GUI / WebUI 此前对每个卷同时执行两者。
+    It 'Invoke-VolumeOptimization does NOT defrag an SSD' {
+        $r = Invoke-VolumeOptimization -DriveLetter 'C' -MediaType 'SSD' -Defrag -WhatIf
+        $r.action | Should -Be '无'
+    }
+
+    It 'Invoke-VolumeOptimization does NOT trim an HDD' {
+        $r = Invoke-VolumeOptimization -DriveLetter 'C' -MediaType 'HDD' -Trim -WhatIf
+        $r.action | Should -Be '无'
+    }
+
+    It 'Invoke-VolumeOptimization previews TRIM for SSD' {
+        $r = Invoke-VolumeOptimization -DriveLetter 'C' -MediaType 'SSD' -Trim -WhatIf
+        @('TRIM(预演)', 'TRIM(跳过)') | Should -Contain $r.action
+    }
+
+    It 'Invoke-VolumeOptimization previews defrag for HDD' {
+        $r = Invoke-VolumeOptimization -DriveLetter 'C' -MediaType 'HDD' -Defrag -WhatIf
+        $r.action | Should -Be '碎片整理(预演)'
+    }
+
+    It 'Invoke-WinSxSCleanup -WhatIf previews only' {
+        (Invoke-WinSxSCleanup -WhatIf) | Should -Match '预演'
+    }
+
+    It 'Set-CompactOSState -WhatIf previews only' {
+        (Set-CompactOSState -Enable -WhatIf) | Should -Match '预演'
+    }
+
+    It 'Invoke-DiskOptimization -WhatIf returns per-volume details' {
+        # 限定 C: 以控制耗时（介质判定会调用 defrag /A 分析）
+        $r = Invoke-DiskOptimization -Trim $true -Defrag $true -WinSxS $false -Compact $false `
+                                     -DriveLetters @('C') -WhatIf
+        $r | Should -Not -BeNullOrEmpty
+        $r.details | Should -Not -BeNull
+        $r.volumes | Should -BeGreaterThan 0
+    }
+}
