@@ -1344,3 +1344,281 @@ function Invoke-DiskOptimization {
         mediaMap = $mediaMap
     }
 }
+
+# ============================================================
+#  系统体检（只读）与优化前后对比
+# ============================================================
+# 复述已有 Get-* 只读函数，对五个域做一次可观测状态扫描，产出：
+#   - metrics：各域量化指标（用于前后对比）
+#   - issues ：问题清单（带严重级别与扣分）
+#   - score  ：0-100 体检分
+# 全程只读，不修改任何系统设置；报告可存为 JSON 以便优化前后对比。
+
+# 体检项：严重级别决定扣分权重
+function New-HealthIssue {
+    param(
+        [string]$Id,
+        [string]$Severity,   # High / Medium / Low
+        [string]$Title,
+        [string]$Detail,
+        [string]$Suggestion
+    )
+    $penalty = switch ($Severity) {
+        'High'   { 15 }
+        'Medium' { 8 }
+        default  { 3 }
+    }
+    return [PSCustomObject]@{
+        id         = $Id
+        severity   = $Severity
+        title      = $Title
+        detail     = $Detail
+        suggestion = $Suggestion
+        penalty    = $penalty
+    }
+}
+
+# 只读扫描，生成体检报告
+function Get-SystemHealthReport {
+    param([switch]$SkipCleanScan)
+
+    $issues  = @()
+    $metrics = [ordered]@{}
+
+    # --- 内存 ---
+    $memTotalMB = 0
+    $memFreeMB  = 0
+    try {
+        $os         = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        $memTotalMB = [math]::Round($os.TotalVisibleMemorySize / 1KB, 0)
+        $memFreeMB  = [math]::Round($os.FreePhysicalMemory   / 1KB, 0)
+    } catch { }
+    $memFreePct = if ($memTotalMB -gt 0) { [math]::Round($memFreeMB / $memTotalMB * 100, 1) } else { 0 }
+    $metrics.totalRamMB = $memTotalMB
+    $metrics.freeRamMB  = $memFreeMB
+    $metrics.freeRamPct = $memFreePct
+    if ($memTotalMB -gt 0 -and $memFreePct -lt 20) {
+        $issues += New-HealthIssue 'memory.low' 'High' '可用内存偏低' `
+            "可用 ${memFreeMB}MB / 共 ${memTotalMB}MB（${memFreePct}%）" `
+            '关闭占用内存的程序，或减少开机启动项（菜单 [4]）'
+    }
+
+    # --- 服务：仍为自动启动的可优化服务 ---
+    $svcList = @(Get-ServiceList)
+    $autoSvc = @()
+    try {
+        $cimSvc = @(Get-CimInstance Win32_Service -ErrorAction Stop)
+        foreach ($s in $svcList) {
+            $hit = @($cimSvc | Where-Object { $_.Name -eq $s.Name })[0]
+            if ($hit -and $hit.StartMode -eq 'Auto') { $autoSvc += $s.Name }
+        }
+    } catch { }
+    $metrics.optimizableServices = $svcList.Count
+    $metrics.servicesStillAuto   = $autoSvc.Count
+    if ($autoSvc.Count -gt 0) {
+        $issues += New-HealthIssue 'services.auto' 'Medium' "$($autoSvc.Count) 个可优化服务仍自动启动" `
+            ($autoSvc -join '、') '使用菜单 [3] 服务优化禁用不必要的后台服务'
+    }
+
+    # --- 启动项 ---
+    $startups = @(Get-StartupItems)
+    $metrics.startupCount = $startups.Count
+    if ($startups.Count -gt 15) {
+        $issues += New-HealthIssue 'startup.many' 'Medium' "开机启动项偏多（$($startups.Count) 项）" `
+            '启动项越多，开机越慢、后台占用越高' '使用菜单 [4] 启动项优化'
+    }
+
+    # --- 视觉效果：统计尚未关闭的特效开关 ---
+    $toggles = @(Get-VisualEffectToggles)
+    $visualLeft = @()
+    foreach ($t in $toggles) {
+        $cur = $null
+        try {
+            $p = Get-ItemProperty -Path $t.RegKey -Name $t.RegValue -ErrorAction SilentlyContinue
+            if ($p) { $cur = $p.PSObject.Properties[$t.RegValue].Value }
+        } catch { }
+        # 键缺失时 Windows 默认即开启该特效，同样计为"未优化"
+        if ($null -eq $cur) { $visualLeft += $t.Name }
+        elseif ([string]$cur -ne [string]$t.RegData) { $visualLeft += $t.Name }
+    }
+    $metrics.visualTogglesTotal = $toggles.Count
+    $metrics.visualTogglesLeft  = $visualLeft.Count
+    $metrics.visualFXSetting    = Get-VisualEffectState
+    if ($visualLeft.Count -gt 0) {
+        $issues += New-HealthIssue 'visual.effects' 'Low' "$($visualLeft.Count)/$($toggles.Count) 项视觉特效仍开启" `
+            ($visualLeft -join '、') '使用菜单 [5] 视觉效果优化切换为"最佳性能"'
+    }
+
+    # --- 电源计划 ---
+    $planGuid  = Get-ActivePowerPlan
+    $planTitle = '未知'
+    try {
+        $hitPlan = @(Get-PowerPlanCatalog | Where-Object { $_.GUID -eq $planGuid })[0]
+        if ($hitPlan) { $planTitle = $hitPlan.Title }
+        elseif ($planGuid) { $planTitle = $planGuid }
+    } catch { }
+    $metrics.powerPlanGuid  = $planGuid
+    $metrics.powerPlanTitle = $planTitle
+    if ($planGuid -eq '381b4222-f694-41f0-9685-ff5bb260df2e') {
+        $issues += New-HealthIssue 'power.balanced' 'Medium' '当前为"平衡"电源计划' `
+            '平衡计划会限制 CPU 频率，老电脑上体感更明显' '使用菜单 [6] 切换为高性能/卓越性能'
+    }
+
+    # --- 磁盘空间 ---
+    $vols     = @(Get-FixedVolumeList)
+    $mediaMap = Get-DriveMediaMap
+    $diskList = @()
+    $tightDisks = @()
+    foreach ($v in $vols) {
+        $totalGB = if ($v.Size)          { [math]::Round([double]$v.Size / 1GB, 1) }          else { 0 }
+        $freeGB  = if ($v.SizeRemaining) { [math]::Round([double]$v.SizeRemaining / 1GB, 1) } else { 0 }
+        $usedPct = if ($v.Size -gt 0)    { [math]::Round((1 - ([double]$v.SizeRemaining / [double]$v.Size)) * 100, 1) } else { 0 }
+        $media = if ($mediaMap -and $mediaMap.ContainsKey($v.DriveLetter)) { $mediaMap[$v.DriveLetter] } else { 'Unknown' }
+        $diskList += [PSCustomObject]@{
+            drive   = $v.DriveLetter
+            media   = $media
+            totalGB = $totalGB
+            freeGB  = $freeGB
+            usedPct = $usedPct
+        }
+        if ($usedPct -ge 90 -or ($freeGB -ge 0 -and $freeGB -lt 10 -and $totalGB -gt 0)) {
+            $tightDisks += "$($v.DriveLetter): (可用 ${freeGB}GB / 已用 ${usedPct}%)"
+        }
+    }
+    $metrics.volumes = $diskList
+    $metrics.tightDisks = $tightDisks.Count
+    if ($tightDisks.Count -gt 0) {
+        $issues += New-HealthIssue 'disk.space' 'High' "$($tightDisks.Count) 个分区空间紧张" `
+            ($tightDisks -join '；') '使用菜单 [2] 清理临时文件、[7] 磁盘优化'
+    }
+
+    # --- 可清理空间（递归统计，较慢，可用 -SkipCleanScan 跳过）---
+    if (-not $SkipCleanScan) {
+        $cleanable = 0
+        $perTarget = @()
+        foreach ($t in @(Get-CleanTargets)) {
+            $b = Get-FolderSize $t.path
+            if ($b -gt 0) {
+                $perTarget += [PSCustomObject]@{ name = $t.name; mb = [math]::Round($b / 1MB, 1) }
+                $cleanable += $b
+            }
+        }
+        $metrics.cleanableMB = [math]::Round($cleanable / 1MB, 1)
+        $metrics.cleanTargets = $perTarget
+        if ($metrics.cleanableMB -gt 500) {
+            $issues += New-HealthIssue 'disk.cleanable' 'Medium' "可回收约 $($metrics.cleanableMB) MB" `
+                '临时文件/缓存/更新下载缓存等占用较多空间' '使用菜单 [2] 临时文件清理'
+        }
+    }
+
+    # --- 网络 ---
+    $adapters = @(Get-ActiveNetAdapters)
+    $dnsInfo  = @()
+    $fastDns  = @(Get-DnsOptions | ForEach-Object { $_.Primary })
+    foreach ($a in $adapters) {
+        $dns = @(Get-AdapterDns -IfIndex $a.IfIndex -Name $a.Name)
+        $dnsInfo += [PSCustomObject]@{ name = $a.Name; dns = ($dns -join ', ') }
+        $isFast = $false
+        foreach ($d in $dns) { if ($fastDns -contains $d) { $isFast = $true; break } }
+        if (-not $isFast -and $dns.Count -gt 0) {
+            $issues += New-HealthIssue "network.dns.$($a.Name)" 'Low' "适配器 $($a.Name) 未使用公共快速 DNS" `
+                "当前 DNS: $($dns -join ', ')" '使用菜单 [8] 网络优化切换为 Cloudflare / 阿里 / 114 等'
+        }
+    }
+    $metrics.activeAdapters = $adapters.Count
+    $metrics.adapters       = $dnsInfo
+
+    # --- 汇总 ---
+    $penalty = 0
+    foreach ($i in $issues) { $penalty += $i.penalty }
+    $score = 100 - $penalty
+    if ($score -lt 0) { $score = 0 }
+    $grade = if ($score -ge 90) { '良好' }
+             elseif ($score -ge 75) { '一般' }
+             elseif ($score -ge 60) { '建议优化' }
+             else { '亟需优化' }
+
+    $hostName = $env:COMPUTERNAME
+    return [PSCustomObject]@{
+        timestamp = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        host      = $hostName
+        version   = (Get-OptVersion)
+        score     = $score
+        grade     = $grade
+        metrics   = [PSCustomObject]$metrics
+        issues    = $issues
+    }
+}
+
+# 保存体检报告为 JSON，返回文件路径（存于 <备份目录>/health）
+function Save-HealthReport {
+    param([object]$Report, [string]$BackupDir)
+    $dir = Join-Path (Get-OptBackupDir -BackupDir $BackupDir) 'health'
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    # 文件名精确到秒；同一秒内重复保存会互相覆盖，故存在时追加序号
+    $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $file  = Join-Path $dir ("health_$stamp.json")
+    $n = 1
+    while (Test-Path $file) {
+        $n++
+        $file = Join-Path $dir ("health_${stamp}_$n.json")
+    }
+    $Report | ConvertTo-Json -Depth 8 | Out-File -FilePath $file -Encoding UTF8
+    return $file
+}
+
+# 列出历史体检报告文件（按时间倒序）
+function Get-HealthHistory {
+    param([string]$BackupDir, [int]$Count = 10)
+    $dir = Join-Path (Get-OptBackupDir -BackupDir $BackupDir) 'health'
+    if (-not (Test-Path $dir)) { return @() }
+    return @(Get-ChildItem -Path $dir -Filter 'health_*.json' -File -ErrorAction SilentlyContinue |
+             Sort-Object Name -Descending | Select-Object -First $Count)
+}
+
+# 读取上一份体检报告（可排除刚保存的这份）
+function Get-PreviousHealthReport {
+    param([string]$BackupDir, [string]$ExcludeFile)
+    foreach ($f in @(Get-HealthHistory -BackupDir $BackupDir -Count 5)) {
+        if ($ExcludeFile -and $f.FullName -eq $ExcludeFile) { continue }
+        try {
+            return (Get-Content $f.FullName -Raw -Encoding UTF8 | ConvertFrom-Json)
+        } catch { }
+    }
+    return $null
+}
+
+# 对比两份体检报告，返回分数变化、已解决问题、新增问题、指标差值
+function Compare-HealthReports {
+    param([object]$Before, [object]$After)
+    if (-not $Before -or -not $After) { return $null }
+
+    $beforeIds = @($Before.issues | ForEach-Object { $_.id })
+    $afterIds  = @($After.issues  | ForEach-Object { $_.id })
+
+    $deltas = @()
+    foreach ($p in $Before.metrics.PSObject.Properties) {
+        $bv   = $p.Value
+        $av   = $After.metrics.($p.Name)
+        $bNum = 0.0
+        $aNum = 0.0
+        if ($null -eq $av) { continue }
+        if ([double]::TryParse([string]$bv, [ref]$bNum) -and [double]::TryParse([string]$av, [ref]$aNum)) {
+            $d = [math]::Round($aNum - $bNum, 2)
+            if ($d -ne 0) {
+                $deltas += [PSCustomObject]@{ metric = $p.Name; before = $bv; after = $av; delta = $d }
+            }
+        }
+    }
+
+    return [PSCustomObject]@{
+        beforeScore  = [int]$Before.score
+        afterScore   = [int]$After.score
+        scoreDelta   = ([int]$After.score - [int]$Before.score)
+        beforeTime   = $Before.timestamp
+        afterTime    = $After.timestamp
+        resolved     = @($Before.issues | Where-Object { $afterIds  -notcontains $_.id })
+        new          = @($After.issues  | Where-Object { $beforeIds -notcontains $_.id })
+        metricDeltas = $deltas
+    }
+}

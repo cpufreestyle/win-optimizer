@@ -608,3 +608,121 @@ Describe 'Optimize.Core disk (shared by CLI/GUI/WebUI, Win7 compatible)' {
         $r.volumes | Should -BeGreaterThan 0
     }
 }
+
+Describe 'Optimize.Core health check and before/after comparison' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+        # 体检用 -SkipCleanScan：跳过递归统计可清理空间，避免测试变慢
+        $script:HcOpt = @{ SkipCleanScan = $true }
+    }
+
+    It 'New-HealthIssue assigns penalty by severity' {
+        (New-HealthIssue -Id 'x' -Severity 'High'   -Title 't' -Detail 'd' -Suggestion 's').penalty | Should -Be 15
+        (New-HealthIssue -Id 'x' -Severity 'Medium' -Title 't' -Detail 'd' -Suggestion 's').penalty | Should -Be 8
+        (New-HealthIssue -Id 'x' -Severity 'Low'    -Title 't' -Detail 'd' -Suggestion 's').penalty | Should -Be 3
+    }
+
+    It 'Get-SystemHealthReport returns required top-level fields' {
+        $r = Get-SystemHealthReport @script:HcOpt
+        $r.timestamp | Should -Not -BeNullOrEmpty
+        $r.PSObject.Properties.Name | Should -Contain 'score'
+        $r.PSObject.Properties.Name | Should -Contain 'grade'
+        $r.PSObject.Properties.Name | Should -Contain 'metrics'
+        $r.PSObject.Properties.Name | Should -Contain 'issues'
+    }
+
+    It 'Get-SystemHealthReport score stays within 0..100' {
+        $r = Get-SystemHealthReport @script:HcOpt
+        $r.score | Should -BeGreaterOrEqual 0
+        $r.score | Should -BeLessOrEqual 100
+    }
+
+    It 'Get-SystemHealthReport score = 100 - total penalty (floored at 0)' {
+        $r = Get-SystemHealthReport @script:HcOpt
+        $penalty = 0
+        foreach ($i in @($r.issues)) { $penalty += $i.penalty }
+        $expected = if ($penalty -ge 100) { 0 } else { 100 - $penalty }
+        $r.score | Should -Be $expected
+    }
+
+    It 'Get-SystemHealthReport metrics expose key indicators' {
+        $r = Get-SystemHealthReport @script:HcOpt
+        $names = $r.metrics.PSObject.Properties.Name
+        $names | Should -Contain 'freeRamPct'
+        $names | Should -Contain 'startupCount'
+        $names | Should -Contain 'servicesStillAuto'
+        $names | Should -Contain 'visualTogglesLeft'
+        $names | Should -Contain 'powerPlanTitle'
+        $names | Should -Contain 'activeAdapters'
+    }
+
+    It 'Save-HealthReport writes a readable JSON with same score' {
+        $tmp = Join-Path $env:TEMP ('health_' + (New-Guid).ToString('N'))
+        try {
+            $r = Get-SystemHealthReport @script:HcOpt
+            $f = Save-HealthReport -Report $r -BackupDir $tmp
+            Test-Path $f | Should -BeTrue
+            $loaded = Get-Content $f -Raw | ConvertFrom-Json
+            $loaded.score | Should -Be $r.score
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Save-HealthReport never overwrites within the same second' {
+        $tmp = Join-Path $env:TEMP ('health2_' + (New-Guid).ToString('N'))
+        try {
+            $r = Get-SystemHealthReport @script:HcOpt
+            $f1 = Save-HealthReport -Report $r -BackupDir $tmp
+            $f2 = Save-HealthReport -Report $r -BackupDir $tmp
+            $f1 | Should -Not -Be $f2
+            (@(Get-HealthHistory -BackupDir $tmp)).Count | Should -Be 2
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Get-PreviousHealthReport loads latest and honours ExcludeFile' {
+        $tmp = Join-Path $env:TEMP ('health3_' + (New-Guid).ToString('N'))
+        try {
+            $r = Get-SystemHealthReport @script:HcOpt
+            $f = Save-HealthReport -Report $r -BackupDir $tmp
+            (Get-PreviousHealthReport -BackupDir $tmp).score | Should -Be $r.score
+            (Get-PreviousHealthReport -BackupDir $tmp -ExcludeFile $f) | Should -BeNullOrEmpty
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Compare-HealthReports reports no change for identical reports' {
+        $r = Get-SystemHealthReport @script:HcOpt
+        $c = Compare-HealthReports -Before $r -After $r
+        $c.scoreDelta | Should -Be 0
+        @($c.resolved).Count | Should -Be 0
+        @($c.new).Count | Should -Be 0
+    }
+
+    It 'Compare-HealthReports detects resolved issue and metric delta' {
+        # 构造轻量报告（不跑真实扫描），保证确定性与速度
+        $before = [PSCustomObject]@{
+            timestamp = 't1'; score = 70
+            issues    = @((New-HealthIssue 'a' 'High' 'A' 'd' 's'), (New-HealthIssue 'b' 'Low' 'B' 'd' 's'))
+            metrics   = [PSCustomObject]@{ startupCount = 20 }
+        }
+        $after = [PSCustomObject]@{
+            timestamp = 't2'; score = 85
+            issues    = @((New-HealthIssue 'b' 'Low' 'B' 'd' 's'))
+            metrics   = [PSCustomObject]@{ startupCount = 12 }
+        }
+        $c = Compare-HealthReports -Before $before -After $after
+        $c.scoreDelta | Should -Be 15
+        @($c.resolved).Count | Should -Be 1
+        $c.resolved[0].id | Should -Be 'a'
+        @($c.new).Count | Should -Be 0
+        (@($c.metricDeltas | Where-Object { $_.metric -eq 'startupCount' })[0]).delta | Should -Be -8
+    }
+
+    It 'Compare-HealthReports returns null when either side is missing' {
+        (Compare-HealthReports -Before $null -After (Get-SystemHealthReport @script:HcOpt)) | Should -BeNullOrEmpty
+    }
+}
