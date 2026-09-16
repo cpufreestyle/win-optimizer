@@ -1,0 +1,131 @@
+# 项目交接文档（HANDOFF）
+
+> 生成日期：2026-09-16
+> 适用对象：接手 PC-Optimizer-7thGen 维护的开发者
+> 配套文档：`README.md`（用户向）、`docs/DEVELOPMENT.md`（开发向，本文不重复其中的架构 / 配置 / 版本 / SSH 说明）
+
+---
+
+## 1. 一句话定位
+
+为 **7 代及更老 CPU** 的 Windows 电脑（Win7 / 8 / 10 / 11，PowerShell 2.0+）提供一键系统优化。
+三套前端（**CLI / GUI / WebUI**）**共享同一份核心逻辑库** `lib/Optimize.Core.ps1`，避免重复实现与功能漂移。
+
+---
+
+## 2. 当前分支与待合并 PR（最关键）
+
+- 当前工作分支：`perf/folder-size-and-logging`
+- `main` **受保护**，所有改动必须经 PR 合入，且需手动在 GitHub 点「Merge」（无自动 merge 权限）。
+- 待合并：
+
+  | PR | 分支 | 内容 | 状态 |
+  |----|------|------|------|
+  | **#5** | `fix/cli-error-isolation-version` | CLI 全面优化错误隔离 + 版本号收口（B2/B4） | OPEN |
+  | **#6** | `perf/folder-size-and-logging` | 本次最大批量工作（见第 3 节） | OPEN |
+
+- ⚠️ **合并顺序建议：先合 #5，再合 #6**。两个 PR 起点不同，合 #6 前请确认 #5 已先进 main，否则可能冲突。
+- 合并后建议补打 tag `v3.2.1`（发布流程见 `docs/DEVELOPMENT.md`）。
+
+---
+
+## 3. 近期完成的大块工作
+
+### 3.1 B1：五个域的逻辑下沉到 lib
+
+此前三端各写一份优化逻辑，已实际漂移到「改坏无法恢复 / 不区分介质 / 编号三套」等真实缺陷。现已把以下五个域下沉到 `lib/Optimize.Core.ps1`，三端改为 dot-source 调用：
+
+| 域 | lib 关键函数 | 修复的真实缺陷 |
+|----|--------------|----------------|
+| 启动项 | `Get-StartupItems` / `Backup-StartupItems` / `Set-StartupItemState` | GUI/WebUI 备份 CSV 列名与还原逻辑不一致 → 备份**无法被恢复** |
+| 视觉效果 | `Get-VisualEffectProfiles/Toggles/State` / `Backup-VisualEffects` / `Set-VisualEffectProfile` | GUI 备份是死变量（从未真备份）、「最佳性能」设置不彻底 |
+| 电源计划 | `Get-ActivePowerPlan` / `Get-PowerPlanCatalog` / `Set-PowerPlan` / `Backup-PowerPlan` | GUI/WebUI 无备份、无法解锁/回退卓越性能 |
+| 网络 | `Get-ActiveNetAdapters` / `Get-DnsOptions` / `Backup-NetworkSettings` / `Invoke-NetworkOptimization` | GUI/WebUI 改 DNS **完全没有备份**；DNS 选项三端三套；WebUI 把适配器数组直接传给 `-Name` |
+| 磁盘 | `Get-PhysicalDiskInfo` / `Get-FixedVolumeList` / `Get-DriveMediaMap` / `Invoke-DiskOptimization` | WebUI 用 Storage 模块（**Win7 不存在**）；GUI/WebUI 对 SSD 也做碎片整理；SSD 判定失效 |
+
+对应提交：`815b1bd`(启动项) `e111730`(视觉) `f8a8f2f`(电源) `23df87f`(网络) `36126d0`(磁盘)。
+
+### 3.2 一键体检（只读）+ 优化前后对比
+
+新增 `lib` 体检引擎 + 三端入口：
+- **lib**：`Get-SystemHealthReport` / `Save-HealthReport` / `Get-PreviousHealthReport` / `Compare-HealthReports`
+- **CLI**：`scripts/15-HealthCheck.ps1`（菜单 `[15] 一键体检`）
+- **GUI**：`gui/pages/Health.ps1`（侧边栏「系统体检」，第 2 项）
+- **WebUI**：`webui/ps/15_health.ps1` + `app.py` 路由 `/api/health` + MCP 工具 `health_scan` + 前端 `renderHealth()`
+
+体检**只读取系统状态，不改任何设置**；报告存 `backups/health/`（已 gitignore），再次运行可与上一份对比（分数变化 / 已解决问题 / 新增问题 / 指标差值）。
+
+---
+
+## 4. 三端文件地图（按域）
+
+> 命名约定：CLI = `NN-Name.ps1`，GUI 页面 = `gui/pages/Name.ps1`，WebUI = `NN_name.ps1`。
+
+| 域 | CLI | GUI 页面 | WebUI ps | 共享 lib |
+|----|-----|----------|----------|----------|
+| 系统信息 / 仪表盘 | 01-SystemInfo.ps1 | Dashboard.ps1 | 01_system_info.ps1 | `Get-SystemInfo` 等 |
+| 临时文件清理 | 02-CleanTemp.ps1 | Clean.ps1 | 02_clean.ps1 | `Get-CleanTargets`/`Get-FolderSize` |
+| 服务优化 | 03-DisableServices.ps1 | Services.ps1 | 03_services.ps1 | `Get-ServiceList`/`Set-ServiceMode` |
+| 启动项 | 04-StartupOptimize.ps1 | Startup.ps1 | 04_startup.ps1 | `Get-StartupItems` 等 |
+| 视觉效果 | 05-VisualEffects.ps1 | Visual.ps1 | 05_visual.ps1 | `Get-VisualEffect*` |
+| 电源计划 | 06-PowerPlan.ps1 | Power.ps1 | 06_power.ps1 | `Get-ActivePowerPlan` 等 |
+| 磁盘优化 | 07-DiskOptimize.ps1 | Disk.ps1 | 07_disk.ps1 | `Invoke-DiskOptimization` 等 |
+| 网络优化 | 08-NetworkOptimize.ps1 | Network.ps1 | 08_network.ps1 | `Invoke-NetworkOptimization` 等 |
+| 备份恢复 | 09-BackupRestore.ps1 | Backup.ps1 | 09_backup.ps1 | `Get-OptBackupDir` |
+| 屏蔽 Win11 24H2 | 10-BlockWin1124H2.ps1 | Update.ps1 | 10_block_update.ps1 | — |
+| 手动更新模式 | 11-ManualUpdateMode.ps1 | Update.ps1 | 11_manual_mode.ps1 | — |
+| 隐藏更新 | 12-HideUpdates.ps1 | Update.ps1 | 12_hide_updates.ps1 | — |
+| Windows 功能 | 13-WindowsFeatures.ps1 | Update.ps1 | 13_features.ps1 | — |
+| 恢复自动更新 | 14-RestoreAutoUpdate.ps1 | Update.ps1 | 14_restore_autoupdate.ps1 | — |
+| 一键体检 | 15-HealthCheck.ps1 | Health.ps1 | 15_health.ps1 | `Get-SystemHealthReport` 等 |
+
+更新相关域（10–14）在 GUI 中统一归入 `Update.ps1` 一个页面。
+
+---
+
+## 5. 踩过的坑 / 维护时务必注意
+
+1. **PowerShell 5.1 中文必须带 BOM（UTF-8 BOM）**。无 BOM 会被按 ANSI 读取，中文乱码，`ConvertFrom-Json` 后中文比对全部失败。所有 `*.ps1` 保存时一律 UTF-8 BOM。
+   自检：`[System.IO.File]::ReadAllBytes($f)[0..2] -eq @(0xEF,0xBB,0xBF)`。
+2. **磁盘域必须 Win7 兼容**：统一走 `WMI + defrag.exe + fsutil`，**禁止使用 Storage 模块**（`Get-PhysicalDisk`/`Optimize-Volume` 在 Win7 不存在）。
+3. **SSD 检测是分级回退**：WMI 显式 SSD → `defrag /A`（需管理员）→ `fsutil` 全局 → 兜底 HDD。
+   - 非管理员下 `defrag /A` 报 `0x89000024`，逐卷介质拿不到会退化到全局 `fsutil`；**生产环境（提权运行）不会出现**。
+   - 兜底方向是「误判 SSD → 只 TRIM（空操作无害）」，而非「误判 HDD → 去整理 SSD（有害）」，安全。
+   - `MSFT_PhysicalDisk.DeviceId` 与 `Win32_DiskDrive.Index` **一一对应**，必须按 DeviceId 匹配（按容量匹配会因 ~4MB 差异失败）。
+4. **DNS 选项编号稳定**（1=Cloudflare / 2=Google / 3=阿里 / 4=114 / 5=腾讯）：WebUI 前端 `index.html` 硬编码了编号，**只能改地址不能改编号**。地址可在 `config/optimization.json` 的 `dns_options` 覆盖。
+5. **网络适配器自动排除虚拟/隧道网卡**（Hyper-V、VPN、蓝牙等），避免误改导致断网。规则在 lib 网络段的 `$script:VirtualAdapterPatterns`。
+6. **所有修改类操作前自动备份到 `backups/`**（已 gitignore，不入库）；GUI 的 `[B]` 恢复、CLI 备份恢复脚本依赖它。
+7. **GUI 页面无法在此环境自动化测试**（WinForms 需交互式桌面）。新增/改动 GUI 页面后，务必在**真机点一遍**验证渲染与行为。
+8. **Pester 测试陷阱**：`{ $x = ... } | Should -Not -Throw` 的脚本块在子作用域执行，内部赋值**不会**回写父作用域，`$x` 一直是 `$null`。需断言结果时**直接调用**函数再断言。
+9. **Build-EXE 依赖 region 标记**：`OptimizeGUI.ps1` 中 `#region GUI-PAGE-LOADER` / `#endregion` 包裹页面 dot-source 加载段，编译时会被剥离（函数已内联）。**不要改名 / 删除这两个标记**。
+
+---
+
+## 6. 如何验证改动
+
+- **单元 / 契约测试**：`tests/Optimize.Core.Tests.ps1`（Pester）。运行：
+  ```powershell
+  cd <项目根>
+  Invoke-Pester -Path ./tests/Optimize.Core.Tests.ps1
+  ```
+  当前约 **81 个用例**（含各域「编号稳定 / 必须备份 / 行为契约」断言）。新增 lib 函数时务必补对应用例。
+- **只读 smoke**：直接 `& scripts/15-HealthCheck.ps1` 或 `& webui/ps/15_health.ps1` 看 JSON 输出；磁盘/网络等可用 `-WhatIf` 预演不改系统。
+- **提交前自检**：确认改动 `*.ps1` 均带 BOM、语法 0 错误（见第 5.1 的解析校验）。
+
+---
+
+## 7. 待定决策 / 已知未完成
+
+- **CLI 的 CompactOS 默认无条件执行**（`Compact.exe /CompactOS:always`），而 GUI/WebUI 默认关闭。压缩系统文件耗时长、不易回退，CLI 静默执行略激进，建议统一成「显式开关、默认关闭」（行为变更，需评审）。
+- **GUI 体检页 `gui/pages/Health.ps1` 仅做了静态校验（语法 + BOM + 接入一致性），未真机点验**，上线前需在真机确认渲染。
+- PR #5 / #6 合并顺序与潜在冲突（见第 2 节）。
+
+---
+
+## 8. 建议的下一步
+
+1. 在 GitHub 合并 **PR #5 → #6**（先 5 后 6），合完观察是否冲突。
+2. 补打 `v3.2.1` tag，触发 Actions 编译 Release（见 `docs/DEVELOPMENT.md` 发布流程）。
+3. 评审并统一 CompactOS 默认行为（第 7 节）。
+4. 真机验收 GUI 体检页。
+5. 后续功能建议（按价值排序）：一键体检已具备，可继续做「一键优化组合包」「优化回滚向导」「计划任务定时体检」。

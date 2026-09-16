@@ -80,31 +80,26 @@
         $this.Text = "应用中..."
         Invoke-UIRefresh
 
-        # 卓越性能需要解锁
-        if ($selectedGUID -eq "e9a42b02-d5df-448d-aa00-03f14749eb61") {
-            powercfg /duplicatescheme $selectedGUID 2>&1 | Out-Null
+        # 统一走共享库：先备份；卓越性能自动解锁并支持失败回退；
+        # 三种模式都设置 CPU 上下限与 DISKIDLE（此前仅高性能设置 CPU，且完全没有备份与回退）
+        $cat = Get-PowerPlanCatalog | Where-Object { $_.GUID -eq $selectedGUID }
+        $params = @{
+            Guid               = $selectedGUID
+            UsbSuspendOff      = [bool]$script:chkUSB.Checked
+            PciAspmOff         = [bool]$script:chkPCI.Checked
+            BackupDir          = $script:BackupDir
+            UnlockUltimate     = ($selectedGUID -eq "e9a42b02-d5df-448d-aa00-03f14749eb61")
+            FallbackToHighPerf = ($selectedGUID -eq "e9a42b02-d5df-448d-aa00-03f14749eb61")
         }
-
-        powercfg /setactive $selectedGUID 2>&1 | Out-Null
-        Write-Log "已切换电源计划: $selectedGUID" "SUCCESS"
-
-        # CPU 频率
-        if ($selectedGUID -eq "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c") {
-            powercfg /setacvalueindex $selectedGUID SUB_PROCESSOR PROCTHROTTLEMIN 100 2>&1 | Out-Null
-            powercfg /setacvalueindex $selectedGUID SUB_PROCESSOR PROCTHROTTLEMAX 100 2>&1 | Out-Null
-            Write-Log "CPU 处理器状态: 最低100% / 最高100%" "SUCCESS"
+        switch ($cat.Value) {
+            1 { $params.MinPercent = 100; $params.MaxPercent = 100; $params.DiskIdleSeconds = 0 }
+            2 { $params.MinPercent = 100; $params.MaxPercent = 100; $params.DiskIdleSeconds = 0 }
+            3 { $params.MinPercent = 5;   $params.MaxPercent = 100; $params.DiskIdleSeconds = 1800 }
         }
-
-        if ($script:chkUSB.Checked) {
-            powercfg /setacvalueindex $selectedGUID SUB_USB USBSELSUSP 0 2>&1 | Out-Null
-            Write-Log "USB 选择性挂起: 已禁用" "SUCCESS"
-        }
-        if ($script:chkPCI.Checked) {
-            powercfg /setacvalueindex $selectedGUID SUB_PCIEXPRESS ASPM 0 2>&1 | Out-Null
-            Write-Log "PCI Express 电源管理: 已关闭" "SUCCESS"
-        }
-
-        powercfg /setactive $selectedGUID 2>&1 | Out-Null
+        $r = Set-PowerPlan @params
+        Write-Log "电源计划备份: $($r.backup)"
+        foreach ($d in $r.details) { Write-Log $d "SUCCESS" }
+        Write-Log "已切换电源计划: $($r.appliedGuid)" "SUCCESS"
 
         $this.Enabled = $true
         $this.Text = "应用电源计划"

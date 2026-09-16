@@ -9,35 +9,9 @@
     $page.Controls.Add($lblDesc)
 
     # 扫描启动项 - 用 script 作用域保存
-    $script:StartupItems = @()
-    $regPaths = @(
-        @{Path="HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"; Scope="当前用户"}
-        @{Path="HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"; Scope="所有用户"}
-        @{Path="HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run"; Scope="所有用户(32位)"}
-    )
-    foreach ($reg in $regPaths) {
-        if (Test-Path $reg.Path) {
-            $props = Get-ItemProperty -Path $reg.Path -ErrorAction SilentlyContinue
-            if ($props) {
-                $props.PSObject.Properties | Where-Object { $_.Name -notlike "PS*" -and $_.Value } | ForEach-Object {
-                    $script:StartupItems += [PSCustomObject]@{ Name=$_.Name; Command=$_.Value; Scope=$reg.Scope; Source="注册表"; RegPath=$reg.Path }
-                }
-            }
-        }
-    }
-
-    # 启动文件夹
-    $startupFolders = @(
-        @{Path="$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"; Scope="当前用户"}
-        @{Path="$env:PROGRAMDATA\Microsoft\Windows\Start Menu\Programs\Startup"; Scope="所有用户"}
-    )
-    foreach ($folder in $startupFolders) {
-        if (Test-Path $folder.Path) {
-            Get-ChildItem -Path $folder.Path -ErrorAction SilentlyContinue | ForEach-Object {
-                $script:StartupItems += [PSCustomObject]@{ Name=$_.Name; Command=$_.FullName; Scope=$folder.Scope; Source="启动文件夹"; RegPath=$folder.Path }
-            }
-        }
-    }
+    # 统一走共享库：与 CLI / WebUI 同一份枚举逻辑
+    # （此前 GUI 只有 3 个注册表路径且缺 WMI 系统启动命令源，现一并补齐）
+    $script:StartupItems = @(Get-StartupItems)
 
     $script:DgvStartup = New-Object System.Windows.Forms.DataGridView
     $script:DgvStartup.Location = New-Object System.Drawing.Point(20, 96)
@@ -65,7 +39,8 @@
     $dtStartup.Columns.Add("命令") | Out-Null
 
     foreach ($item in $script:StartupItems) {
-        $cmd = if ($item.Command.Length -gt 60) { $item.Command.Substring(0, 57) + "..." } else { $item.Command }
+        $cmdText = [string]$item.Value
+        $cmd = if ($cmdText.Length -gt 60) { $cmdText.Substring(0, 57) + "..." } else { $cmdText }
         $dtStartup.Rows.Add($item.Name, $item.Source, $item.Scope, $cmd) | Out-Null
     }
     $script:DgvStartup.DataSource = $dtStartup
@@ -79,37 +54,28 @@
             return
         }
 
-        if (-not (Test-Path $script:BackupDir)) { New-Item -ItemType Directory -Path $script:BackupDir -Force | Out-Null }
-        $backupFile = Join-Path $script:BackupDir "startup_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
         $toRemove = @()
         foreach ($row in $script:DgvStartup.SelectedRows) {
             $idx = $row.Index
             $toRemove += $script:StartupItems[$idx]
         }
-        $toRemove | Select-Object Name, Command, Scope, Source | Export-Csv -Path $backupFile -NoTypeInformation -Encoding UTF8
-        Write-Log "启动项备份: $backupFile"
 
-        $count = 0
-        foreach ($item in $toRemove) {
-            try {
-                if ($item.Source -eq "注册表") {
-                    Remove-ItemProperty -Path $item.RegPath -Name $item.Name -ErrorAction Stop
-                    Write-Log "[禁用] $($item.Name) (注册表)" "SUCCESS"
-                    $count++
-                } elseif ($item.Source -eq "启动文件夹") {
-                    $backupDir2 = Join-Path $script:BackupDir "startup_items"
-                    if (-not (Test-Path $backupDir2)) { New-Item -ItemType Directory -Path $backupDir2 -Force | Out-Null }
-                    Move-Item -Path $item.Command -Destination (Join-Path $backupDir2 (Split-Path $item.Command -Leaf)) -Force -ErrorAction Stop
-                    Write-Log "[禁用] $($item.Name) (启动文件夹)" "SUCCESS"
-                    $count++
-                }
-            } catch {
-                Write-Log "[失败] $($item.Name)" "ERROR"
+        # 统一走共享库：备份 CSV 列名与 CLI / WebUI 一致。
+        # 此前 GUI 导出的是 Name,Command,Scope,Source（缺 Path 列），
+        # 导致 GUI 产生的启动项备份无法被 CLI 的恢复流程读取——本次一并修复。
+        $res = Disable-StartupItems -BackupDir $script:BackupDir -Items $toRemove
+        Write-Log "启动项备份: $($res.backup)"
+        foreach ($d in $res.details) {
+            if ($d.Result -like "已禁用*") {
+                Write-Log "[禁用] $($d.Name) — $($d.Result)" "SUCCESS"
+            } else {
+                Write-Log "[$($d.Result)] $($d.Name)" "ERROR"
             }
             Invoke-UIRefresh
         }
 
-        Write-Log "启动项优化完成！已禁用 $count 项" "SUCCESS"
+        $count = $res.disabled
+        Write-Log "启动项优化完成！已禁用 $count 项（失败 $($res.failed) 项）" "SUCCESS"
         [System.Windows.Forms.MessageBox]::Show("已禁用 $count 个启动项`n`n部分项需通过任务管理器->启动 禁用", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         Build-StartupPage
         } catch {

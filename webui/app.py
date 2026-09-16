@@ -7,7 +7,7 @@ import sys
 import json
 import subprocess
 import webbrowser
-from flask import Flask, render_template, jsonify, request, send_from_directory
+from flask import Flask, render_template, jsonify, request, send_from_directory, Response, stream_with_context
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PS_DIR = os.path.join(BASE_DIR, "ps")
@@ -15,6 +15,17 @@ TEMPLATES = os.path.join(BASE_DIR, "templates")
 STATIC = os.path.join(BASE_DIR, "static")
 
 app = Flask(__name__, template_folder=TEMPLATES, static_folder=STATIC)
+
+# ---- 超时配置（秒）----
+# 清理临时文件 / 磁盘优化 / CompactOS / Windows 功能等可能远超 5 分钟，
+# 原先 run_ps 一律 hardcode 300s，长任务会被直接截断报「执行超时」。
+DEFAULT_TIMEOUT = 300
+LONG_TASK_TIMEOUT = 1800
+LONG_TASK_SCRIPTS = {
+    "02_clean.ps1", "07_disk.ps1",
+    "13_windows_features.ps1", "10_block_win11_24h2.ps1",
+    "15_health.ps1",
+}
 
 
 # ============================================================
@@ -115,10 +126,18 @@ def _register_mcp_tools(server):
 
     @server.tool()
     def network_apply(dns: int = 0, tcp: bool = True, rss: bool = True, rsc: bool = True, dnscache: bool = True) -> dict:
-        """网络优化。dns: 0=自动 / 1=阿里 / 2=DNSPod / 3=114 / 4=Google / 5=Cloudflare。"""
+        """网络优化。dns: 0=保持不动 / 1=Cloudflare / 2=Google / 3=阿里 / 4=114。
+
+        注意：编号含义以 webui/ps/08_network.ps1 实际实现为准（此前文档写成 1=阿里 等，与实际不符）。
+        """
         return run_ps("08_network.ps1", "-Action", "apply",
                       "-Dns", str(int(dns)), "-Tcp", str(tcp).lower(), "-Rss", str(rss).lower(),
                       "-Rsc", str(rsc).lower(), "-DnsCache", str(dnscache).lower())
+
+    @server.tool()
+    def health_scan() -> dict:
+        """系统体检（只读）：返回体检分、关键指标、问题清单，以及与上一次体检的对比。"""
+        return run_ps("15_health.ps1", "-Action", "scan")
 
     @server.tool()
     def backup_list() -> dict:
@@ -237,11 +256,16 @@ if MCP_AVAILABLE:
     _register_mcp_tools(mcp)
 
 
-def run_ps(script_name, *args):
-    """调用 PowerShell 脚本，返回解析后的 JSON dict。"""
+def run_ps(script_name, *args, timeout=None):
+    """调用 PowerShell 脚本，返回解析后的 JSON dict。
+
+    timeout: 超时秒数。未指定时，已知长任务脚本用 LONG_TASK_TIMEOUT，其余用 DEFAULT_TIMEOUT。
+    """
     script = os.path.join(PS_DIR, script_name)
     if not os.path.exists(script):
         return {"ok": False, "error": f"找不到脚本: {script_name}"}
+    if timeout is None:
+        timeout = LONG_TASK_TIMEOUT if script_name in LONG_TASK_SCRIPTS else DEFAULT_TIMEOUT
     cmd = [
         "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
         "-File", script
@@ -255,7 +279,7 @@ def run_ps(script_name, *args):
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=300,
+            timeout=timeout,
         )
         out = proc.stdout.strip()
         # 提取最后一行 JSON（PowerShell 可能在前输出其他文本）
@@ -264,9 +288,53 @@ def run_ps(script_name, *args):
             return {"ok": False, "error": "无 JSON 输出", "raw": out[-500:], "stderr": proc.stderr[-500:]}
         return json.loads(lines[-1])
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "执行超时（300s）"}
+        return {"ok": False, "error": f"执行超时（{timeout}s）", "script": script_name}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+@app.route("/api/stream/<path:script_name>", methods=["GET", "POST"])
+def api_stream(script_name):
+    """以 SSE 流式返回 PowerShell 脚本的实时输出，供长任务展示进度。
+
+    用途：清理 / 磁盘优化等耗时操作，前端可逐行显示 PowerShell 输出，
+    而不是在整个请求结束前完全没有反馈。参数通过 JSON body 传入，
+    键名即 PowerShell 参数名（如 {"Action": "list"} → -Action list）。
+    """
+    script = os.path.join(PS_DIR, script_name)
+    if not os.path.exists(script):
+        return jsonify({"ok": False, "error": f"找不到脚本: {script_name}"}), 404
+
+    args = []
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        for k, v in data.items():
+            args.append(f"-{k}")
+            args.append(str(v).lower() if isinstance(v, bool) else str(v))
+
+    cmd = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script] + args
+
+    def generate():
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+            )
+            for line in iter(proc.stdout.readline, ""):
+                if line:
+                    yield "data: " + json.dumps({"line": line.rstrip()}, ensure_ascii=False) + "\n\n"
+            proc.stdout.close()
+            code = proc.wait(timeout=LONG_TASK_TIMEOUT)
+            yield "data: " + json.dumps({"done": True, "code": code}, ensure_ascii=False) + "\n\n"
+        except Exception as e:
+            yield "data: " + json.dumps({"done": True, "error": str(e)}, ensure_ascii=False) + "\n\n"
+
+    return Response(stream_with_context(generate()), mimetype="text/event-stream")
 
 
 # ---------------- 页面 ----------------
@@ -438,6 +506,11 @@ def api_disk_optimize():
 @app.route("/api/network")
 def api_network():
     return jsonify(run_ps("08_network.ps1", "-Action", "list"))
+
+
+@app.route("/api/health")
+def api_health():
+    return jsonify(run_ps("15_health.ps1", "-Action", "scan"))
 
 
 @app.route("/api/network/apply", methods=["POST"])
