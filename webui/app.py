@@ -24,6 +24,7 @@ LONG_TASK_TIMEOUT = 1800
 LONG_TASK_SCRIPTS = {
     "02_clean.ps1", "07_disk.ps1",
     "13_windows_features.ps1", "10_block_win11_24h2.ps1",
+    "15_health.ps1",
 }
 
 
@@ -132,6 +133,11 @@ def _register_mcp_tools(server):
         return run_ps("08_network.ps1", "-Action", "apply",
                       "-Dns", str(int(dns)), "-Tcp", str(tcp).lower(), "-Rss", str(rss).lower(),
                       "-Rsc", str(rsc).lower(), "-DnsCache", str(dnscache).lower())
+
+    @server.tool()
+    def health_scan() -> dict:
+        """系统体检（只读）：返回体检分、关键指标、问题清单，以及与上一次体检的对比。"""
+        return run_ps("15_health.ps1", "-Action", "scan")
 
     @server.tool()
     def backup_list() -> dict:
@@ -500,6 +506,11 @@ def api_disk_optimize():
 @app.route("/api/network")
 def api_network():
     return jsonify(run_ps("08_network.ps1", "-Action", "list"))
+
+
+@app.route("/api/health")
+def api_health():
+    return jsonify(run_ps("15_health.ps1", "-Action", "scan"))
 
 
 @app.route("/api/network/apply", methods=["POST"])

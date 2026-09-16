@@ -103,6 +103,7 @@
   <div class="sidebar">
     <div class="brand">PC-Optimizer<br>7thGen · WebUI</div>
     <div class="nav-item active" data-page="overview">📊 系统概览</div>
+    <div class="nav-item" data-page="health">🩺 系统体检</div>
     <div class="nav-item" data-page="clean">🧹 垃圾清理</div>
     <div class="nav-item" data-page="services">⚙️ 服务优化</div>
     <div class="nav-item" data-page="startup">🚀 启动项</div>
@@ -677,9 +678,65 @@ async function restoreBackupFile(name){
   else log('失败：'+d.error,'err');
 }
 
+async function renderHealth(){
+  content.innerHTML = `<div class="page-title">系统体检</div>
+    <div class="page-sub">只读扫描，给出体检分与建议；优化后再跑一次可查看前后对比</div>
+    <div class="card" id="healthCard"><span class="muted">体检中…（统计可清理空间约需十几秒）</span></div>`;
+  const d = await api('/api/health');
+  if(!d.ok){ $('#healthCard').innerHTML = badge('失败','err')+' '+esc(d.error); return; }
+  const r = d.report, m = r.metrics;
+  const sk = r.score>=90?'ok':(r.score>=75?'info':(r.score>=60?'warn':'err'));
+  let h = `<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+    <div style="font-size:34px;font-weight:700">${r.score}</div>
+    <div class="muted">/ 100</div>
+    <div>${badge(r.grade,sk)}</div>
+    <div class="muted" style="margin-left:auto">${esc(r.timestamp)}</div>
+  </div>`;
+  h += `<h3 style="margin:16px 0 8px">关键指标</h3><div class="table-wrap"><table><tbody>
+    <tr><td>内存</td><td>可用 ${m.freeRamMB}MB / 共 ${m.totalRamMB}MB（${m.freeRamPct}%）</td></tr>
+    <tr><td>启动项</td><td>${m.startupCount} 项</td></tr>
+    <tr><td>自动启动服务</td><td>${m.servicesStillAuto} / ${m.optimizableServices}（可优化）</td></tr>
+    <tr><td>视觉特效</td><td>未关闭 ${m.visualTogglesLeft} / ${m.visualTogglesTotal}</td></tr>
+    <tr><td>电源计划</td><td>${esc(m.powerPlanTitle)}</td></tr>
+    ${m.cleanableMB!=null?`<tr><td>可清理空间</td><td>${m.cleanableMB} MB</td></tr>`:''}
+    <tr><td>活动网卡</td><td>${m.activeAdapters} 个</td></tr>
+  </tbody></table></div>`;
+  if(m.volumes && m.volumes.length){
+    h += `<h3 style="margin:16px 0 8px">分区</h3><div class="table-wrap"><table>
+      <thead><tr><th>盘符</th><th>介质</th><th>可用</th><th>共</th><th>已用</th></tr></thead><tbody>
+      ${m.volumes.map(v=>`<tr><td>${esc(v.drive)}:</td><td>${esc(v.media)}</td><td>${v.freeGB}GB</td><td>${v.totalGB}GB</td><td>${v.usedPct}%</td></tr>`).join('')}
+    </tbody></table></div>`;
+  }
+  const ord={High:0,Medium:1,Low:2}, kd=s=>s==='High'?'err':(s==='Medium'?'warn':'info');
+  h += `<h3 style="margin:16px 0 8px">问题清单</h3>`;
+  if(!r.issues || !r.issues.length){ h += `<p class="muted">未发现明显问题，系统状态良好。</p>`; }
+  else {
+    h += r.issues.slice().sort((a,b)=>ord[a.severity]-ord[b.severity]).map(i=>`
+      <div class="card" style="margin-bottom:8px">
+        <div>${badge(i.severity,kd(i.severity))} <b>${esc(i.title)}</b></div>
+        <div class="muted" style="margin-top:4px">${esc(i.detail)}</div>
+        <div class="muted" style="margin-top:4px">建议：${esc(i.suggestion)}</div>
+      </div>`).join('');
+  }
+  const c = d.comparison;
+  h += `<h3 style="margin:16px 0 8px">与上次体检对比</h3>`;
+  if(!c){ h += `<p class="muted">这是首次体检，暂无历史报告。优化后再跑一次即可看到前后变化。</p>`; }
+  else {
+    h += `<div class="card">
+      <div class="muted">上次 ${c.beforeScore} 分 (${esc(c.beforeTime)}) → 本次 ${c.afterScore} 分 (${esc(c.afterTime)})</div>
+      <div>分数变化：<b>${c.scoreDelta>0?'+'+c.scoreDelta:c.scoreDelta}</b></div>`;
+    if(c.resolved && c.resolved.length) h += `<div style="margin-top:6px">已解决：${c.resolved.map(i=>esc(i.title)).join('、')}</div>`;
+    if(c.new && c.new.length) h += `<div style="margin-top:6px">新增问题：${c.new.map(i=>esc(i.title)).join('、')}</div>`;
+    if((!c.resolved||!c.resolved.length)&&(!c.new||!c.new.length)) h += `<div class="muted" style="margin-top:6px">问题清单无变化。</div>`;
+    h += `</div>`;
+  }
+  h += `<div class="row" style="margin-top:12px">${btn('重新体检','green',renderHealth)}</div>`;
+  $('#healthCard').innerHTML = h;
+}
+
 // ---------------- 路由 ----------------
 const pages = {
-  overview:renderOverview, clean:renderClean, services:renderServices,
+  overview:renderOverview, health:renderHealth, clean:renderClean, services:renderServices,
   startup:renderStartup, update:renderUpdate, visual:renderVisual,
   power:renderPower, disk:renderDisk, network:renderNetwork, backup:renderBackup
 };
