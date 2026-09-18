@@ -4,6 +4,8 @@
 
 - 合并 **PR #5**（CLI 错误隔离 + 版本收口）→ **PR #6**（维护性优化合集 + 一键体检），顺序与 HANDOFF §8.1 一致。
 - 远端原 `sync/v3.3.0-main` 是 09-15 的**陈旧快照**（只合到 `f8a8f2f`，缺 network / disk / health / 交接文档四个提交），本分支已重建为完整版本。
+- **修复 PR #6 遗留的 CI 红灯**：GitHub runner 无活动网卡，`Invoke-NetworkOptimization` 返回空 `details`，
+  而三端只渲染 `details`、不看 `error`。现在该分支返回可读文案，CLI / WebUI 也会显示 `error`。
 - 版本：`3.2.1` → `3.3.0`（含行为变更，走 minor）。当前最新 tag 为 `v3.2.0`，`3.2.1` 从未发布，故直接跳到 3.3.0。
 
 ## 主要变更
@@ -20,8 +22,8 @@
 
 ## 验证
 
-- `Invoke-Pester tests/Optimize.Core.Tests.ps1` → **87 / 87 通过**
-- 新增 6 条契约用例：CompactOS 默认 false、默认不压缩、显式开启才压缩、CLI 调用必须受 `if` 保护（AST）、三端默认值同源。
+- `Invoke-Pester tests/Optimize.Core.Tests.ps1` → **88 / 88 通过**（本地 88/88，GitHub Actions 88/88）
+- 新增 7 条用例：CompactOS 默认 false、默认不压缩、显式开启才压缩、CLI 调用必须受 `if` 保护（AST）、三端默认值同源，以及用 Mock 覆盖「无活动网卡」分支。
 - 改动 `*.ps1` 均为 UTF-8 BOM；PowerShell 解析 0 错误。
 
 ## 合并后

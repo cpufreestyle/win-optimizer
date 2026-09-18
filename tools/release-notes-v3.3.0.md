@@ -39,6 +39,13 @@
 - CLI `[15]` / GUI「系统体检」/ WebUI 体检页，共用 lib 体检引擎。
 - 只读取系统状态，**不修改任何设置**；报告存 `backups/health/`，再次运行可与上一份对比。
 
+## 网络：无活动网卡不再返回空结果
+
+- `Invoke-NetworkOptimization` 在没有活动网卡时，此前返回 `details = @()`，而三端只渲染 `details`、
+  从不看 `error` 字段 —— 用户（以及 GitHub Actions runner）看到的是一片空白。
+- 现在该分支返回结构一致的 `details`（「未检测到活动网络适配器，已跳过网络优化」），
+  且 CLI / WebUI 会把 `error` 一并显示/回传。
+
 ## 文档
 
 - 新增 `docs/HANDOFF.md`（当前状态 / 待合并 PR / 踩坑 / 三端文件地图）。
@@ -46,7 +53,7 @@
 
 ## 验证
 
-- Pester：`tests/Optimize.Core.Tests.ps1` **87 / 87 通过**（81 基线 + 6 条 CompactOS 契约用例）。
+- Pester：`tests/Optimize.Core.Tests.ps1` **88 / 88 通过**（81 基线 + 6 条 CompactOS 契约用例 + 1 条无网卡分支用例），本地与 GitHub Actions 双绿。
 - 新增回归用例：CLI 磁盘脚本中 `Set-CompactOSState` 必须受 `if` 保护（AST 断言），
   防止「无条件压缩系统文件」再次回归；并断言三端默认值同源。
 

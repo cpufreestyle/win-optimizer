@@ -127,7 +127,7 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
   cd <项目根>
   Invoke-Pester -Path ./tests/Optimize.Core.Tests.ps1
   ```
-  当前 **87 个用例**（含各域「编号稳定 / 必须备份 / 行为契约」断言；其中 6 条是 CompactOS 契约用例）。新增 lib 函数时务必补对应用例。
+  当前 **88 个用例**（含各域「编号稳定 / 必须备份 / 行为契约」断言；其中 6 条是 CompactOS 契约用例、1 条用 Mock 覆盖「无活动网卡」分支）。新增 lib 函数时务必补对应用例。
 - **只读 smoke**：直接 `& scripts/15-HealthCheck.ps1` 或 `& webui/ps/15_health.ps1` 看 JSON 输出；磁盘/网络等可用 `-WhatIf` 预演不改系统。
 - **提交前自检**：确认改动 `*.ps1` 均带 BOM、语法 0 错误（见第 5.1 的解析校验）。
 

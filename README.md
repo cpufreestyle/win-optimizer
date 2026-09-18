@@ -323,7 +323,8 @@ Compact.exe /CompactOS:never
   - 修复 GUI、WebUI 备份无法被恢复、改 DNS 无备份、对 SSD 执行碎片整理等问题
 - **CLI 稳定性**：单个模块失败不再中断整条链路，一键优化输出失败清单；版本号统一收口到 config
 - **性能**：文件夹大小统计只枚举文件；GUI 清理页支持进度与取消；WebUI 长任务 SSE 流式输出
-- 测试：Pester 87 / 87 通过
+- **修复**：无活动网卡时网络优化不再返回空日志（此前只渲染 details 而 error 字段从未回传）
+- 测试：Pester 88 / 88 通过（本地 + GitHub Actions）
 
 ### v3.0.0 (2026-08-21)
 - **架构重构：CLI / Web / GUI 三套实现统一核心逻辑**
