@@ -75,7 +75,8 @@
     $script:chkCompact.Location = New-Object System.Drawing.Point(280, [int]($yDisk + 30))
     $script:chkCompact.Size = New-Object System.Drawing.Size(250, 24)
     $script:chkCompact.Text = "压缩系统文件 (CompactOS)"
-    $script:chkCompact.Checked = $false
+    # 默认值与 CLI / WebUI 同源：config 的 disk.compact_os_default（默认 false）
+    $script:chkCompact.Checked = (Get-CompactOSDefault)
     $script:chkCompact.Font = $Fonts.Body
     $script:chkCompact.ForeColor = $Theme.TextMain
     $script:chkCompact.BackColor = $Theme.BgDark

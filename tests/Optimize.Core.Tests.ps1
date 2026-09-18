@@ -607,6 +607,65 @@ Describe 'Optimize.Core disk (shared by CLI/GUI/WebUI, Win7 compatible)' {
         $r.details | Should -Not -BeNull
         $r.volumes | Should -BeGreaterThan 0
     }
+
+    # ---- CompactOS：显式开关、默认关闭（HANDOFF §7.1） ----
+    # 压缩系统文件耗时长、回滚要再跑一次 Compact.exe /CompactOS:never，
+    # 此前 CLI 无条件执行，而 GUI / WebUI 默认关闭 —— 三端已统一为「默认关闭、显式开启」。
+    It 'Get-CompactOSDefault returns a bool and is false by default' {
+        $d = Get-CompactOSDefault
+        $d | Should -BeOfType [bool]
+        $d | Should -BeFalse
+    }
+
+    It 'config disk.compact_os_default exists and is false' {
+        $cfg = Get-OptConfig
+        $cfg.disk | Should -Not -BeNullOrEmpty
+        $cfg.disk.compact_os_default | Should -BeFalse
+    }
+
+    It 'Invoke-DiskOptimization -WhatIf does NOT touch CompactOS by default' {
+        $r = Invoke-DiskOptimization -Trim $true -Defrag $true -WinSxS $false `
+                                     -DriveLetters @('C') -WhatIf
+        ($r.details -join '|') | Should -Not -Match 'CompactOS'
+    }
+
+    It 'Invoke-DiskOptimization runs CompactOS only when explicitly requested' {
+        $r = Invoke-DiskOptimization -Trim $false -Defrag $false -WinSxS $false -Compact $true `
+                                     -DriveLetters @('C') -WhatIf
+        ($r.details -join '|') | Should -Match 'CompactOS'
+    }
+
+    It 'CLI 磁盘脚本不再无条件压缩系统文件（Set-CompactOSState 必须受 if 保护）' {
+        $p = Join-Path $PWD.Path 'scripts\07-DiskOptimize.ps1'
+        Test-Path $p | Should -BeTrue
+        $errs = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($p, [ref]$null, [ref]$errs)
+        $errs.Count | Should -Be 0
+        $cmds = @($ast.FindAll({
+            param($n)
+            $n -is [System.Management.Automation.Language.CommandAst] -and
+            $n.GetCommandName() -eq 'Set-CompactOSState'
+        }, $true))
+        # 仍然复用共享库函数（不允许各自另写一份 compact 实现）
+        $cmds.Count | Should -BeGreaterThan 0
+        foreach ($c in $cmds) {
+            $guarded = $false
+            $node = $c.Parent
+            while ($node) {
+                if ($node -is [System.Management.Automation.Language.IfStatementAst]) { $guarded = $true; break }
+                $node = $node.Parent
+            }
+            $guarded | Should -BeTrue
+        }
+    }
+
+    It '三端 CompactOS 默认值同源（均走 Get-CompactOSDefault）' {
+        foreach ($rel in @('scripts\07-DiskOptimize.ps1', 'gui\pages\Disk.ps1', 'webui\ps\07_disk.ps1')) {
+            $f = Join-Path $PWD.Path $rel
+            Test-Path $f | Should -BeTrue
+            (Get-Content $f -Raw -Encoding UTF8) | Should -Match 'Get-CompactOSDefault'
+        }
+    }
 }
 
 Describe 'Optimize.Core health check and before/after comparison' {

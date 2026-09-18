@@ -6,10 +6,17 @@
     - SSD: 执行 TRIM 优化
     - HDD: 执行碎片整理
     - 清理系统组件 (WinSxS)
-    - 压缩系统文件
+    - 压缩系统文件（默认关闭，需显式 -CompactOS）
     注意：本脚本不使用 Storage 模块 (Get-Volume/Get-PhysicalDisk/Optimize-Volume)，
           改用 WMI + defrag.exe + fsutil，以兼容 Storage 模块损坏的环境。
 #>
+
+param(
+    # 压缩系统文件（CompactOS）默认关闭：耗时长、且回滚要再跑一次 Compact.exe /CompactOS:never。
+    # 需要时显式加 -CompactOS；也可把 config/optimization.json 的 disk.compact_os_default 设为 true。
+    # 与 GUI / WebUI 的默认值统一走 Get-CompactOSDefault（见 HANDOFF §7.1）。
+    [switch]$CompactOS
+)
 
 # 复用共享核心库（磁盘统一实现，与 GUI / WebUI 同源）
 # 统一走 WMI + defrag.exe + fsutil，不使用 Storage 模块，保证 Win7 兼容。
@@ -63,9 +70,14 @@ try {
 }
 Write-Host "  [完成] $(Invoke-WinSxSCleanup)" -ForegroundColor Green
 
-# 压缩系统文件 (释放更多空间)
+# 压缩系统文件 (释放更多空间) —— 显式开关、默认关闭，与 GUI / WebUI 行为一致
+$compactEnabled = if ($CompactOS) { $true } else { Get-CompactOSDefault }
 Write-Host "`n  [处理] 压缩系统文件..." -ForegroundColor Yellow
-Write-Host "  [完成] $(Set-CompactOSState -Enable)" -ForegroundColor Green
+if ($compactEnabled) {
+    Write-Host "  [完成] $(Set-CompactOSState -Enable)" -ForegroundColor Green
+} else {
+    Write-Host "  [跳过] 默认关闭；如需压缩请执行: .\scripts\07-DiskOptimize.ps1 -CompactOS" -ForegroundColor Gray
+}
 
 # --- 磁盘优化/TRIM ---
 Write-Host "`n[3/3] 磁盘优化..." -ForegroundColor Yellow
@@ -95,5 +107,9 @@ Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  磁盘优化完成！" -ForegroundColor Green
 Write-Host "  SSD 已执行 TRIM | HDD 已执行碎片整理" -ForegroundColor Gray
-Write-Host "  系统组件已清理并压缩" -ForegroundColor Gray
+if ($compactEnabled) {
+    Write-Host "  系统组件已清理并压缩" -ForegroundColor Gray
+} else {
+    Write-Host "  系统组件已清理（未压缩系统文件）" -ForegroundColor Gray
+}
 Write-Host "============================================" -ForegroundColor Cyan

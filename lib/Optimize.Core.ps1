@@ -1280,6 +1280,17 @@ function Invoke-WinSxSCleanup {
     return 'WinSxS 组件清理完成'
 }
 
+# CompactOS 默认开关的单一来源：config/optimization.json 的 disk.compact_os_default。
+# 三端（CLI / GUI / WebUI）统一读这里，默认 false —— 压缩系统文件耗时长、
+# 且回滚要走 Compact.exe /CompactOS:never，静默默认开启属于行为过激（见 HANDOFF §7.1）。
+function Get-CompactOSDefault {
+    $cfg = Get-OptConfig
+    if ($cfg -and $cfg.disk -and ($cfg.disk.PSObject.Properties.Name -contains 'compact_os_default')) {
+        return [bool]$cfg.disk.compact_os_default
+    }
+    return $false
+}
+
 # CompactOS 系统文件压缩（可选；-Enable 关闭时表示取消压缩）
 function Set-CompactOSState {
     param([switch]$Enable, [switch]$WhatIf)
@@ -1293,13 +1304,15 @@ function Set-CompactOSState {
 }
 
 # 编排：逐卷判定介质后择优优化 + 可选的 WinSxS / CompactOS。
+# 注：CompactOS 默认取 config 的 disk.compact_os_default（默认关闭），
+#     调用方必须显式传 -Compact $true 才会压缩系统文件。
 # 返回 @{ok;details;volumes;mediaMap}
 function Invoke-DiskOptimization {
     param(
         [bool]$Trim = $true,
         [bool]$Defrag = $true,
         [bool]$WinSxS = $true,
-        [bool]$Compact = $false,
+        [bool]$Compact = (Get-CompactOSDefault),
         [string[]]$DriveLetters,
         [switch]$WhatIf
     )

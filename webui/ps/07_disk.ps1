@@ -40,11 +40,14 @@ try {
         Out-Json ([PSCustomObject]@{ ok = $true; disks = $disks })
     }
     elseif ($Action -eq "optimize") {
+        # CompactOS 默认值与 CLI / GUI 同源：config 的 disk.compact_os_default（默认 false）。
+        # 前端传 compact=true 才压缩；未传时按配置默认（而非硬编码 true）。
+        $compactEnabled = if ($Compact) { $true } else { Get-CompactOSDefault }
         # 统一走共享库：
         #  - 此前用 Storage 模块（Get-Volume / Optimize-Volume），该模块在 Win7 上不存在；
         #  - 且对每个卷同时执行 TRIM 和碎片整理，不区分 SSD/HDD（对 SSD 整理会损耗寿命）。
         # 现在统一为 WMI + defrag.exe（Win7 兼容），并按介质分流：SSD→TRIM，HDD→碎片整理。
-        $r = Invoke-DiskOptimization -Trim $Trim -Defrag $Defrag -WinSxS $WinSxS -Compact $Compact
+        $r = Invoke-DiskOptimization -Trim $Trim -Defrag $Defrag -WinSxS $WinSxS -Compact $compactEnabled
         Out-Json ([PSCustomObject]@{ ok = $r.ok; log = @($r.details) })
     }
 } catch {

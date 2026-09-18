@@ -35,6 +35,9 @@
         "google":      ["8.8.8.8", "8.8.4.4"],
         "cloudflare":  ["1.1.1.1", "1.0.0.1"]
     },
+    "disk": {
+        "compact_os_default": false
+    },
     "telemetry_tasks": [
         "\\Microsoft\\Windows\\Application Experience\\Microsoft Compatibility Appraiser",
         "\\Microsoft\\Windows\\Application Experience\\ProgramDataUpdater",
