@@ -312,6 +312,19 @@ Compact.exe /CompactOS:never
 
 ## 📝 更新日志
 
+### v3.3.0 (2026-09-18)
+- **CompactOS 改为「显式开关、默认关闭」**
+  - 此前 CLI 磁盘优化无条件压缩系统文件，而 GUI / WebUI 默认关闭，三端不一致
+  - 现在默认值统一来自 `config/optimization.json` 的 `disk.compact_os_default`（默认 `false`）
+  - 需要压缩：CLI 加 `-CompactOS`；GUI / WebUI 勾选「压缩系统文件 (CompactOS)」
+  - 一键全面优化不再压缩系统文件；还原命令仍是 `Compact.exe /CompactOS:never`
+- **一键体检（只读）**：CLI `[15]` / GUI 系统体检 / WebUI 体检页，体检分 + 问题清单，支持优化前后对比（报告存 `backups/health/`）
+- **三端逻辑统一**：启动项 / 视觉效果 / 电源 / 网络 / 磁盘五个域下沉到 `lib/Optimize.Core.ps1`
+  - 修复 GUI、WebUI 备份无法被恢复、改 DNS 无备份、对 SSD 执行碎片整理等问题
+- **CLI 稳定性**：单个模块失败不再中断整条链路，一键优化输出失败清单；版本号统一收口到 config
+- **性能**：文件夹大小统计只枚举文件；GUI 清理页支持进度与取消；WebUI 长任务 SSE 流式输出
+- 测试：Pester 87 / 87 通过
+
 ### v3.0.0 (2026-08-21)
 - **架构重构：CLI / Web / GUI 三套实现统一核心逻辑**
   - 新增 `lib/Optimize.Core.ps1` 共享库（服务列表、遥测任务、备份/恢复等），CLI、WebUI、GUI 全部复用同一份代码，消除重复与功能漂移

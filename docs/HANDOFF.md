@@ -15,17 +15,16 @@
 
 ## 2. 当前分支与待合并 PR（最关键）
 
-- 当前工作分支：`perf/folder-size-and-logging`
+> 2026-09-18 更新：本轮已按 §8 的建议收口，详见文末 §9。
+
+- **当前工作分支：`sync/v3.3.0-main`**（v3.3.0 集成分支）
+  - 内容 = `main` + PR #5 + PR #6 完整合并（零冲突）+ 本轮收口改动。
+  - ⚠️ 远端原有的 `sync/v3.3.0-main` 是 09-15 的**陈旧快照**：当时本地 `perf` 分支只到 `f8a8f2f`，
+    因此缺 `23df87f`(网络) / `36126d0`(磁盘) / `bfd07e4`+`adbbe2c`(体检) / `dae7b29`(本文档) 四个提交，
+    且其发布说明里写的「44/44 测试通过」已过期（现为 87/87）。**本分支已重建并覆盖它**。
 - `main` **受保护**，所有改动必须经 PR 合入，且需手动在 GitHub 点「Merge」（无自动 merge 权限）。
-- 待合并：
-
-  | PR | 分支 | 内容 | 状态 |
-  |----|------|------|------|
-  | **#5** | `fix/cli-error-isolation-version` | CLI 全面优化错误隔离 + 版本号收口（B2/B4） | OPEN |
-  | **#6** | `perf/folder-size-and-logging` | 本次最大批量工作（见第 3 节） | OPEN |
-
-- ⚠️ **合并顺序建议：先合 #5，再合 #6**。两个 PR 起点不同，合 #6 前请确认 #5 已先进 main，否则可能冲突。
-- 合并后建议补打 tag `v3.2.1`（发布流程见 `docs/DEVELOPMENT.md`）。
+- PR #5 / #6 保留 OPEN：本集成分支的 PR 合并后，GitHub 会自动关闭它们（其提交已全部可达）。
+  若你更倾向逐个合并，也可以直接按 `#5 → #6` 顺序在 GitHub 点合并，然后丢弃本分支。
 
 ---
 
@@ -54,6 +53,23 @@
 - **WebUI**：`webui/ps/15_health.ps1` + `app.py` 路由 `/api/health` + MCP 工具 `health_scan` + 前端 `renderHealth()`
 
 体检**只读取系统状态，不改任何设置**；报告存 `backups/health/`（已 gitignore），再次运行可与上一份对比（分数变化 / 已解决问题 / 新增问题 / 指标差值）。
+
+### 3.3 CompactOS：显式开关、默认关闭（2026-09-18 收口，原 §7.1）
+
+此前 CLI 的 `scripts/07-DiskOptimize.ps1` **无条件**执行 `Compact.exe /CompactOS:always`，
+而 GUI / WebUI 默认关闭 —— 三端不一致，且压缩系统文件耗时长、回滚要再跑一次 `Compact.exe /CompactOS:never`。
+
+现统一为：
+
+| 端 | 行为 |
+|----|------|
+| lib | 新增 `Get-CompactOSDefault()`，读 `config/optimization.json` 的 `disk.compact_os_default`（默认 `false`）；`Invoke-DiskOptimization -Compact` 默认值随之 |
+| CLI | 新增 `-CompactOS` 开关；不带开关时按 config 默认（关闭）并打印跳过提示 |
+| GUI | `chkCompact.Checked = (Get-CompactOSDefault)` |
+| WebUI | 未显式传 `compact=true` 时按 config 默认（关闭） |
+
+**一键全面优化（CLI `[9]`）不再压缩系统文件。** 测试侧新增 AST 断言：
+CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再次回归成无条件压缩。
 
 ---
 
@@ -98,6 +114,8 @@
 7. **GUI 页面无法在此环境自动化测试**（WinForms 需交互式桌面）。新增/改动 GUI 页面后，务必在**真机点一遍**验证渲染与行为。
 8. **Pester 测试陷阱**：`{ $x = ... } | Should -Not -Throw` 的脚本块在子作用域执行，内部赋值**不会**回写父作用域，`$x` 一直是 `$null`。需断言结果时**直接调用**函数再断言。
 9. **Build-EXE 依赖 region 标记**：`OptimizeGUI.ps1` 中 `#region GUI-PAGE-LOADER` / `#endregion` 包裹页面 dot-source 加载段，编译时会被剥离（函数已内联）。**不要改名 / 删除这两个标记**。
+10. **CompactOS 默认必须关闭**：默认值唯一来源是 `config/optimization.json` 的 `disk.compact_os_default`（`false`）。**不要把任何一端改回无条件 `Compact.exe /CompactOS:always`** —— 压缩耗时长且回滚要再跑一次 `Compact.exe /CompactOS:never`。有 AST 用例守着 CLI，改动会让测试失败。
+11. **版本号只改 config**：`config/optimization.json` 的 `version` 是唯一真源，其余（GUI 占位、`Start.bat` 初值、Build-EXE 回退）只是兜底，运行时/构建时会被覆盖（见 `docs/DEVELOPMENT.md`）。
 
 ---
 
@@ -108,7 +126,7 @@
   cd <项目根>
   Invoke-Pester -Path ./tests/Optimize.Core.Tests.ps1
   ```
-  当前约 **81 个用例**（含各域「编号稳定 / 必须备份 / 行为契约」断言）。新增 lib 函数时务必补对应用例。
+  当前 **87 个用例**（含各域「编号稳定 / 必须备份 / 行为契约」断言；其中 6 条是 CompactOS 契约用例）。新增 lib 函数时务必补对应用例。
 - **只读 smoke**：直接 `& scripts/15-HealthCheck.ps1` 或 `& webui/ps/15_health.ps1` 看 JSON 输出；磁盘/网络等可用 `-WhatIf` 预演不改系统。
 - **提交前自检**：确认改动 `*.ps1` 均带 BOM、语法 0 错误（见第 5.1 的解析校验）。
 
@@ -116,16 +134,15 @@
 
 ## 7. 待定决策 / 已知未完成
 
-- **CLI 的 CompactOS 默认无条件执行**（`Compact.exe /CompactOS:always`），而 GUI/WebUI 默认关闭。压缩系统文件耗时长、不易回退，CLI 静默执行略激进，建议统一成「显式开关、默认关闭」（行为变更，需评审）。
+- ~~**CLI 的 CompactOS 默认无条件执行**~~ → **已于 2026-09-18 收口**（见 §3.3）：三端统一为「显式开关、默认关闭」，默认来源 `config` 的 `disk.compact_os_default`。
 - **GUI 体检页 `gui/pages/Health.ps1` 仅做了静态校验（语法 + BOM + 接入一致性），未真机点验**，上线前需在真机确认渲染。
-- PR #5 / #6 合并顺序与潜在冲突（见第 2 节）。
+- ~~PR #5 / #6 合并顺序与潜在冲突~~ → 已在本集成分支按 `#5 → #6` 顺序合并，**零冲突**；剩最后一步是你在 GitHub 点 Merge（见 §2）。
 
 ---
 
 ## 8. 建议的下一步
 
-1. 在 GitHub 合并 **PR #5 → #6**（先 5 后 6），合完观察是否冲突。
-2. 补打 `v3.2.1` tag，触发 Actions 编译 Release（见 `docs/DEVELOPMENT.md` 发布流程）。
-3. 评审并统一 CompactOS 默认行为（第 7 节）。
-4. 真机验收 GUI 体检页。
-5. 后续功能建议（按价值排序）：一键体检已具备，可继续做「一键优化组合包」「优化回滚向导」「计划任务定时体检」。
+1. 合并 `sync/v3.3.0-main` 的 PR 进 `main`（或按 §2 逐个合 #5 → #6）。
+2. 打 tag `v3.3.0` 触发 Actions 编译 Release（见 `docs/DEVELOPMENT.md` 发布流程）。
+3. 真机验收 GUI 体检页（§7）。
+4. 后续功能建议（按价值排序）：「一键优化组合包」「优化回滚向导」「计划任务定时体检」。
