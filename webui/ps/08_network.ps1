@@ -49,6 +49,8 @@ try {
         $r = Invoke-NetworkOptimization -BackupDir $backupDir -DnsOption $Dns `
                                         -Tcp $Tcp -Rss $Rss -Rsc $Rsc -DnsCache $DnsCache
         $log = @($r.details)
+        # error 字段此前从未回传：无活动网卡时前端只会收到空日志
+        if ($r.error) { $log += $r.error }
         if ($r.backup) { $log += "备份: $($r.backup)" }
         Out-Json ([PSCustomObject]@{ ok = $r.ok; log = $log; backup = $r.backup })
     }

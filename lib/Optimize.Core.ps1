@@ -1041,7 +1041,15 @@ function Invoke-NetworkOptimization {
     )
     $adapters = @(Get-ActiveNetAdapters)
     if ($adapters.Count -eq 0) {
-        return [PSCustomObject]@{ ok = $false; error = '未检测到活动网络适配器'; backup = $null; details = @(); adapters = 0 }
+        # 保持返回结构一致：三端（CLI/GUI/WebUI）只渲染 details，若 details 为空数组，
+        # 无网卡环境下用户会看到一片空白（GitHub Actions 等无活动网卡环境已实测）。
+        return [PSCustomObject]@{
+            ok       = $false
+            error    = '未检测到活动网络适配器'
+            backup   = $null
+            details  = @('未检测到活动网络适配器，已跳过网络优化')
+            adapters = 0
+        }
     }
 
     $details = @()

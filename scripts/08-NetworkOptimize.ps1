@@ -86,6 +86,8 @@ Write-Host "`n[3/4] 应用网络优化..." -ForegroundColor Yellow
 $r = Invoke-NetworkOptimization -BackupDir $netBackupDir -DnsOption $dnsChoice
 foreach ($d in $r.details) { Write-Host "  [完成] $d" -ForegroundColor Green }
 if ($r.backup) { Write-Host "  [备份] 网络设置已备份: $($r.backup)" -ForegroundColor DarkGray }
+# error 字段此前从未被渲染：无活动网卡时用户只会看到一片空白
+if ($r.error) { Write-Host "  [错误] $($r.error)" -ForegroundColor Red }
 if (-not $r.ok) { Write-Host "  部分设置失败（可能需要管理员权限）" -ForegroundColor Yellow }
 
 # 网卡高级属性（LSO / EEE）为 CLI 侧附加项，逐适配器应用

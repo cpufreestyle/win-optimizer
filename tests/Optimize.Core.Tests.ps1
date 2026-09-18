@@ -518,6 +518,21 @@ Describe 'Optimize.Core network (shared by CLI/GUI/WebUI)' {
         }
     }
 
+    It 'Invoke-NetworkOptimization 无活动网卡时 details 必须可读（不能是空数组）' {
+        # 三端只渲染 details：若返回空数组，无网卡环境（如 GitHub Actions runner）用户看到的是空白。
+        Mock -CommandName Get-ActiveNetAdapters -MockWith { @() }
+        $tmp = Join-Path $env:TEMP ('netop3_' + (New-Guid).ToString('N'))
+        try {
+            $r = Invoke-NetworkOptimization -BackupDir $tmp -DnsOption 0 -WhatIf
+            $r.ok | Should -BeFalse
+            $r.adapters | Should -Be 0
+            ($r.details | Measure-Object).Count | Should -BeGreaterThan 0
+            ($r.details -join ' ') | Should -Match '未检测到活动网络适配器'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     It 'Invoke-NetworkOptimization reports invalid DNS option when adapters exist' {
         if (@(Get-ActiveNetAdapters).Count -gt 0) {
             $tmp = Join-Path $env:TEMP ('netop2_' + (New-Guid).ToString('N'))
