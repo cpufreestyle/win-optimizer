@@ -6,45 +6,27 @@
     - SSD: 执行 TRIM 优化
     - HDD: 执行碎片整理
     - 清理系统组件 (WinSxS)
-    - 压缩系统文件
+    - 压缩系统文件（默认关闭，需显式 -CompactOS）
     注意：本脚本不使用 Storage 模块 (Get-Volume/Get-PhysicalDisk/Optimize-Volume)，
           改用 WMI + defrag.exe + fsutil，以兼容 Storage 模块损坏的环境。
 #>
 
-# --- 兼容辅助函数（不使用 Storage 模块）---
-function Get-PhysicalDisksCompat {
-    $disks = @()
-    try {
-        $drives = @(Get-WmiObject -Class Win32_DiskDrive -ErrorAction SilentlyContinue)
-        foreach ($d in $drives) {
-            $media = "Unknown"
-            if ($d.MediaType -match "SSD|Solid State") { $media = "SSD" }
-            elseif ($d.MediaType -match "Fixed|Hard|HDD") { $media = "HDD" }
-            $disks += [PSCustomObject]@{
-                DeviceId     = $d.Index
-                FriendlyName = $d.Model
-                MediaType    = $media
-                Size         = $d.Size
-                BusType      = "N/A"
-            }
-        }
-    } catch {}
-    return $disks
-}
+param(
+    # 压缩系统文件（CompactOS）默认关闭：耗时长、且回滚要再跑一次 Compact.exe /CompactOS:never。
+    # 需要时显式加 -CompactOS；也可把 config/optimization.json 的 disk.compact_os_default 设为 true。
+    # 与 GUI / WebUI 的默认值统一走 Get-CompactOSDefault（见 HANDOFF §7.1）。
+    [switch]$CompactOS
+)
 
-function Get-FixedVolumesCompat {
-    $vols = @()
-    try {
-        $lds = @(Get-WmiObject -Class Win32_LogicalDisk -Filter "DriveType=3" -ErrorAction SilentlyContinue)
-        foreach ($ld in $lds) {
-            $vols += [PSCustomObject]@{
-                DriveLetter    = $ld.DeviceID.Substring(0, 1)
-                Size           = $ld.Size
-                SizeRemaining  = $ld.FreeSpace
-            }
-        }
-    } catch {}
-    return $vols
+# 复用共享核心库（磁盘统一实现，与 GUI / WebUI 同源）
+# 统一走 WMI + defrag.exe + fsutil，不使用 Storage 模块，保证 Win7 兼容。
+# 注：本文件原先就地定义了 Get-PhysicalDisksCompat / Get-FixedVolumesCompat，
+# 现改为调用共享库，避免三份实现各自漂移。
+$coreLib = Join-Path $PSScriptRoot "..\lib\Optimize.Core.ps1"
+if (Test-Path $coreLib) { . $coreLib }
+if (-not (Get-Command Invoke-DiskOptimization -ErrorAction SilentlyContinue)) {
+    Write-Host "错误：未找到共享核心库 lib\Optimize.Core.ps1，无法执行磁盘优化。" -ForegroundColor Red
+    return
 }
 
 Write-Host ""
@@ -55,27 +37,11 @@ Write-Host "============================================" -ForegroundColor Cyan
 # --- 获取磁盘信息 ---
 Write-Host "`n[1/3] 检测磁盘信息..." -ForegroundColor Yellow
 
-$physicalDisks = Get-PhysicalDisksCompat
-$volumes = Get-FixedVolumesCompat
+$physicalDisks = @(Get-PhysicalDiskInfo)
+$volumes = @(Get-FixedVolumeList)
 
-# 构建 盘符 -> 磁盘类型 映射（通过 Win32_LogicalDiskToPartition -> DiskDrive）
-$driveMediaMap = @{}
-try {
-    $assoc = @(Get-WmiObject -Class Win32_LogicalDiskToPartition -ErrorAction SilentlyContinue)
-    $parts = @(Get-WmiObject -Class Win32_DiskDriveToDiskPartition -ErrorAction SilentlyContinue)
-    foreach ($a in $assoc) {
-        $ld = $a.Dependent.Split('=')[1].Trim('"')
-        $part = $a.Antecedent
-        $partName = ($part -split '"')[1]
-        foreach ($p in $parts) {
-            if ($p.Antecedent -match [regex]::Escape($partName)) {
-                $diskIdx = ($p.Dependent -split '"')[1] -replace '.*#(\d+)$', '$1'
-                $disk = $physicalDisks | Where-Object { "$($_.DeviceId)" -eq $diskIdx }
-                if ($disk) { $driveMediaMap[$ld.Substring(0,1)] = $disk.MediaType }
-            }
-        }
-    }
-} catch {}
+# 盘符 -> 介质类型映射（共享库：逻辑盘 → 分区 → 物理盘，Win7 可用）
+$driveMediaMap = Get-DriveMediaMap
 
 Write-Host ""
 Write-Host "  物理磁盘:" -ForegroundColor Gray
@@ -96,79 +62,41 @@ foreach ($vol in $volumes) {
 # --- 系统组件清理 ---
 Write-Host "`n[2/3] 系统组件清理..." -ForegroundColor Yellow
 
-# 清理 WinSxS 组件存储
 Write-Host "  [处理] 分析 WinSxS 组件存储..." -ForegroundColor Yellow
 try {
-    $analysis = Dism.exe /Online /Cleanup-Image /AnalyzeComponentStore 2>&1
-    $analysis | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
-
-    Write-Host "  [处理] 清理 WinSxS 组件存储..." -ForegroundColor Yellow
-    Dism.exe /Online /Cleanup-Image /StartComponentCleanup 2>&1 | ForEach-Object {
-        Write-Host "    $_" -ForegroundColor DarkGray
-    }
-    Write-Host "  [完成] WinSxS 组件存储清理完成" -ForegroundColor Green
+    Dism.exe /Online /Cleanup-Image /AnalyzeComponentStore 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
 } catch {
-    Write-Host "  [跳过] WinSxS 清理失败" -ForegroundColor Gray
+    Write-Host "  [跳过] WinSxS 分析失败" -ForegroundColor Gray
 }
+Write-Host "  [完成] $(Invoke-WinSxSCleanup)" -ForegroundColor Green
 
-# 压缩系统文件 (释放更多空间)
+# 压缩系统文件 (释放更多空间) —— 显式开关、默认关闭，与 GUI / WebUI 行为一致
+$compactEnabled = if ($CompactOS) { $true } else { Get-CompactOSDefault }
 Write-Host "`n  [处理] 压缩系统文件..." -ForegroundColor Yellow
-try {
-    Compact.exe /CompactOS:always 2>&1 | ForEach-Object {
-        Write-Host "    $_" -ForegroundColor DarkGray
-    }
-    Write-Host "  [完成] 系统文件压缩完成" -ForegroundColor Green
-} catch {
-    Write-Host "  [跳过] 系统文件压缩失败" -ForegroundColor Gray
+if ($compactEnabled) {
+    Write-Host "  [完成] $(Set-CompactOSState -Enable)" -ForegroundColor Green
+} else {
+    Write-Host "  [跳过] 默认关闭；如需压缩请执行: .\scripts\07-DiskOptimize.ps1 -CompactOS" -ForegroundColor Gray
 }
 
 # --- 磁盘优化/TRIM ---
 Write-Host "`n[3/3] 磁盘优化..." -ForegroundColor Yellow
 
+# 逐卷判定介质后择优优化：SSD→TRIM，HDD→碎片整理。
+# 此前"未知一律按 HDD 处理"会对 SSD 执行碎片整理（无谓写入、损耗寿命）；
+# 现改用共享库的多级判定：WMI 显式 SSD → defrag /A 分析 → fsutil → 兜底 HDD。
 foreach ($vol in $volumes) {
-    $driveLetter = "$($vol.DriveLetter):"
-
-    # 判断磁盘类型：优先用 WMI 关联结果，未知时尝试用 defrag 报告的媒体类型
-    $mediaType = $driveMediaMap[$vol.DriveLetter]
-    if (-not $mediaType -or $mediaType -eq "Unknown") {
-        # 用 defrag /A 输出推断（SSD 通常包含 "已优化"/"无需"/媒体类型提示）
-        try {
-            $info = defrag.exe $driveLetter /I /U /V 2>&1 | Out-String
-            if ($info -match "SSD|固态") { $mediaType = "SSD" }
-            elseif ($info -match "HDD|硬盘|机械") { $mediaType = "HDD" }
-            else { $mediaType = "HDD" }  # 保守默认按 HDD 处理（碎片整理无害）
-        } catch { $mediaType = "HDD" }
-    }
-
+    $mediaType = Get-VolumeMediaType -DriveLetter $vol.DriveLetter -MediaMap $driveMediaMap
     Write-Host ""
-    Write-Host "  处理驱动器 $driveLetter ($mediaType)..." -ForegroundColor Yellow
-
-    if ($mediaType -eq "SSD") {
-        Write-Host "    SSD 检测到，执行 TRIM 优化..." -ForegroundColor Gray
-        try {
-            defrag.exe $driveLetter /L /O /U /V 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
-            Write-Host "  [完成] $driveLetter TRIM 优化完成" -ForegroundColor Green
-        } catch {
-            Write-Host "  [跳过] $driveLetter TRIM 优化失败" -ForegroundColor Yellow
-        }
-    }
-    else {
-        Write-Host "    HDD 检测到，执行碎片整理..." -ForegroundColor Gray
-        try {
-            Write-Host "    [分析] $driveLetter ..." -ForegroundColor Gray
-            defrag.exe $driveLetter /A /U /V 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
-            Write-Host "    [整理] $driveLetter ..." -ForegroundColor Gray
-            defrag.exe $driveLetter /U /V 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
-            Write-Host "  [完成] $driveLetter 碎片整理完成" -ForegroundColor Green
-        } catch {
-            Write-Host "  [跳过] $driveLetter 碎片整理失败" -ForegroundColor Yellow
-        }
-    }
+    Write-Host "  处理驱动器 $($vol.DriveLetter): ($mediaType)..." -ForegroundColor Yellow
+    $r = Invoke-VolumeOptimization -DriveLetter $vol.DriveLetter -MediaType $mediaType -Trim -Defrag
+    Write-Host "  [完成] $($r.drive) $($r.action)" -ForegroundColor Green
+    if ($r.note) { Write-Host "         $($r.note)" -ForegroundColor Gray }
 }
 
 # --- 显示优化后磁盘状态 ---
 Write-Host "`n优化后磁盘状态:" -ForegroundColor Yellow
-$updatedVolumes = Get-FixedVolumesCompat
+$updatedVolumes = @(Get-FixedVolumeList)
 foreach ($vol in $updatedVolumes) {
     $totalGB = if ($vol.Size) { [math]::Round($vol.Size / 1GB, 1) } else { 0 }
     $freeGB  = if ($vol.SizeRemaining) { [math]::Round($vol.SizeRemaining / 1GB, 1) } else { 0 }
@@ -179,5 +107,9 @@ Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  磁盘优化完成！" -ForegroundColor Green
 Write-Host "  SSD 已执行 TRIM | HDD 已执行碎片整理" -ForegroundColor Gray
-Write-Host "  系统组件已清理并压缩" -ForegroundColor Gray
+if ($compactEnabled) {
+    Write-Host "  系统组件已清理并压缩" -ForegroundColor Gray
+} else {
+    Write-Host "  系统组件已清理（未压缩系统文件）" -ForegroundColor Gray
+}
 Write-Host "============================================" -ForegroundColor Cyan

@@ -1,4 +1,4 @@
-# Generate release notes for the current tag.
+﻿# Generate release notes for the current tag.
 # If tools/release-notes-<tag>.md exists, use it; otherwise auto-generate
 # from git history and write to $RUNNER_TEMP/auto-notes.md.
 # Outputs NOTES_PATH env var for the downstream release step.

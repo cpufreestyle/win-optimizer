@@ -65,16 +65,18 @@
 
 ## 版本号与发布
 
-版本号分散在 4 处，**必须保持一致**：
+**版本号单一来源**：`config/optimization.json` 的 `"version"`（其余各处均为回退 / 占位，运行时或构建时被覆盖）：
 
-| 位置 | 字段 |
-|------|------|
-| `config/optimization.json` | `"version"` |
-| `OptimizeGUI.ps1` | `$script:Version` |
-| `Optimize.ps1` | `$script:Version` |
-| `Build-EXE.ps1` | `Invoke-ps2exe -version`（四段式，如 `3.0.0.0`） |
+| 位置 | 字段 | 说明 |
+|------|------|------|
+| `config/optimization.json` | `"version"` | **唯一真源**，改版本号只改这里 |
+| `Optimize.ps1` | `$script:Version = Get-OptVersion` | 运行时读 config |
+| `OptimizeGUI.ps1` | `$script:Version` | 占位初值，运行时由 `Get-OptVersion` 覆盖 |
+| `Start.bat` | `set "APP_VER=..."` | 初始值，随后用 `findstr` 从 config 解析覆盖 |
+| `Build-EXE.ps1` | `Invoke-ps2exe -version` | 编译前从 config 读取（四段式，如 `3.3.0.0`）；仅在 config 缺 version 时才用硬编码回退 |
 
-`Build-EXE.ps1` 在编译前会**自动校验**四者版本一致，不一致则中止并报错。
+测试断言 `Get-OptVersion` 与 config 的 version 一致（见 `tests/Optimize.Core.Tests.ps1`），
+因此**只改 config 而忘记同步回退值不会导致构建失败**，但发布前仍建议把回退值一并刷新到当前版本。
 
 ### 发布流程
 

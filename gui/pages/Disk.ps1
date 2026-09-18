@@ -8,8 +8,10 @@
     $lblDesc = New-Label "SSD 执行 TRIM 优化 / HDD 执行碎片整理 / 清理系统组件" 20 56 760 24 $Fonts.Small $Theme.TextDim
     $page.Controls.Add($lblDesc)
 
-    # 磁盘列表 - 使用兼容函数
-    $physicalDisks = @(Get-PhysicalDiskCompat)
+    # 磁盘列表 — 统一走共享库（WMI，Win7 可用）
+    # 此前用 Get-PhysicalDiskCompat，它把 WMI 的 "Fixed hard disk media" 一律判成 HDD，
+    # 导致 SSD 也被标成 HDD。
+    $physicalDisks = @(Get-PhysicalDiskInfo)
 
     $yDisk = 96
     $lblDiskInfo = New-Label "物理磁盘:" 20 $yDisk 760 24 $Fonts.Sub $Theme.Accent
@@ -73,7 +75,8 @@
     $script:chkCompact.Location = New-Object System.Drawing.Point(280, [int]($yDisk + 30))
     $script:chkCompact.Size = New-Object System.Drawing.Size(250, 24)
     $script:chkCompact.Text = "压缩系统文件 (CompactOS)"
-    $script:chkCompact.Checked = $false
+    # 默认值与 CLI / WebUI 同源：config 的 disk.compact_os_default（默认 false）
+    $script:chkCompact.Checked = (Get-CompactOSDefault)
     $script:chkCompact.Font = $Fonts.Body
     $script:chkCompact.ForeColor = $Theme.TextMain
     $script:chkCompact.BackColor = $Theme.BgDark
@@ -87,40 +90,13 @@
         $this.Enabled = $false
         $this.Text = "优化中...(可能需要数分钟)"
         Invoke-UIRefresh
-        $volumes = @(Get-VolumeCompat)
-
-        if ($script:chkTRIM.Checked -or $script:chkDefrag.Checked) {
-            foreach ($vol in $volumes) {
-                $drive = "$($vol.DriveLetter):"
-                # Win7 回退：用 WMI 查询磁盘类型
-                $mediaType = "HDD"
-                if ($script:chkTRIM.Checked) {
-                    try {
-                        Optimize-VolumeCompat -DriveLetter $vol.DriveLetter -ReTrim
-                        Write-Log "[优化] $drive TRIM 完成" "SUCCESS"
-                    } catch { Write-Log "[跳过] $drive TRIM" "WARN" }
-                }
-                if ($script:chkDefrag.Checked) {
-                    try {
-                        Optimize-VolumeCompat -DriveLetter $vol.DriveLetter -Defrag
-                        Write-Log "[优化] $drive 碎片整理完成" "SUCCESS"
-                    } catch { Write-Log "[跳过] $drive 碎片整理" "WARN" }
-                }
-                Invoke-UIRefresh
-            }
-        }
-
-        if ($script:chkWinSxS.Checked) {
-            Write-Log "正在清理 WinSxS 组件存储..."
-            Dism.exe /Online /Cleanup-Image /StartComponentCleanup 2>&1 | Out-Null
-            Write-Log "WinSxS 组件存储清理完成" "SUCCESS"
-        }
-
-        if ($script:chkCompact.Checked) {
-            Write-Log "正在压缩系统文件..."
-            Compact.exe /CompactOS:always 2>&1 | Out-Null
-            Write-Log "系统文件压缩完成" "SUCCESS"
-        }
+        # 统一走共享库：先逐卷判定介质（SSD/HDD），再分流优化。
+        # 此前 GUI 对每个卷同时执行 TRIM 和碎片整理，且不区分介质 ——
+        # 对 SSD 做碎片整理是无谓写入、损耗寿命；现在 SSD→TRIM、HDD→碎片整理。
+        $r = Invoke-DiskOptimization -Trim $script:chkTRIM.Checked -Defrag $script:chkDefrag.Checked `
+                -WinSxS $script:chkWinSxS.Checked -Compact $script:chkCompact.Checked
+        foreach ($d in $r.details) { Write-Log "[磁盘] $d" }
+        if (-not $r.ok) { Write-Log "[磁盘] 部分操作失败（可能需要管理员权限）" "WARN" }
 
         Write-Log "磁盘优化完成！" "SUCCESS"
         $this.Enabled = $true

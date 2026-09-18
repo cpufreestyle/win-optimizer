@@ -10,6 +10,14 @@
     - 重置网络栈 (可选)
 #>
 
+# 复用共享核心库（网络统一实现，与 GUI / WebUI 同源）
+$coreLib = Join-Path $PSScriptRoot "..\lib\Optimize.Core.ps1"
+if (Test-Path $coreLib) { . $coreLib }
+if (-not (Get-Command Invoke-NetworkOptimization -ErrorAction SilentlyContinue)) {
+    Write-Host "错误：未找到共享核心库 lib\Optimize.Core.ps1，无法执行网络优化。" -ForegroundColor Red
+    return
+}
+
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "         网络优化" -ForegroundColor Cyan
@@ -18,21 +26,23 @@ Write-Host "============================================" -ForegroundColor Cyan
 # --- 显示当前网络设置 ---
 Write-Host "`n[1/4] 当前网络信息:" -ForegroundColor Yellow
 
-$activeAdapter = Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1
-if ($activeAdapter) {
-    Write-Host "  活动适配器: $($activeAdapter.Name)" -ForegroundColor Gray
-    Write-Host "  描述      : $($activeAdapter.InterfaceDescription)" -ForegroundColor Gray
-    Write-Host "  链接速度  : $($activeAdapter.LinkSpeed)" -ForegroundColor Gray
-    Write-Host "  MAC地址   : $($activeAdapter.MacAddress)" -ForegroundColor Gray
-} else {
+# 统一走共享库：自动排除虚拟/隧道类网卡（避免误改 VPN 导致断网），
+# 并在无 NetAdapter cmdlet 的老系统上回退 CIM。
+$adapters = @(Get-ActiveNetAdapters)
+if ($adapters.Count -eq 0) {
     Write-Host "  未检测到活动网络适配器" -ForegroundColor Red
     Write-Host "============================================" -ForegroundColor Cyan
     return
 }
+$activeAdapter = $adapters[0]
 
-# 当前 DNS
-$dnsServers = (Get-DnsClientServerAddress -InterfaceIndex $activeAdapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses
-Write-Host "  当前DNS   : $($dnsServers -join ', ')" -ForegroundColor Gray
+foreach ($a in $adapters) {
+    Write-Host "  活动适配器: $($a.Name)" -ForegroundColor Gray
+    Write-Host "  描述      : $($a.Description)" -ForegroundColor Gray
+    Write-Host "  链接速度  : $($a.LinkSpeed)" -ForegroundColor Gray
+    Write-Host "  MAC地址   : $($a.MacAddress)" -ForegroundColor Gray
+    Write-Host "  当前DNS   : $((@(Get-AdapterDns -IfIndex $a.IfIndex -Name $a.Name)) -join ', ')" -ForegroundColor Gray
+}
 
 # TCP 全局设置
 Write-Host "`n  TCP 全局设置:" -ForegroundColor Gray
@@ -47,154 +57,56 @@ if ($tcpGlobal) {
 Write-Host "`n[2/4] 选择 DNS 服务器:" -ForegroundColor Yellow
 Write-Host ""
 
-# DNS 选项：优先从 config/optimization.json 的 dns_options 读取，回退到内置列表
-$dnsOptions = @(
-    @{Label="阿里 DNS";        Primary="223.5.5.5";      Secondary="223.6.6.6"}
-    @{Label="腾讯 DNS";        Primary="119.29.29.29";   Secondary="119.28.28.28"}
-    @{Label="114 DNS";         Primary="114.114.114.114"; Secondary="114.114.115.115"}
-    @{Label="Google DNS";      Primary="8.8.8.8";        Secondary="8.8.4.4"}
-    @{Label="Cloudflare DNS";  Primary="1.1.1.1";        Secondary="1.0.0.1"}
-    @{Label="阿里+Cloudflare";  Primary="223.5.5.5";      Secondary="1.1.1.1"}
-)
-$configPath = Join-Path $PSScriptRoot "..\config\optimization.json"
-$configPath = [System.IO.Path]::GetFullPath($configPath)
-if (Test-Path $configPath) {
-    try {
-        $cfg = Get-Content -Path $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($cfg.dns_options -and ($cfg.dns_options.PSObject.Properties.Count -gt 0)) {
-            $cfgOptions = @()
-            $i = 1
-            foreach ($prop in $cfg.dns_options.PSObject.Properties) {
-                $addrs = @($prop.Value)
-                $cfgOptions += @{Label=$prop.Name; Primary=$addrs[0]; Secondary=if($addrs.Count -gt 1){$addrs[1]}else{$addrs[0]}}
-                $i++
-            }
-            # 用配置的 DNS（去掉内置的"混合"项，避免重复）
-            $dnsOptions = $cfgOptions
-            Write-Host "  (已从 config/optimization.json 加载 DNS 选项)" -ForegroundColor DarkGray
-        }
-    } catch {
-        Write-Host "  (DNS 配置读取失败，使用内置选项)" -ForegroundColor Yellow
-    }
-}
+# DNS 选项统一由共享库提供。
+# 编号保持稳定（1=Cloudflare / 2=Google / 3=阿里 / 4=114 / 5=腾讯）——WebUI 前端硬编码了编号，
+# 改动会直接破坏界面；config/optimization.json 的 dns_options 只覆盖"地址"，不改编号。
+$dnsOptions = @(Get-DnsOptions)
 
-for ($i = 0; $i -lt $dnsOptions.Count; $i++) {
-    $o = $dnsOptions[$i]
-    Write-Host ("  [{0}] {1,-16} ({2} / {3})" -f ($i+1), $o.Label, $o.Primary, $o.Secondary)
+foreach ($o in $dnsOptions) {
+    Write-Host ("  [{0}] {1,-16} ({2} / {3})" -f $o.Value, $o.Label, $o.Primary, $o.Secondary)
 }
 Write-Host "  [0] 跳过 DNS 设置"
 $dnsChoice = Read-Host "选择 (0-$($dnsOptions.Count))"
 
-$dnsPrimary = $null
-$dnsSecondary = $null
-
-if ($dnsChoice -match '^\d+$') {
-    $idx = [int]$dnsChoice - 1
-    if ($idx -ge 0 -and $idx -lt $dnsOptions.Count) {
-        $dnsPrimary = $dnsOptions[$idx].Primary
-        $dnsSecondary = $dnsOptions[$idx].Secondary
-    } elseif ($dnsChoice -eq "0") {
-        Write-Host "  跳过 DNS 设置" -ForegroundColor Gray
-    } else {
-        Write-Host "  无效选择，跳过 DNS 设置" -ForegroundColor Yellow
-    }
+# 规范化为整数：0=保持当前，1..N=对应选项；无效输入一律当作"保持当前"
+if ($dnsChoice -notmatch '^\d+$') {
+    $dnsChoice = 0
 } else {
-    Write-Host "  无效选择，跳过 DNS 设置" -ForegroundColor Yellow
+    $dnsChoice = [int]$dnsChoice
+    if ($dnsChoice -gt $dnsOptions.Count) { $dnsChoice = 0 }
 }
+if ($dnsChoice -eq 0) { Write-Host "  跳过 DNS 设置" -ForegroundColor Gray }
 
-# 备份原始 DNS，便于后续通过 [B] 备份恢复还原
-try {
-    $origDns = (Get-DnsClientServerAddress -InterfaceIndex $activeAdapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses
-    $netBackupDir = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\backups"))
-    if (-not (Test-Path $netBackupDir)) { New-Item -ItemType Directory -Path $netBackupDir -Force | Out-Null }
-    $netBackup = Join-Path $netBackupDir ("network_backup_" + (Get-Date -Format 'yyyyMMdd_HHmmss') + ".json")
-    [PSCustomObject]@{
-        InterfaceAlias = $activeAdapter.Name
-        InterfaceIndex = $activeAdapter.ifIndex
-        DnsServers     = @($origDns)
-        Date           = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-    } | ConvertTo-Json | Out-File -FilePath $netBackup -Encoding UTF8
-    Write-Host "  [备份] 原始 DNS 已备份: $netBackup" -ForegroundColor DarkGray
-} catch {
-    Write-Host "  [跳过] DNS 备份失败: $($_.Exception.Message)" -ForegroundColor Yellow
-}
+# --- 备份 + 应用网络优化（统一走共享库，与 GUI / WebUI 同一份实现）---
+# 此前 CLI 只改"第一个"活动适配器，GUI/WebUI 改全部；现统一为全部活动物理网卡
+# （虚拟/隧道类网卡由共享库自动排除，避免误改 VPN 导致断网）。
+$netBackupDir = Join-Path (Split-Path -Parent $PSScriptRoot) "backups"
 
-if ($dnsPrimary) {
-    Write-Host "`n  正在设置 DNS..." -ForegroundColor Yellow
-    try {
-        Set-DnsClientServerAddress -InterfaceIndex $activeAdapter.ifIndex -ServerAddresses @($dnsPrimary, $dnsSecondary) -ErrorAction Stop
-        Write-Host "  [完成] DNS 已设置为: $dnsPrimary, $dnsSecondary" -ForegroundColor Green
-    } catch {
-        Write-Host "  [失败] DNS 设置失败: $($_.Exception.Message)" -ForegroundColor Red
-    }
-}
+Write-Host "`n[3/4] 应用网络优化..." -ForegroundColor Yellow
+$r = Invoke-NetworkOptimization -BackupDir $netBackupDir -DnsOption $dnsChoice
+foreach ($d in $r.details) { Write-Host "  [完成] $d" -ForegroundColor Green }
+if ($r.backup) { Write-Host "  [备份] 网络设置已备份: $($r.backup)" -ForegroundColor DarkGray }
+# error 字段此前从未被渲染：无活动网卡时用户只会看到一片空白
+if ($r.error) { Write-Host "  [错误] $($r.error)" -ForegroundColor Red }
+if (-not $r.ok) { Write-Host "  部分设置失败（可能需要管理员权限）" -ForegroundColor Yellow }
 
-# --- TCP 网络参数优化 ---
-Write-Host "`n[3/4] TCP 网络参数优化..." -ForegroundColor Yellow
-
-# 启用 TCP 自动调优 (提升网络吞吐量)
-Write-Host "  [处理] TCP 自动调优..." -ForegroundColor Gray
-try {
-    Set-NetTCPSetting -SettingName Internet -AutoTuningLevelLocal Normal -ErrorAction SilentlyContinue
-    Write-Host "  [完成] TCP 自动调优: Normal" -ForegroundColor Green
-} catch {
-    Write-Host "  [跳过] TCP 自动调优设置失败" -ForegroundColor Yellow
-}
-
-# 启用 RSS (接收端缩放) — 多核 CPU 网络处理优化
-Write-Host "  [处理] 接收端缩放 (RSS)..." -ForegroundColor Gray
-try {
-    $rssCapable = Get-NetAdapterRss -Name $activeAdapter.Name -ErrorAction SilentlyContinue
-    if ($rssCapable) {
-        Enable-NetAdapterRss -Name $activeAdapter.Name -ErrorAction SilentlyContinue
-        Write-Host "  [完成] RSS 已启用" -ForegroundColor Green
-    } else {
-        Write-Host "  [跳过] 网卡不支持 RSS" -ForegroundColor Gray
-    }
-} catch {
-    Write-Host "  [跳过] RSS 设置失败" -ForegroundColor Yellow
-}
-
-# 启用 RSC (接收段合并) — 减少 CPU 中断
-Write-Host "  [处理] 接收段合并 (RSC)..." -ForegroundColor Gray
-try {
-    $rscCapable = Get-NetAdapterRsc -Name $activeAdapter.Name -ErrorAction SilentlyContinue
-    if ($rscCapable) {
-        Enable-NetAdapterRsc -Name $activeAdapter.Name -ErrorAction SilentlyContinue
-        Write-Host "  [完成] RSC 已启用" -ForegroundColor Green
-    } else {
-        Write-Host "  [跳过] 网卡不支持 RSC" -ForegroundColor Gray
-    }
-} catch {
-    Write-Host "  [跳过] RSC 设置失败" -ForegroundColor Yellow
-}
-
-# 设置网卡中断裁决 (减少 CPU 中断)
+# 网卡高级属性（LSO / EEE）为 CLI 侧附加项，逐适配器应用
 Write-Host "  [处理] 网卡高级属性优化..." -ForegroundColor Gray
-try {
-    # 启用大型发送卸载 (LSO) — 减少 CPU 负载
-    Set-NetAdapterAdvancedProperty -Name $activeAdapter.Name -RegistryKeyword "*LSO" -RegistryValue 1 -ErrorAction SilentlyContinue
-    Write-Host "  [完成] LSO (大型发送卸载): 已启用" -ForegroundColor Green
-} catch {
-    Write-Host "  [跳过] LSO 设置" -ForegroundColor Gray
-}
-
-try {
-    # 启用节能以太网 (EEE) — 某些网卡可降低功耗但对性能有影响
-    # 对于老电脑追求性能，禁用 EEE
-    Set-NetAdapterAdvancedProperty -Name $activeAdapter.Name -RegistryKeyword "*EEE" -RegistryValue 0 -ErrorAction SilentlyContinue
-    Write-Host "  [完成] EEE (节能以太网): 已禁用 (优先性能)" -ForegroundColor Green
-} catch {
-    Write-Host "  [跳过] EEE 设置" -ForegroundColor Gray
-}
-
-# --- 清除 DNS 缓存并重置 ---
-Write-Host "`n[4/4] 清除 DNS 缓存..." -ForegroundColor Yellow
-try {
-    ipconfig /flushdns | Out-Null
-    Write-Host "  [完成] DNS 缓存已清除" -ForegroundColor Green
-} catch {
-    Write-Host "  [跳过] DNS 缓存清除失败" -ForegroundColor Yellow
+foreach ($a in $adapters) {
+    try {
+        # 启用大型发送卸载 (LSO) — 减少 CPU 负载
+        Set-NetAdapterAdvancedProperty -Name $a.Name -RegistryKeyword "*LSO" -RegistryValue 1 -ErrorAction SilentlyContinue
+        Write-Host "  [完成] LSO (大型发送卸载): $($a.Name)" -ForegroundColor Green
+    } catch {
+        Write-Host "  [跳过] LSO 设置 ($($a.Name))" -ForegroundColor Gray
+    }
+    try {
+        # 禁用节能以太网 (EEE) — 老电脑优先性能
+        Set-NetAdapterAdvancedProperty -Name $a.Name -RegistryKeyword "*EEE" -RegistryValue 0 -ErrorAction SilentlyContinue
+        Write-Host "  [完成] EEE (节能以太网): 已禁用 $($a.Name)" -ForegroundColor Green
+    } catch {
+        Write-Host "  [跳过] EEE 设置 ($($a.Name))" -ForegroundColor Gray
+    }
 }
 
 # 可选: 重置 Winsock 和 IP 栈

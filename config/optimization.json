@@ -1,5 +1,5 @@
 ﻿{
-    "version": "3.2.0",
+    "version": "3.3.0",
     "description": "7代CPU老电脑优化配置文件",
     "services": {
         "safe_to_disable": [
@@ -34,6 +34,9 @@
         "114":         ["114.114.114.114", "114.114.115.115"],
         "google":      ["8.8.8.8", "8.8.4.4"],
         "cloudflare":  ["1.1.1.1", "1.0.0.1"]
+    },
+    "disk": {
+        "compact_os_default": false
     },
     "telemetry_tasks": [
         "\\Microsoft\\Windows\\Application Experience\\Microsoft Compatibility Appraiser",
