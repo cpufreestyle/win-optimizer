@@ -55,10 +55,17 @@ function Invoke-ScriptModule {
     $scriptPath = Join-Path $ScriptsDir $ScriptName
     if (Test-Path $scriptPath) {
         Write-Log "正在执行模块: $ScriptName ..."
-        & $scriptPath
-        Write-Log "模块 $ScriptName 执行完成。" "SUCCESS"
+        try {
+            & $scriptPath
+            Write-Log "模块 $ScriptName 执行完成。" "SUCCESS"
+            return $true
+        } catch {
+            Write-Log "模块 $ScriptName 执行失败: $($_.Exception.Message)" "ERROR"
+            return $false
+        }
     } else {
         Write-Log "找不到模块文件: $scriptPath" "ERROR"
+        return $false
     }
     Write-Host ""
     if (-not $NoPause) { Read-Host "按回车键返回主菜单" }
@@ -175,15 +182,23 @@ function Invoke-FullOptimization {
 
     $total = $modules.Count
     $current = 0
+    $failed = @()
     foreach ($mod in $modules) {
         $current++
         Write-Host ""
         Write-Host "[$current/$total] " -NoNewline -ForegroundColor Yellow
-        Invoke-ScriptModule $mod -NoPause
+        $ok = Invoke-ScriptModule $mod -NoPause
+        if (-not $ok) { $failed += $mod }
     }
 
     Write-Host ""
-    Write-Log "一键全面优化完成！建议重启电脑使所有更改生效。" "SUCCESS"
+    if ($failed.Count -gt 0) {
+        Write-Log ("一键全面优化完成，但有 {0} 个模块执行失败: {1}" -f $failed.Count, ($failed -join ', ')) "WARN"
+        Write-Host ("以下模块执行失败: " + ($failed -join ', ')) -ForegroundColor Red
+        Write-Host "失败详情见 optimize.log" -ForegroundColor Yellow
+    } else {
+        Write-Log "一键全面优化完成！建议重启电脑使所有更改生效。" "SUCCESS"
+    }
     Read-Host "按回车键返回主菜单"
 }
 

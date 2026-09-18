@@ -63,7 +63,7 @@ if ($PSScriptRoot) {
 $script:ScriptsDir  = Join-Path $script:ProjectRoot "scripts"
 $script:BackupDir   = Join-Path $script:ProjectRoot "backups"
 $script:LogFile     = Join-Path $script:ProjectRoot "optimize.log"
-$script:Version     = "3.1.0"
+$script:Version     = "3.2.0"  # 占位初值；运行时由 lib 的 Get-OptVersion 覆盖（见下方第 578 行）
 
 # ============================================================
 #  Win7 兼容性检测

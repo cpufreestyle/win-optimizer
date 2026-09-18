@@ -1,5 +1,5 @@
 ﻿{
-    "version": "3.2.0",
+    "version": "3.2.1",
     "description": "7代CPU老电脑优化配置文件",
     "services": {
         "safe_to_disable": [

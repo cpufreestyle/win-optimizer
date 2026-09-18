@@ -96,8 +96,8 @@ $cfgText = [System.IO.File]::ReadAllText($cfgPath, [System.Text.Encoding]::UTF8)
 $cfgVer  = $null
 if ($cfgText -match '"version"\s*:\s*"([^"]+)"') { $cfgVer = $Matches[1] }
 if (-not $cfgVer) {
-    Write-Host "[版本] 未在 config/optimization.json 找到 version，回退使用 3.1.0" -ForegroundColor Yellow
-    $cfgVer = "3.1.0"
+    Write-Host "[版本] 未在 config/optimization.json 找到 version，回退使用 3.2.0" -ForegroundColor Yellow
+    $cfgVer = "3.2.0"
 }
 # EXE 文件版本使用四段式（取前三段 + .0）
 $exeVer = (($cfgVer -split '\.' | Select-Object -First 3) -join '.') + '.0'
