@@ -23,7 +23,8 @@
     因此缺 `23df87f`(网络) / `36126d0`(磁盘) / `bfd07e4`+`adbbe2c`(体检) / `dae7b29`(本文档) 四个提交，
     且其发布说明里写的「44/44 测试通过」已过期（现为 87/87）。**本分支已重建并覆盖它**。
 - `main` **受保护**，所有改动必须经 PR 合入，且需手动在 GitHub 点「Merge」（无自动 merge 权限）。
-- PR #5 / #6 保留 OPEN：本集成分支的 PR 合并后，GitHub 会自动关闭它们（其提交已全部可达）。
+- **本集成分支开出的 PR：[**#7**](https://github.com/cpufreestyle/win-optimizer/pull/7)**（base `main`，待你手动 Merge）
+- PR #5 / #6 保留 OPEN：#7 合并后，GitHub 会自动关闭它们（其提交已全部可达）。
   若你更倾向逐个合并，也可以直接按 `#5 → #6` 顺序在 GitHub 点合并，然后丢弃本分支。
 
 ---
@@ -142,7 +143,8 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 
 ## 8. 建议的下一步
 
-1. 合并 `sync/v3.3.0-main` 的 PR 进 `main`（或按 §2 逐个合 #5 → #6）。
+1. 在 GitHub 合并 **PR [#7](https://github.com/cpufreestyle/win-optimizer/pull/7)**（本集成分支，`sync/v3.3.0-main` → `main`）。
+   （备选：按 #5 → #6 逐个在 GitHub 点合并，然后丢弃本分支。）
 2. 打 tag `v3.3.0` 触发 Actions 编译 Release（见 `docs/DEVELOPMENT.md` 发布流程）。
 3. 真机验收 GUI 体检页（§7）。
 4. 后续功能建议（按价值排序）：「一键优化组合包」「优化回滚向导」「计划任务定时体检」。
