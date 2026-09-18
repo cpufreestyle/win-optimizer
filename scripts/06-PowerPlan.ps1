@@ -11,6 +11,14 @@
     - 调整无线适配器电源模式
 #>
 
+# 复用共享核心库（电源计划统一实现，与 GUI / WebUI 同源）
+$coreLib = Join-Path $PSScriptRoot "..\lib\Optimize.Core.ps1"
+if (Test-Path $coreLib) { . $coreLib }
+if (-not (Get-Command Set-PowerPlan -ErrorAction SilentlyContinue)) {
+    Write-Host "错误：未找到共享核心库 lib\Optimize.Core.ps1，无法应用电源计划。" -ForegroundColor Red
+    return
+}
+
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "         电源计划优化" -ForegroundColor Cyan
@@ -26,12 +34,9 @@ Write-Host "`n  可用电源计划:" -ForegroundColor Gray
 $plans = powercfg /list 2>&1
 Write-Host "  $plans" -ForegroundColor Gray
 
-# --- 备份 ---
-$backupFile = Join-Path $PSScriptRoot "..\backups\power_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
-$backupFile = [System.IO.Path]::GetFullPath($backupFile)
-$backupDir = Split-Path $backupFile -Parent
-if (-not (Test-Path $backupDir)) { New-Item -ItemType Directory -Path $backupDir -Force | Out-Null }
-powercfg /query > $backupFile 2>&1
+# --- 备份（统一走共享库）---
+$backupDir = Join-Path (Split-Path -Parent $PSScriptRoot) "backups"
+$backupFile = Backup-PowerPlan -BackupDir $backupDir
 Write-Host "`n  备份已保存: $backupFile" -ForegroundColor Green
 
 # --- 显示选项 ---
@@ -50,125 +55,57 @@ if ($choice -eq "N" -or $choice -eq "n") {
     return
 }
 
+if ($choice -notmatch "^[1234]$") {
+    Write-Host "  无效选择，操作取消。" -ForegroundColor Red
+    Write-Host "============================================" -ForegroundColor Cyan
+    return
+}
+
 Write-Host "`n[3/3] 正在应用电源优化..." -ForegroundColor Yellow
 
-switch ($choice) {
-    "1" {
-        # 高性能模式
-        $highPerfGuid = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"
-        powercfg /setactive $highPerfGuid 2>&1 | Out-Null
-        Write-Host "  [完成] 已切换到高性能电源计划" -ForegroundColor Green
+$catalog = Get-PowerPlanCatalog
 
-        # 优化高性能计划的具体设置
-        # CPU 最小状态 100%，最大状态 100%
-        powercfg /setacvalueindex $highPerfGuid SUB_PROCESSOR PROCTHROTTLEMIN 100 2>&1 | Out-Null
-        powercfg /setacvalueindex $highPerfGuid SUB_PROCESSOR PROCTHROTTLEMAX 100 2>&1 | Out-Null
-        Write-Host "  [完成] CPU 处理器状态: 最低100% / 最高100% (AC电源)" -ForegroundColor Green
-
-        # 禁用 USB 选择性挂起
-        powercfg /setacvalueindex $highPerfGuid SUB_USB USBSELSUSP 0 2>&1 | Out-Null
-        Write-Host "  [完成] USB 选择性挂起: 已禁用" -ForegroundColor Green
-
-        # 硬盘从不休眠
-        powercfg /setacvalueindex $highPerfGuid SUB_DISK DISKIDLE 0 2>&1 | Out-Null
-        Write-Host "  [完成] 硬盘休眠: 从不 (AC电源)" -ForegroundColor Green
-
-        # 无线适配器: 最高性能
-        powercfg /setacvalueindex $highPerfGuid SUB_NONE WIRELESS_PWRSAV 0 2>&1 | Out-Null
-        Write-Host "  [完成] 无线适配器电源模式: 最高性能" -ForegroundColor Green
-
-        # PCI Express 链接状态电源管理: 关闭
-        powercfg /setacvalueindex $highPerfGuid SUB_PCIEXPRESS ASPM 0 2>&1 | Out-Null
-        Write-Host "  [完成] PCI Express 电源管理: 关闭" -ForegroundColor Green
-
-        # 应用设置
-        powercfg /setactive $highPerfGuid 2>&1 | Out-Null
-    }
-
-    "2" {
-        # 卓越性能模式 (需要先解锁)
-        $ultimateGuid = "e9a42b02-d5df-448d-aa00-03f14749eb61"
-
-        Write-Host "  正在解锁卓越性能计划..." -ForegroundColor Yellow
-        powercfg /duplicatescheme $ultimateGuid 2>&1 | Out-Null
-
-        # 检查是否成功
-        $ultimatePlan = powercfg /list 2>&1 | Select-String "e9a42b02"
-        if ($ultimatePlan) {
-            powercfg /setactive $ultimateGuid 2>&1 | Out-Null
-            Write-Host "  [完成] 已切换到卓越性能电源计划" -ForegroundColor Green
-
-            # 同样优化设置
-            powercfg /setacvalueindex $ultimateGuid SUB_PROCESSOR PROCTHROTTLEMIN 100 2>&1 | Out-Null
-            powercfg /setacvalueindex $ultimateGuid SUB_PROCESSOR PROCTHROTTLEMAX 100 2>&1 | Out-Null
-            powercfg /setacvalueindex $ultimateGuid SUB_USB USBSELSUSP 0 2>&1 | Out-Null
-            powercfg /setacvalueindex $ultimateGuid SUB_DISK DISKIDLE 0 2>&1 | Out-Null
-            powercfg /setacvalueindex $ultimateGuid SUB_PCIEXPRESS ASPM 0 2>&1 | Out-Null
-            powercfg /setactive $ultimateGuid 2>&1 | Out-Null
-            Write-Host "  [完成] 所有优化已应用" -ForegroundColor Green
+if ($choice -eq "4") {
+    # 自定义 CPU 频率（统一走共享库）
+    Write-Host ""
+    $minFreq = Read-Host "输入 CPU 最小频率百分比 (1-100, 推荐: 5-100)"
+    $maxFreq = Read-Host "输入 CPU 最大频率百分比 (1-100, 推荐: 100)"
+    if ($minFreq -match "^\d+$" -and $maxFreq -match "^\d+$") {
+        $r = Set-CpuThrottle -MinPercent ([int]$minFreq) -MaxPercent ([int]$maxFreq)
+        if ($r.ok) {
+            Write-Host "  [完成] CPU 频率: 最低$($r.min)% / 最高$($r.max)%" -ForegroundColor Green
         } else {
-            Write-Host "  [失败] 卓越性能计划解锁失败，尝试使用高性能计划..." -ForegroundColor Yellow
-            powercfg /setactive "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c" 2>&1 | Out-Null
-            Write-Host "  [完成] 已切换到高性能电源计划" -ForegroundColor Green
-        }
-    }
-
-    "3" {
-        # 平衡优化模式
-        $balancedGuid = "381b4222-f694-41f0-9685-ff5bb260df2e"
-        powercfg /setactive $balancedGuid 2>&1 | Out-Null
-        Write-Host "  [完成] 已切换到平衡电源计划" -ForegroundColor Green
-
-        # CPU 最小状态 5%，最大 100%
-        powercfg /setacvalueindex $balancedGuid SUB_PROCESSOR PROCTHROTTLEMIN 5 2>&1 | Out-Null
-        powercfg /setacvalueindex $balancedGuid SUB_PROCESSOR PROCTHROTTLEMAX 100 2>&1 | Out-Null
-        Write-Host "  [完成] CPU 处理器状态: 最低5% / 最高100% (AC电源)" -ForegroundColor Green
-
-        # 禁用 USB 选择性挂起
-        powercfg /setacvalueindex $balancedGuid SUB_USB USBSELSUSP 0 2>&1 | Out-Null
-        Write-Host "  [完成] USB 选择性挂起: 已禁用" -ForegroundColor Green
-
-        # 硬盘休眠 30 分钟
-        powercfg /setacvalueindex $balancedGuid SUB_DISK DISKIDLE 1800 2>&1 | Out-Null
-        Write-Host "  [完成] 硬盘休眠: 30分钟" -ForegroundColor Green
-
-        powercfg /setactive $balancedGuid 2>&1 | Out-Null
-    }
-
-    "4" {
-        # 自定义 CPU 频率
-        Write-Host ""
-        $minFreq = Read-Host "输入 CPU 最小频率百分比 (1-100, 推荐: 5-100)"
-        $maxFreq = Read-Host "输入 CPU 最大频率百分比 (1-100, 推荐: 100)"
-
-        if ($minFreq -match "^\d+$" -and $maxFreq -match "^\d+$") {
-            $minVal = [int]$minFreq
-            $maxVal = [int]$maxFreq
-
-            if ($minVal -lt 1 -or $minVal -gt 100 -or $maxVal -lt 1 -or $maxVal -gt 100) {
-                Write-Host "  [错误] 值必须在 1-100 之间" -ForegroundColor Red
-                Write-Host "============================================" -ForegroundColor Cyan
-                return
-            }
-
-            $activeGuid = (powercfg /getactivescheme) -replace ".*GUID: ([a-f0-9-]+).*", '$1'
-            powercfg /setacvalueindex $activeGuid SUB_PROCESSOR PROCTHROTTLEMIN $minVal 2>&1 | Out-Null
-            powercfg /setacvalueindex $activeGuid SUB_PROCESSOR PROCTHROTTLEMAX $maxVal 2>&1 | Out-Null
-            powercfg /setactive $activeGuid 2>&1 | Out-Null
-
-            Write-Host "  [完成] CPU 频率: 最低${minVal}% / 最高${maxVal}%" -ForegroundColor Green
-        } else {
-            Write-Host "  [错误] 请输入有效数字" -ForegroundColor Red
+            Write-Host "  [错误] $($r.error)" -ForegroundColor Red
             Write-Host "============================================" -ForegroundColor Cyan
             return
         }
-    }
-
-    default {
-        Write-Host "  无效选择，操作取消。" -ForegroundColor Red
+    } else {
+        Write-Host "  [错误] 请输入有效数字" -ForegroundColor Red
         Write-Host "============================================" -ForegroundColor Cyan
         return
     }
+} else {
+    $profile = [int]$choice
+    $plan = $catalog | Where-Object { $_.Value -eq $profile }
+    if ($profile -eq 2) { Write-Host "  正在解锁卓越性能计划..." -ForegroundColor Yellow }
+
+    # 统一走共享库（与 GUI / WebUI 同一份实现，含解锁失败回退）
+    $params = @{
+        Guid               = $plan.GUID
+        BackupDir          = $backupDir
+        SkipBackup         = $true   # 本脚本已在上面备份过
+        UnlockUltimate     = ($profile -eq 2)
+        FallbackToHighPerf = ($profile -eq 2)
+    }
+    switch ($profile) {
+        1 { $params.MinPercent = 100; $params.MaxPercent = 100; $params.DiskIdleSeconds = 0;    $params.UsbSuspendOff = $true; $params.PciAspmOff = $true; $params.WirelessMaxPerf = $true }
+        2 { $params.MinPercent = 100; $params.MaxPercent = 100; $params.DiskIdleSeconds = 0;    $params.UsbSuspendOff = $true; $params.PciAspmOff = $true }
+        3 { $params.MinPercent = 5;   $params.MaxPercent = 100; $params.DiskIdleSeconds = 1800; $params.UsbSuspendOff = $true }
+    }
+    $r = Set-PowerPlan @params
+    Write-Host "  [完成] 已切换到$(if ($r.fallback) { '高性能' } else { $plan.Title })电源计划" -ForegroundColor Green
+    foreach ($d in $r.details) { Write-Host "  [完成] $d" -ForegroundColor Green }
+    if ($r.fallback) { Write-Host "  注意: 卓越性能计划解锁失败，已回退高性能计划" -ForegroundColor Yellow }
 }
 
 # 显示当前活动计划

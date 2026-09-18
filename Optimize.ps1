@@ -32,6 +32,12 @@ $script:Version     = Get-OptVersion
 
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
+    # 优先复用共享库实现（AppendAllText 单次写入，高频调用比 Add-Content 更省 IO）
+    if (Get-Command Write-OptLog -ErrorAction SilentlyContinue) {
+        Write-OptLog -Message $Message -Level $Level -Path $LogFile
+        return
+    }
+    # 共享库不可用时的等价兜底
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $line = "[$timestamp] [$Level] $Message"
     Add-Content -Path $LogFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
@@ -124,6 +130,7 @@ function Show-Menu {
         Write-Host "   [12] 隐藏指定更新         — 把指定升级藏起来不再出现"
         Write-Host "   [13] Windows 可选功能     — 列出并启用微软默认未开启的功能"
         Write-Host "   [14] 恢复自动更新         — 恢复 Windows Update 服务与计划任务"
+        Write-Host "   [15] 一键体检（只读）      — 体检分 + 问题清单，可优化前后对比"
         Write-Host ""
         Write-Host " [工具]" -ForegroundColor Yellow
         Write-Host "   [B]  备份当前系统设置"
@@ -149,6 +156,7 @@ function Show-Menu {
             "12" { Invoke-ScriptModule "12-HideUpdates.ps1" }
             "13" { Invoke-ScriptModule "13-WindowsFeatures.ps1" }
             "14" { Invoke-ScriptModule "14-RestoreAutoUpdate.ps1" }
+            "15" { Invoke-ScriptModule "15-HealthCheck.ps1" }
             { $_ -eq "B" -or $_ -eq "b" } { Invoke-ScriptModule "09-BackupRestore.ps1" }
             { $_ -eq "R" -or $_ -eq "r" } { Invoke-ScriptModule "09-BackupRestore.ps1" }
             { $_ -eq "Q" -or $_ -eq "q" } { Write-Host "感谢使用，再见！" -ForegroundColor Green; return }
@@ -214,7 +222,7 @@ if (-not (Test-Administrator)) {
     Write-Host "  然后执行: cd $ProjectRoot; .\Optimize.ps1" -ForegroundColor Red
     Write-Host "================================================" -ForegroundColor Red
     Write-Host ""
-    pause
+    Read-Host "按回车键退出"
     exit 1
 }
 
