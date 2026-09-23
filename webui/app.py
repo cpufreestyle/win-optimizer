@@ -372,7 +372,10 @@ def api_services():
 def api_services_apply():
     data = request.get_json(silent=True) or {}
     mode = data.get("mode", "safe")
-    return jsonify(run_ps("03_services.ps1", "-Action", "apply", "-Mode", mode))
+    args = ["-Action", "apply", "-Mode", mode]
+    if data.get("telemetry"):
+        args.append("-Telemetry")
+    return jsonify(run_ps("03_services.ps1", *args))
 
 
 @app.route("/api/services/restore", methods=["POST"])

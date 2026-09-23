@@ -111,22 +111,6 @@ function Clear-RecycleBinCompat {
     }
 }
 
-function Get-ScheduledTaskCompat {
-    param([string]$TaskPath, [string]$TaskName)
-    # Win7 回退：用 schtasks.exe 查询
-    $output = schtasks /Query /TN "$($TaskPath)$($TaskName)" 2>&1
-    return ($LASTEXITCODE -eq 0)
-}
-
-function Disable-ScheduledTaskCompat {
-    param([string]$TaskPath, [string]$TaskName)
-    if ($script:PSVersion -ge 3 -and -not $script:IsWin7) {
-        try { Disable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null; return $true } catch { return $false }
-    } else {
-        try { schtasks /Change /TN "$($TaskPath)$($TaskName)" /DISABLE 2>&1 | Out-Null; return ($LASTEXITCODE -eq 0) } catch { return $false }
-    }
-}
-
 function Get-PhysicalDiskCompat {
     # Win7 回退：用 WMI
     return @(Get-CimData Win32_DiskDrive | Select-Object @{N='DeviceId';E={$_.Index}}, @{N='FriendlyName';E={$_.Model}}, @{N='MediaType';E={ if($_.MediaType -like '*Fixed*' -or $_.MediaType -like '*Hard*') { 'HDD' } else { 'Unknown' } }}, @{N='Size';E={$_.Size}})

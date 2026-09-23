@@ -146,18 +146,13 @@
 
         # 遥测任务
         if ($script:chkTelemetry.Checked) {
-            $telemetryTasks = @(
-                @{Path="\Microsoft\Windows\Application Experience\"; Name="Microsoft Compatibility Appraiser"},
-                @{Path="\Microsoft\Windows\Application Experience\"; Name="ProgramDataUpdater"},
-                @{Path="\Microsoft\Windows\Customer Experience Improvement Program\"; Name="Consolidator"},
-                @{Path="\Microsoft\Windows\Customer Experience Improvement Program\"; Name="UsbCeip"}
-            )
-            foreach ($task in $telemetryTasks) {
-                try {
-                    $result = Disable-ScheduledTaskCompat -TaskPath $task.Path -TaskName $task.Name
-                    if ($result) { Write-Log "[禁用] 计划任务: $($task.Name)" "SUCCESS" }
-                } catch {}
+            $telemetry = Disable-TelemetryTasks -BackupDir $script:BackupDir
+            foreach ($d in $telemetry.details) {
+                if ($d.result -like "已禁用") { Write-Log "[禁用] 计划任务: $($d.name)" "SUCCESS" }
+                elseif ($d.result -like "失败*") { Write-Log "[失败] 计划任务: $($d.name)" "ERROR" }
             }
+            Write-Log "遥测计划任务：已禁用 $($telemetry.disabled) 个，跳过 $($telemetry.skipped) 个" "INFO"
+            if ($telemetry.backup) { Write-Log "遥测任务备份: $($telemetry.backup)" "INFO" }
         }
 
         Write-Log "服务优化完成！已禁用 $disabledCount 个服务" "SUCCESS"

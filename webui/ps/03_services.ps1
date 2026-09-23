@@ -4,12 +4,14 @@
 .DESCRIPTION
     -Action list   : 列出可优化服务及其当前状态
     -Action apply  : 禁用（mode=all 全部 / mode=safe 仅安全禁用）
+    -Telemetry     : apply 时同时禁用遥测相关计划任务（config telemetry_tasks）
     -Action restore: 从最近备份 CSV 恢复
     逻辑复用共享库 lib/Optimize.Core.ps1，保证与 CLI/GUI 行为一致。
 #>
 param(
     [ValidateSet("list", "apply", "restore")]$Action = "list",
-    [ValidateSet("all", "safe")]$Mode = "safe"
+    [ValidateSet("all", "safe")]$Mode = "safe",
+    [switch]$Telemetry
 )
 
 
@@ -47,30 +49,52 @@ try {
                 disabled  = ($st -eq "Disabled")
             }
         }
-        Out-Json ([PSCustomObject]@{ ok = $true; services = $list })
+        $telemetryList = @()
+        foreach ($t in (Get-TelemetryTaskStates)) {
+            $telemetryList += [PSCustomObject]@{
+                name     = $t.name
+                taskPath = $t.taskPath
+                exists   = $t.exists
+                state    = $t.state
+            }
+        }
+        Out-Json ([PSCustomObject]@{ ok = $true; services = $list; telemetry = $telemetryList })
     }
     elseif ($Action -eq "apply") {
         $services = Get-ServiceList
         $backupFile = Backup-ServiceStates -BackupDir $backupDir -Services $services
         $result = Disable-Services -Services $services -Mode $Mode
+        $telemetryResult = $null
+        $telemetryDisabled = $null
+        $telemetryDetails = $null
+        if ($Telemetry) {
+            $telemetryResult = Disable-TelemetryTasks -BackupDir $backupDir
+            $telemetryDisabled = $telemetryResult.disabled
+            $telemetryDetails = $telemetryResult.details
+        }
         Out-Json ([PSCustomObject]@{
             ok       = $true
             disabled = $result.disabled
             skipped  = $result.skipped
             backup   = $backupFile
             details  = $result.details
+            telemetryDisabled = $telemetryDisabled
+            telemetryDetails  = $telemetryDetails
         })
     }
     elseif ($Action -eq "restore") {
         $result = Restore-Services -BackupDir $backupDir
+        $telemetryResult = Restore-TelemetryTasks -BackupDir $backupDir
         if ($result.error) {
-            Out-Json ([PSCustomObject]@{ ok = $false; error = $result.error })
+            Out-Json ([PSCustomObject]@{ ok = $false; error = $result.error; telemetryRestored = $telemetryResult.restored })
         } else {
             Out-Json ([PSCustomObject]@{
                 ok       = $true
                 restored = $result.restored
                 backup   = $result.backup
                 details  = $result.details
+                telemetryRestored = $telemetryResult.restored
+                telemetryBackup    = $telemetryResult.backup
             })
         }
     }

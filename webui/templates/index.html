@@ -247,6 +247,9 @@ async function renderServices(){
     <div class="card">
       <h3>可优化服务</h3>
       <div id="svclist" class="muted">加载中…</div>
+      <label style="display:flex;gap:8px;align-items:center;margin:10px 0;cursor:pointer;font-size:13px;color:var(--dim)">
+        <input type="checkbox" id="chkTelemetry" checked> 同时禁用遥测相关计划任务（自动备份可恢复）
+      </label>
       <div class="row">
         ${btn('刷新','ghost',renderServices)}
         ${btn('仅安全禁用','green',()=>applySvc('safe'))}
@@ -254,6 +257,7 @@ async function renderServices(){
         ${btn('恢复备份','ghost',restoreSvc)}
       </div>
     </div>
+    <div class="card"><h3>遥测计划任务</h3><div id="telelist" class="muted">加载中…</div></div>
     <div class="card"><h3>操作日志</h3><div class="log" id="logbox"></div></div>`;
   bindBtns(content);
   const d = await api('/api/services');
@@ -266,18 +270,40 @@ async function renderServices(){
   $('#svclist').innerHTML=`<div class="table-wrap"><table>
     <thead><tr><th>服务名</th><th>说明</th><th>级别</th><th>当前状态</th></tr></thead>
     <tbody>${rows}</tbody></table></div>`;
+  const tel=$('#telelist');
+  if(tel){
+    if(d.telemetry && d.telemetry.length){
+      const trows=d.telemetry.map(t=>`<tr>
+        <td>${esc(t.name)}</td><td class="muted">${esc(t.taskPath)}</td>
+        <td>${t.exists ? badge(t.state||'未知', t.state==='Disabled'?'ok':'warn') : badge('不存在','info')}</td>
+      </tr>`).join('');
+      tel.innerHTML=`<div class="table-wrap"><table>
+        <thead><tr><th>任务名</th><th>路径</th><th>状态</th></tr></thead>
+        <tbody>${trows}</tbody></table></div>`;
+    } else { tel.textContent='（未检测到遥测计划任务）'; }
+  }
 }
 async function applySvc(mode){
+  const chk = $('#chkTelemetry');
+  const telemetry = chk ? chk.checked : false;
   if(!confirm(`确认${mode==='all'?'全部禁用':'仅安全禁用'}所选服务？`)) return;
   log(`应用服务优化(${mode})…`);
-  const d = await api('/api/services/apply',{method:'POST',body:{mode}});
-  if(d.ok){ log(`已禁用 ${d.disabled} 个，跳过 ${d.skipped} 个。备份：${d.backup}`); renderServices(); }
+  const d = await api('/api/services/apply',{method:'POST',body:{mode,telemetry}});
+  if(d.ok){
+    log(`已禁用 ${d.disabled} 个，跳过 ${d.skipped} 个。备份：${d.backup}`);
+    if(d.telemetryDisabled!=null) log(`遥测计划任务：已禁用 ${d.telemetryDisabled} 个`);
+    renderServices();
+  }
   else log('服务优化失败：'+d.error,'err');
 }
 async function restoreSvc(){
   log('恢复服务备份…');
   const d = await api('/api/services/restore',{method:'POST'});
-  if(d.ok){ log(`已恢复 ${d.restored} 个服务`); renderServices(); }
+  if(d.ok){
+    log(`已恢复 ${d.restored} 个服务`);
+    if(d.telemetryRestored!=null) log(`遥测计划任务：已重新启用 ${d.telemetryRestored} 个`);
+    renderServices();
+  }
   else log('恢复失败：'+d.error,'err');
 }
 

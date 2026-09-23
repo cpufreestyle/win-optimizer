@@ -149,6 +149,7 @@
                     elseif ($b.Name -like "startup_*") { "启动项备份" }
                     elseif ($b.Name -like "power_*") { "电源计划备份" }
                     elseif ($b.Name -like "visual_*") { "视觉效果备份" }
+                    elseif ($b.Name -like "telemetry_backup_*") { "遥测计划任务备份" }
                     else { "其他" }
             $size = if ($b.Length -gt 1KB) { "$([math]::Round($b.Length/1KB, 1)) KB" } else { "$($b.Length) B" }
             $dgvBackups.Rows.Add($b.Name, $b.LastWriteTime.ToString("yyyy-MM-dd HH:mm"), $type, $size) | Out-Null
@@ -214,6 +215,16 @@
                 }
                 Write-Log "启动项已从备份恢复" "SUCCESS"
             } catch { Write-Log "启动项恢复失败" "ERROR" }
+        }
+        elseif ($selectedFile -like "telemetry_backup_*.json") {
+            try {
+                $tele = Restore-TelemetryTasks -BackupDir $script:BackupDir -File $selectedPath
+                if ($tele.error) {
+                    Write-Log "遥测计划任务恢复失败: $($tele.error)" "ERROR"
+                } else {
+                    Write-Log "遥测计划任务已从备份恢复（重新启用 $($tele.restored) 个）" "SUCCESS"
+                }
+            } catch { Write-Log "遥测计划任务恢复失败" "ERROR" }
         }
 
         [System.Windows.Forms.MessageBox]::Show("恢复完成！请重启电脑使所有更改生效。", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)

@@ -800,3 +800,112 @@ Describe 'Optimize.Core health check and before/after comparison' {
         (Compare-HealthReports -Before $null -After (Get-SystemHealthReport @script:HcOpt)) | Should -BeNullOrEmpty
     }
 }
+
+
+Describe 'Optimize.Core telemetry tasks (shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        $lp = Join-Path $PWD.Path 'lib\Optimize.Core.ps1'
+        . $lp
+    }
+
+    It 'Get-TelemetryTasks returns non-empty array of task paths' {
+        $t = Get-TelemetryTasks
+        @($t).Count | Should -BeGreaterThan 0
+        $t[0] | Should -Match '^\\'
+    }
+
+    It 'Get-TelemetryTaskStates returns one entry per configured task' {
+        $states = Get-TelemetryTaskStates
+        @($states).Count | Should -Be @(Get-TelemetryTasks).Count
+        foreach ($s in $states) {
+            $s.name     | Should -Not -BeNullOrEmpty
+            $s.taskPath | Should -Match '\\$'
+            $s.exists   | Should -BeOfType [bool]
+        }
+    }
+
+    It 'Get-ScheduledTaskState reports exists=$false for a bogus task' {
+        $r = Get-ScheduledTaskState -TaskPath '\NoSuch\Path\' -TaskName 'NoSuchTask_12345'
+        $r.exists | Should -BeFalse
+    }
+
+    It 'Disable-TelemetryTasks -WhatIf previews only and writes no backup' {
+        $tmp = Join-Path $env:TEMP ('tele_test_' + (New-Guid).ToString('N'))
+        try {
+            $r = Disable-TelemetryTasks -BackupDir $tmp -WhatIf
+            $r.backup | Should -BeNullOrEmpty
+            Test-Path $tmp | Should -BeFalse
+            # 预览计数与实际可禁用任务数一致（幂等：重复运行不重复计数）
+            $r2 = Disable-TelemetryTasks -BackupDir $tmp -WhatIf
+            $r2.disabled | Should -Be $r.disabled
+            $r2.details.Count | Should -Be $r.details.Count
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Disable-TelemetryTasks details use only known result vocabulary' {
+        $tmp = Join-Path $env:TEMP ('tele_test_' + (New-Guid).ToString('N'))
+        try {
+            $r = Disable-TelemetryTasks -BackupDir $tmp -WhatIf
+            foreach ($d in $r.details) {
+                $d.result | Should -Match '^(已禁用|将禁用\(预览\)|已处于禁用，已跳过|不存在，已跳过|失败: .+)$'
+            }
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Backup-TelemetryTaskStates writes JSON listing every configured task' {
+        $tmp = Join-Path $env:TEMP ('tele_test_' + (New-Guid).ToString('N'))
+        try {
+            $f = Backup-TelemetryTaskStates -BackupDir $tmp
+            Test-Path $f | Should -BeTrue
+            $f | Should -Match 'telemetry_backup_\d{8}_\d{6}\.json$'
+            $data = Get-Content -LiteralPath $f -Raw | ConvertFrom-Json
+            @($data.tasks).Count | Should -Be @(Get-TelemetryTasks).Count
+            $data.host | Should -Be $env:COMPUTERNAME
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Restore-TelemetryTasks errors cleanly when no backup exists' {
+        $tmp = Join-Path $env:TEMP ('tele_test_' + (New-Guid).ToString('N'))
+        try {
+            $r = Restore-TelemetryTasks -BackupDir $tmp
+            $r.error | Should -Match '未找到'
+            $r.restored | Should -Be 0
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Restore-TelemetryTasks re-enables tasks that were enabled at backup time (mocked)' {
+        $tmp = Join-Path $env:TEMP ('tele_test_' + (New-Guid).ToString('N'))
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        try {
+            $f = Join-Path $tmp 'telemetry_backup_20200101_000000.json'
+            @{
+                date  = '2020-01-01 00:00:00'
+                host  = $env:COMPUTERNAME
+                tasks = @(
+                    @{ name = 'TaskEnabled';  taskPath = '\Microsoft\Test\'; state = 'Ready'    }
+                    @{ name = 'TaskDisabled'; taskPath = '\Microsoft\Test\'; state = 'Disabled' }
+                    @{ name = 'TaskMissing';  taskPath = '\Microsoft\Test\'; state = $null      }
+                )
+            } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $f -Encoding UTF8
+
+            Mock Set-ScheduledTaskState { param($TaskPath, $TaskName, $Enable) return $Enable } -ParameterFilter { $TaskName -eq 'TaskEnabled' }
+
+            $r = Restore-TelemetryTasks -BackupDir $tmp -File $f
+            $r.error | Should -BeNullOrEmpty
+            $r.restored | Should -Be 1
+            @($r.details | Where-Object { $_.result -like '已重新启用' }).Count | Should -Be 1
+            @($r.details | Where-Object { $_.name -eq 'TaskDisabled' }).Count | Should -Be 1
+            ($r.details | Where-Object { $_.name -eq 'TaskDisabled' }).result | Should -Match '保持禁用'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}

@@ -105,6 +105,182 @@ function Get-TelemetryTasks {
     )
 }
 
+# ============================================================
+#  遥测计划任务域（CLI / GUI / WebUI 三端共享的单一实现）
+#  任务清单唯一来源：config/optimization.json -> telemetry_tasks
+#  状态查询与启停自动适配：Win8+/PS3+ 用 ScheduledTasks 模块，Win7/PS2 回退 schtasks.exe
+# ============================================================
+
+# 查询单个计划任务状态（Win7 兼容）
+# 返回: @{ exists=$bool; state=$string }（state 形如 Ready / Disabled / Running，无法解析时为 $null）
+function Get-ScheduledTaskState {
+    param([string]$TaskPath, [string]$TaskName)
+    if ([string]::IsNullOrWhiteSpace($TaskName)) { return @{ exists = $false; state = $null } }
+    $fullName = "$TaskPath$TaskName"
+    if ($PSVersionTable.PSVersion.Major -ge 3 -and -not (Test-IsLegacyWindows)) {
+        try {
+            $t = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop
+            if (-not $t) { return @{ exists = $false; state = $null } }
+            return @{ exists = $true; state = "$($t.State)" }
+        } catch {
+            return @{ exists = $false; state = $null }
+        }
+    }
+    # Win7 / PS2.0 回退：schtasks /Query（详细列表输出）
+    try {
+        $out = & schtasks /Query /TN $fullName /FO LIST /V 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $out) { return @{ exists = $false; state = $null } }
+        $state = $null
+        foreach ($line in $out) {
+            if ("$line" -match 'Scheduled Task State:\s*([A-Za-z]+)') { $state = $Matches[1] }
+        }
+        return @{ exists = $true; state = $state }
+    } catch {
+        return @{ exists = $false; state = $null }
+    }
+}
+
+# 启用/禁用单个计划任务（Win7 兼容），成功返回 $true
+function Set-ScheduledTaskState {
+    param([string]$TaskPath, [string]$TaskName, [bool]$Enable)
+    if ([string]::IsNullOrWhiteSpace($TaskName)) { return $false }
+    try {
+        if ($PSVersionTable.PSVersion.Major -ge 3 -and -not (Test-IsLegacyWindows)) {
+            if ($Enable) {
+                Enable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null
+            } else {
+                Disable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null
+            }
+            return $true
+        }
+        # Win7 / PS2.0 回退：schtasks /Change
+        $switchArg = if ($Enable) { '/ENABLE' } else { '/DISABLE' }
+        & schtasks /Change /TN "$TaskPath$TaskName" $switchArg 2>$null | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
+# 列出全部遥测计划任务及当前状态（只读，供三端展示）
+# 返回 @( @{name; taskPath; exists; state; disabled} )
+function Get-TelemetryTaskStates {
+    $result = @()
+    foreach ($full in @(Get-TelemetryTasks)) {
+        $leaf   = Split-Path $full -Leaf
+        $parent = Split-Path $full -Parent
+        if (-not $parent.EndsWith("\")) { $parent = "$parent\" }
+        $st = Get-ScheduledTaskState -TaskPath $parent -TaskName $leaf
+        $result += [PSCustomObject]@{
+            name     = $leaf
+            taskPath = $parent
+            exists   = [bool]$st.exists
+            state    = $st.state
+            disabled = ("$($st.state)" -eq 'Disabled')
+        }
+    }
+    return $result
+}
+
+# 备份遥测计划任务当前状态到 JSON，返回备份文件路径（与其它域备份同目录）
+function Backup-TelemetryTaskStates {
+    param([string]$BackupDir)
+    if (-not $BackupDir) { $BackupDir = Get-OptBackupDir }
+    if (-not (Test-Path $BackupDir)) { New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null }
+    $ts         = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $backupFile = Join-Path $BackupDir "telemetry_backup_$ts.json"
+    $rows = @()
+    foreach ($s in @(Get-TelemetryTaskStates)) {
+        $rows += [PSCustomObject]@{ name = $s.name; taskPath = $s.taskPath; state = $s.state }
+    }
+    [PSCustomObject]@{
+        date  = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        host  = $env:COMPUTERNAME
+        tasks = $rows
+    } | ConvertTo-Json -Depth 4 | Set-Content -Path $backupFile -Encoding UTF8
+    return $backupFile
+}
+
+# 禁用全部遥测计划任务（config 为唯一来源，Win7 自动回退 schtasks）
+# 默认先备份当前状态；-WhatIf 只预览不改动
+# 返回: @{ disabled; skipped; backup; details: @(@{name; result}); error=$null }
+function Disable-TelemetryTasks {
+    param([string]$BackupDir, [switch]$WhatIf, [switch]$SkipBackup)
+    if (-not $BackupDir) { $BackupDir = Get-OptBackupDir }
+    $details = @()
+    $disabled = 0
+    $skipped  = 0
+    $backupFile = $null
+    try {
+        if (-not $SkipBackup -and -not $WhatIf) {
+            $backupFile = Backup-TelemetryTaskStates -BackupDir $BackupDir
+        }
+        foreach ($s in @(Get-TelemetryTaskStates)) {
+            if (-not $s.exists) {
+                $skipped++
+                $details += @{ name = $s.name; result = "不存在，已跳过" }
+                continue
+            }
+            if ($s.disabled) {
+                $skipped++
+                $details += @{ name = $s.name; result = "已处于禁用，已跳过" }
+                continue
+            }
+            if ($WhatIf) {
+                $disabled++
+                $details += @{ name = $s.name; result = "将禁用(预览)" }
+                continue
+            }
+            if (Set-ScheduledTaskState -TaskPath $s.taskPath -TaskName $s.name -Enable $false) {
+                $disabled++
+                $details += @{ name = $s.name; result = "已禁用" }
+            } else {
+                $skipped++
+                $details += @{ name = $s.name; result = "失败: 无法禁用计划任务" }
+            }
+        }
+    } catch {
+        return @{ disabled = $disabled; skipped = $skipped; backup = $backupFile; details = $details; error = $_.Exception.Message }
+    }
+    return @{ disabled = $disabled; skipped = $skipped; backup = $backupFile; details = $details; error = $null }
+}
+
+# 从最近一次遥测计划任务备份恢复（备份时未禁用的任务会被重新启用）
+# 返回: @{ restored; backup; details: @(@{name; result}); error=$null }
+function Restore-TelemetryTasks {
+    param([string]$BackupDir, [string]$File)
+    if (-not $BackupDir) { $BackupDir = Get-OptBackupDir }
+    try {
+        $target = $null
+        if ($File) {
+            $target = Get-Item -LiteralPath $File -ErrorAction SilentlyContinue
+        } else {
+            $target = Get-ChildItem -Path $BackupDir -Filter "telemetry_backup_*.json" -ErrorAction SilentlyContinue |
+                      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        }
+        if (-not $target) { return @{ restored = 0; backup = $null; details = @(); error = "未找到遥测计划任务备份" } }
+        $data = Get-Content -LiteralPath $target.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+        $restored = 0
+        $details  = @()
+        foreach ($t in @($data.tasks)) {
+            if (-not $t) { continue }
+            if ($null -eq $t.state) { continue }  # 备份时即不存在的任务，恢复时跳过
+            if ("$($t.state)" -eq 'Disabled') {
+                $details += @{ name = $t.name; result = "备份时即为禁用，保持禁用" }
+                continue
+            }
+            if (Set-ScheduledTaskState -TaskPath $t.taskPath -TaskName $t.name -Enable $true) {
+                $restored++
+                $details += @{ name = $t.name; result = "已重新启用" }
+            } else {
+                $details += @{ name = $t.name; result = "失败: 无法启用计划任务" }
+            }
+        }
+        return @{ restored = $restored; backup = $target.FullName; details = $details; error = $null }
+    } catch {
+        return @{ restored = 0; backup = $null; details = @(); error = $_.Exception.Message }
+    }
+}
 # 获取服务当前启动类型
 function Get-ServiceStartType {
     param([string]$n)

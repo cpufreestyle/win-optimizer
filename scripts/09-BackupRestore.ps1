@@ -17,6 +17,10 @@ Write-Host "============================================" -ForegroundColor Cyan
 $backupDir = Join-Path $PSScriptRoot "..\backups"
 $backupDir = [System.IO.Path]::GetFullPath($backupDir)
 
+# --- 加载共享函数库（恢复遥测任务状态需要）---
+$libPath = Join-Path $PSScriptRoot "..\lib\Optimize.Core.ps1"
+if (Test-Path $libPath) { . $libPath }
+
 # --- 列出现有备份 ---
 Write-Host "`n[现有备份文件]" -ForegroundColor Yellow
 
@@ -39,6 +43,7 @@ $serviceBackups  = $backups | Where-Object { $_.Name -like "services_backup_*" }
 $startupBackups  = $backups | Where-Object { $_.Name -like "startup_backup_*" }
 $visualBackups   = $backups | Where-Object { $_.Name -like "visual_backup_*" }
 $powerBackups    = $backups | Where-Object { $_.Name -like "power_backup_*" }
+$telemetryBackups = $backups | Where-Object { $_.Name -like "telemetry_backup_*" }
 $updateBackups   = $backups | Where-Object { $_.Name -like "winupdate_block_*" }
 $manualBackups   = $backups | Where-Object { $_.Name -like "manual_update_*" }
 
@@ -47,6 +52,7 @@ $categories = @(
     @{Name="启动项备份";  Backups=$startupBackups;  Type="startup"}
     @{Name="视觉效果备份"; Backups=$visualBackups;   Type="visual"}
     @{Name="电源计划备份"; Backups=$powerBackups;    Type="power"}
+    @{Name="遥测计划任务备份"; Backups=$telemetryBackups; Type="telemetry"}
     @{Name="屏蔽Windows更新备份"; Backups=$updateBackups;   Type="update"}
     @{Name="手动更新备份"; Backups=$manualBackups;   Type="update"}
     @{Name="网络DNS备份"; Backups=(Get-ChildItem -Path $backupDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "network_backup_*" }); Type="network"}
@@ -171,6 +177,24 @@ function Restore-Power {
     }
 }
 
+function Restore-Telemetry {
+    param([string]$BackupFile)
+    Write-Host "  正在恢复遥测计划任务..." -ForegroundColor Yellow
+    # 具体解析与恢复走 lib（含 Win7 schtasks 回退），这里只负责展示
+    $result = Restore-TelemetryTasks -BackupDir $backupDir -File $BackupFile
+    if ($result.error) {
+        Write-Host "    [失败] $($result.error)" -ForegroundColor Red
+        return
+    }
+    foreach ($d in $result.details) {
+        if ($d.result -like "已重新启用") {
+            Write-Host "    [恢复] $($d.name)" -ForegroundColor Green
+        } else {
+            Write-Host "    [跳过] $($d.name) — $($d.result)" -ForegroundColor Gray
+        }
+    }
+}
+
 function Restore-Update {
     param([string]$BackupFile)
     Write-Host "  正在恢复 Windows Update 注册表（解除 Windows 更新屏蔽）..." -ForegroundColor Yellow
@@ -216,6 +240,7 @@ if ($input -eq "A" -or $input -eq "a") {
                 "startup"  { Restore-Startup  -BackupFile $latest.FullName }
                 "visual"   { Restore-Visual   -BackupFile $latest.FullName }
                 "power"    { Restore-Power    -BackupFile $latest.FullName }
+"telemetry" { Restore-Telemetry -BackupFile $latest.FullName }
                 "update"   { Restore-Update   -BackupFile $latest.FullName }
                 "network"  { Restore-Network  -BackupFile $latest.FullName }
             }
@@ -244,6 +269,7 @@ else {
             "startup"  { Restore-Startup  -BackupFile $selected.File }
             "visual"   { Restore-Visual   -BackupFile $selected.File }
             "power"    { Restore-Power    -BackupFile $selected.File }
+"telemetry" { Restore-Telemetry -BackupFile $selected.File }
             "update"   { Restore-Update   -BackupFile $selected.File }
             "network"  { Restore-Network  -BackupFile $selected.File }
         }
