@@ -387,12 +387,16 @@ Describe 'Optimize.Core power plans (shared by CLI/GUI/WebUI)' {
         if ($null -ne $g) { $g | Should -Match '^[0-9a-fA-F-]{36}$' }
     }
 
-    It 'Backup-PowerPlan writes a txt backup file' {
+    It 'Backup-PowerPlan writes a structured json backup with the active plan GUID' {
         $tmp = Join-Path $env:TEMP ('pwr_' + (New-Guid).ToString('N'))
         try {
             $f = Backup-PowerPlan -BackupDir $tmp
             Test-Path $f | Should -BeTrue
-            $f | Should -Match '\.txt$'
+            # 2026-09-23 起从 .txt 改为结构化 JSON：还原必须拿到活动计划 GUID 才能精确切回
+            $f | Should -Match '\.json$'
+            $data = Get-Content -LiteralPath $f -Raw | ConvertFrom-Json
+            $data.PSObject.Properties.Name | Should -Contain 'activeGuid'
+            $data.PSObject.Properties.Name | Should -Contain 'query'
         } finally {
             Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -1056,5 +1060,811 @@ Describe 'Optimize.Core health auto-remediation (shared by CLI/GUI/WebUI)' {
         $r = Invoke-HealthRemediation -Report $empty -BackupDir (Join-Path $env:TEMP ('rem5_' + (New-Guid).ToString('N'))) -SkipCleanScan
         $r.ok | Should -BeFalse
         $r.error | Should -Not -BeNullOrEmpty
+    }
+}
+
+Describe 'Optimize.Core backup manifest and timeline (shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+        # 测试夹具：写一份带指定时间戳 manifest 的假备份，保证排序断言确定
+        function script:New-FakeBackup {
+            param([string]$Dir, [string]$Domain, [string]$Stamp)
+            $ext = 'json'
+            if ($Domain -eq 'services' -or $Domain -eq 'startup') { $ext = 'csv' }
+            if ($Domain -eq 'update') { $ext = 'reg' }
+            $name = "${Domain}_backup_$Stamp.$ext"
+            $f = Join-Path $Dir $name
+            Set-Content -LiteralPath $f -Value '{}' -Encoding UTF8
+            $t = [datetime]::ParseExact($Stamp, 'yyyyMMdd_HHmmss', $null)
+            [PSCustomObject]@{
+                version  = (Get-OptVersion)
+                domain   = $Domain
+                file     = $name
+                date     = $t.ToString('yyyy-MM-dd HH:mm:ss')
+                time     = $t.ToString('yyyy-MM-ddTHH:mm:ss')
+                items    = 1
+                bytes    = 10
+                host     = $env:COMPUTERNAME
+                user     = 'test'
+                note     = ''
+            } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath ($f + '.manifest.json') -Encoding UTF8
+            return $f
+        }
+    }
+
+    It 'Write-BackupManifest records domain/items/version/host beside the backup file' {
+        $tmp = Join-Path $env:TEMP ('mf_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $bak = Join-Path $tmp 'services_backup_20260101_010101.csv'
+            Set-Content -LiteralPath $bak -Value 'Name,StartType,Date' -Encoding UTF8
+            $mf = Write-BackupManifest -BackupFile $bak -Domain 'services' -ItemCount 7 -Note 'smoke'
+            Test-Path $mf | Should -BeTrue
+            $mf | Should -Match '\.manifest\.json$'
+            $data = Get-Content -LiteralPath $mf -Raw | ConvertFrom-Json
+            $data.domain  | Should -Be 'services'
+            $data.items   | Should -Be 7
+            $data.file    | Should -Be 'services_backup_20260101_010101.csv'
+            $data.host    | Should -Be $env:COMPUTERNAME
+            $data.version | Should -Be (Get-OptVersion)
+            $data.date    | Should -Match '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Write-BackupManifest never throws when the backup file is missing' {
+        $r = Write-BackupManifest -BackupFile (Join-Path $env:TEMP ('nope_' + (New-Guid).ToString('N') + '.csv')) -Domain 'services'
+        $r | Should -BeNullOrEmpty
+    }
+
+    It 'every domain Backup-* writes a manifest next to its backup file' {
+        $tmp = Join-Path $env:TEMP ('mf2_' + (New-Guid).ToString('N'))
+        try {
+            $svc   = Backup-ServiceStates       -BackupDir $tmp -Services @(@{Name='DiagTrack'})
+            $start = Backup-StartupItems        -BackupDir $tmp -Items @()
+            $vis   = Backup-VisualEffects       -BackupDir $tmp
+            $pw    = Backup-PowerPlan           -BackupDir $tmp
+            foreach ($f in @($svc, $start, $vis, $pw)) {
+                $f | Should -Not -BeNullOrEmpty
+                Test-Path ($f + '.manifest.json') | Should -BeTrue
+            }
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Get-BackupDomainLabel gives a Chinese label for every backup domain' {
+        Get-BackupDomainLabel -Domain 'services'  | Should -Be '服务'
+        Get-BackupDomainLabel -Domain 'startup'   | Should -Be '启动项'
+        Get-BackupDomainLabel -Domain 'visual'    | Should -Be '视觉效果'
+        Get-BackupDomainLabel -Domain 'power'     | Should -Be '电源计划'
+        Get-BackupDomainLabel -Domain 'network'   | Should -Be '网络 DNS'
+        Get-BackupDomainLabel -Domain 'telemetry' | Should -Be '遥测计划任务'
+        Get-BackupDomainLabel -Domain 'update'    | Should -Be 'Windows 更新'
+    }
+
+    It 'Get-BackupDomainFromName understands both new and legacy naming' {
+        Get-BackupDomainFromName 'services_backup_20260101_010101.csv'   | Should -Be 'services'
+        Get-BackupDomainFromName 'services_20260101_010101.csv'          | Should -Be 'services'
+        Get-BackupDomainFromName 'startup_backup_20260101_010101.csv'    | Should -Be 'startup'
+        Get-BackupDomainFromName 'startup_20260101_010101.csv'           | Should -Be 'startup'
+        Get-BackupDomainFromName 'visual_backup_20260101_010101.json'    | Should -Be 'visual'
+        Get-BackupDomainFromName 'visual_20260101_010101.txt'            | Should -Be 'visual'
+        Get-BackupDomainFromName 'power_backup_20260101_010101.json'     | Should -Be 'power'
+        Get-BackupDomainFromName 'power_backup_20260101_010101.txt'      | Should -Be 'power'
+        Get-BackupDomainFromName 'network_backup_20260101_010101.json'   | Should -Be 'network'
+        Get-BackupDomainFromName 'telemetry_backup_20260101_010101.json' | Should -Be 'telemetry'
+        Get-BackupDomainFromName 'winupdate_block_20260101_010101.reg'   | Should -Be 'update'
+        Get-BackupDomainFromName 'manual_update_20260101_010101.reg'     | Should -Be 'update'
+        Get-BackupDomainFromName 'totally_unknown.bin'                   | Should -Be 'unknown'
+    }
+
+    It 'Get-OptimizationTimeline sorts newest first and flags legacy backups as metadata-missing' {
+        $tmp = Join-Path $env:TEMP ('tl_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            # 旧格式备份（GUI / 早期 WebUI 命名，没有 manifest）：靠文件名 + 文件时间兜底
+            $legacy = Join-Path $tmp 'startup_20200101_000000.csv'
+            Set-Content -LiteralPath $legacy -Value 'Name,Value,Scope,Source,Path' -Encoding UTF8
+            (Get-Item -LiteralPath $legacy).LastWriteTime = [datetime]'2020-01-01 00:00:00'
+            # 现代备份（带 manifest，时间更晚）
+            $null = New-FakeBackup -Dir $tmp -Domain 'services' -Stamp '20260101_010101'
+
+            $tl = @(Get-OptimizationTimeline -BackupDir $tmp)
+            $tl.Count | Should -Be 2
+            $tl[0].file | Should -Be 'services_backup_20260101_010101.csv'
+            $tl[0].metadataMissing | Should -BeFalse
+            $tl[0].domain | Should -Be 'services'
+            $tl[0].items  | Should -Be 1
+            $tl[0].host   | Should -Be $env:COMPUTERNAME
+            $tl[1].file | Should -Be 'startup_20200101_000000.csv'
+            $tl[1].metadataMissing | Should -BeTrue
+            $tl[1].domain | Should -Be 'startup'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Get-OptimizationTimeline ignores manifest sidecar files and honours -Max' {
+        $tmp = Join-Path $env:TEMP ('tl2_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            1..4 | ForEach-Object { $null = New-FakeBackup -Dir $tmp -Domain 'services' -Stamp ("2026010${_}_000000") }
+            @(Get-OptimizationTimeline -BackupDir $tmp).Count | Should -Be 4
+            @(Get-OptimizationTimeline -BackupDir $tmp -Max 2).Count | Should -Be 2
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Get-OptimizationTimeline returns nothing (not an error) when the folder is empty' {
+        $tmp = Join-Path $env:TEMP ('tl3_' + (New-Guid).ToString('N'))
+        try {
+            @(Get-OptimizationTimeline -BackupDir $tmp).Count | Should -Be 0
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Describe 'Optimize.Core rollback plan and one-click rollback (shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+        function script:New-FakeBackup {
+            param([string]$Dir, [string]$Domain, [string]$Stamp)
+            $ext = 'json'
+            if ($Domain -eq 'services' -or $Domain -eq 'startup') { $ext = 'csv' }
+            if ($Domain -eq 'update') { $ext = 'reg' }
+            $name = "${Domain}_backup_$Stamp.$ext"
+            $f = Join-Path $Dir $name
+            Set-Content -LiteralPath $f -Value '{}' -Encoding UTF8
+            $t = [datetime]::ParseExact($Stamp, 'yyyyMMdd_HHmmss', $null)
+            [PSCustomObject]@{
+                version  = (Get-OptVersion)
+                domain   = $Domain
+                file     = $name
+                date     = $t.ToString('yyyy-MM-dd HH:mm:ss')
+                time     = $t.ToString('yyyy-MM-ddTHH:mm:ss')
+                items    = 1
+                bytes    = 10
+                host     = $env:COMPUTERNAME
+                user     = 'test'
+                note     = ''
+            } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath ($f + '.manifest.json') -Encoding UTF8
+            return $f
+        }
+    }
+
+    It 'Get-RollbackPlan without filters picks the newest backup of every domain' {
+        $tmp = Join-Path $env:TEMP ('rb_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $null = New-FakeBackup -Dir $tmp -Domain 'services' -Stamp '20260101_000000'
+            $null = New-FakeBackup -Dir $tmp -Domain 'power'    -Stamp '20260201_000000'
+            $plan = Get-RollbackPlan -BackupDir $tmp
+            $plan.ok | Should -BeTrue
+            $plan.mode | Should -Be 'point'
+            @($plan.entries).Count | Should -Be 2
+            foreach ($e in @($plan.entries)) {
+                $e.file | Should -Not -BeNullOrEmpty
+                Test-Path $e.path | Should -BeTrue
+            }
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Get-RollbackPlan -Last N falls back to the state N backups ago' {
+        $tmp = Join-Path $env:TEMP ('rb2_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $null = New-FakeBackup -Dir $tmp -Domain 'services' -Stamp '20260101_000000'
+            $null = New-FakeBackup -Dir $tmp -Domain 'services' -Stamp '20260201_000000'
+            $null = New-FakeBackup -Dir $tmp -Domain 'services' -Stamp '20260301_000000'
+            (Get-RollbackPlan -BackupDir $tmp -Last 1).entries[0].file | Should -Be 'services_backup_20260301_000000.csv'
+            (Get-RollbackPlan -BackupDir $tmp -Last 2).entries[0].file | Should -Be 'services_backup_20260201_000000.csv'
+            (Get-RollbackPlan -BackupDir $tmp -Last 3).entries[0].file | Should -Be 'services_backup_20260101_000000.csv'
+            $p9 = Get-RollbackPlan -BackupDir $tmp -Last 9
+            $p9.ok | Should -BeFalse
+            $p9.error | Should -Match '备份数量不足'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Get-RollbackPlan -Since keeps only the newest backup per domain at that point in time' {
+        $tmp = Join-Path $env:TEMP ('rb3_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $null = New-FakeBackup -Dir $tmp -Domain 'services' -Stamp '20260101_000000'
+            $null = New-FakeBackup -Dir $tmp -Domain 'services' -Stamp '20260301_000000'
+            $null = New-FakeBackup -Dir $tmp -Domain 'power'    -Stamp '20260201_000000'
+            $p = Get-RollbackPlan -BackupDir $tmp -Since ([datetime]'2026-02-15 00:00:00')
+            $p.ok | Should -BeTrue
+            @($p.entries).Count | Should -Be 2
+            (@($p.entries | Where-Object { $_.domain -eq 'services' }))[0].file | Should -Be 'services_backup_20260101_000000.csv'
+            (@($p.entries | Where-Object { $_.domain -eq 'power'    }))[0].file | Should -Be 'power_backup_20260201_000000.json'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Get-RollbackPlan -Domain filters and -File selects a single backup' {
+        $tmp = Join-Path $env:TEMP ('rb4_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $svc = New-FakeBackup -Dir $tmp -Domain 'services' -Stamp '20260101_000000'
+            $pw  = New-FakeBackup -Dir $tmp -Domain 'power'    -Stamp '20260201_000000'
+
+            $only = Get-RollbackPlan -BackupDir $tmp -Domain 'power'
+            $only.ok | Should -BeTrue
+            @($only.entries).Count | Should -Be 1
+            $only.entries[0].domain | Should -Be 'power'
+
+            $bad = Get-RollbackPlan -BackupDir $tmp -Domain 'telemetry'
+            $bad.ok | Should -BeFalse
+            $bad.error | Should -Not -BeNullOrEmpty
+
+            $file = Get-RollbackPlan -BackupDir $tmp -File $svc
+            $file.ok | Should -BeTrue
+            $file.mode | Should -Be 'file'
+            @($file.entries).Count | Should -Be 1
+            $file.entries[0].domain | Should -Be 'services'
+
+            $file2 = Get-RollbackPlan -BackupDir $tmp -File (Split-Path -Leaf $pw)
+            $file2.ok | Should -BeTrue
+            $file2.entries[0].domain | Should -Be 'power'
+
+            $missing = Get-RollbackPlan -BackupDir $tmp -File 'services_backup_19990101_000000.csv'
+            $missing.ok | Should -BeFalse
+            $missing.error | Should -Match '不存在'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Invoke-Rollback -DryRun previews without writing anything' {
+        $tmp = Join-Path $env:TEMP ('rb5_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $null = New-FakeBackup -Dir $tmp -Domain 'services' -Stamp '20260101_000000'
+            $null = New-FakeBackup -Dir $tmp -Domain 'power'    -Stamp '20260201_000000'
+            $before = @(Get-ChildItem $tmp -File | Sort-Object Name | ForEach-Object { $_.Name })
+
+            $r = Invoke-Rollback -BackupDir $tmp -DryRun
+            $r.dryRun | Should -BeTrue
+            $r.ok | Should -BeTrue
+            @($r.results).Count | Should -Be 2
+            @($r.safetyBackups).Count | Should -Be 0
+            @($r.results | Where-Object { $_.ok }).Count | Should -Be 2
+            foreach ($s in @($r.results)) {
+                $s.summary | Should -Match '恢复'
+                $s.safetyBackup | Should -BeNullOrEmpty
+            }
+
+            $after = @(Get-ChildItem $tmp -File | Sort-Object Name | ForEach-Object { $_.Name })
+            ($after -join ',') | Should -Be ($before -join ',')
+            # 预演必须连「当前状态备份」都不写
+            Mock Backup-DomainState { return 'SHOULD_NOT_HAPPEN' }
+            Assert-MockCalled -CommandName 'Backup-DomainState' -Times 0
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Invoke-Rollback restores in the fixed domain order and backs up current state first' {
+        $tmp = Join-Path $env:TEMP ('rb6_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $doms = @('services','startup','visual','power','network','telemetry','update')
+            $i = 0
+            foreach ($dom in $doms) {
+                $i++
+                $null = New-FakeBackup -Dir $tmp -Domain $dom -Stamp ("2026010${i}_000000")
+            }
+
+            # 七个域的还原函数全部 mock 掉，只验证编排（顺序 / 传参 / 安全备份）
+            Mock Restore-Services        { @{restored = 1; details = @('svc'); error = $null} }
+            Mock Restore-StartupItems    { @{restored = 1; details = @('st');  error = $null} }
+            Mock Restore-VisualEffects   { @{restored = 1; details = @('vis'); error = $null} }
+            Mock Restore-PowerPlan       { @{restored = 1; details = @('pwr'); error = $null} }
+            Mock Restore-NetworkSettings { @{restored = 1; details = @('net'); error = $null} }
+            Mock Restore-TelemetryTasks  { @{restored = 1; details = @('tel'); error = $null} }
+            Mock Restore-UpdateBackup    { @{ok = $true; details = @('upd'); error = $null} }
+            Mock Backup-DomainState      { return (Join-Path $env:TEMP ('safety_' + (New-Guid).ToString('N') + '.json')) }
+
+            $r = Invoke-Rollback -BackupDir $tmp
+            $r.ok | Should -BeTrue
+            $r.mode | Should -Be 'point'
+            @($r.results | ForEach-Object { $_.domain }) | Should -Be @('services','startup','visual','power','network','telemetry','update')
+            # 每个域还原前都先备份当前状态（回滚本身也要可回滚）
+            @($r.safetyBackups).Count | Should -Be 7
+            Assert-MockCalled -CommandName 'Backup-DomainState' -Times 7
+            Assert-MockCalled -CommandName 'Restore-Services'     -Times 1 -ParameterFilter { $File -like '*services_backup_*' }
+            Assert-MockCalled -CommandName 'Restore-UpdateBackup' -Times 1 -ParameterFilter { $File -like '*update_backup_*' }
+            Assert-MockCalled -CommandName 'Restore-PowerPlan'    -Times 1 -ParameterFilter { $File -like '*power_backup_*.json' }
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Invoke-Rollback restores a single selected backup through -File' {
+        $tmp = Join-Path $env:TEMP ('rb11_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $null = New-FakeBackup -Dir $tmp -Domain 'services' -Stamp '20260101_000000'
+            $null = New-FakeBackup -Dir $tmp -Domain 'power'    -Stamp '20260201_000000'
+            Mock Restore-PowerPlan { @{restored = 1; details = @('pwr'); error = $null} }
+            Mock Backup-DomainState { return (Join-Path $env:TEMP ('safety_' + (New-Guid).ToString('N') + '.json')) }
+
+            $r = Invoke-Rollback -BackupDir $tmp -File (Join-Path $tmp 'power_backup_20260201_000000.json')
+            $r.ok | Should -BeTrue
+            $r.mode | Should -Be 'file'
+            @($r.results).Count | Should -Be 1
+            $r.results[0].domain | Should -Be 'power'
+            Assert-MockCalled -CommandName 'Restore-PowerPlan' -Times 1
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Invoke-Rollback skips domains without a restore implementation and reports them' {
+        $tmp = Join-Path $env:TEMP ('rb7_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $h = Join-Path $tmp 'health_20260101_000000.json'
+            Set-Content -LiteralPath $h -Value '{}' -Encoding UTF8
+            $null = New-FakeBackup -Dir $tmp -Domain 'services' -Stamp '20260101_000000'
+            Mock Restore-Services   { @{restored = 1; details = @(); error = $null} }
+            Mock Backup-DomainState { $null }
+
+            $r = Invoke-Rollback -BackupDir $tmp -DryRun
+            @($r.skipped | Where-Object { $_.domain -eq 'health' }).Count | Should -Be 1
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Invoke-Rollback surfaces a structured error when a domain fails to restore' {
+        $tmp = Join-Path $env:TEMP ('rb8_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $null = New-FakeBackup -Dir $tmp -Domain 'services' -Stamp '20260101_000000'
+            Mock Restore-Services   { @{restored = 0; details = @(); error = 'mocked failure'} }
+            Mock Backup-DomainState { $null }
+
+            $r = Invoke-Rollback -BackupDir $tmp
+            $r.ok | Should -BeFalse
+            $r.error | Should -Not -BeNullOrEmpty
+            @($r.results | Where-Object { -not $_.ok }).Count | Should -Be 1
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Invoke-Rollback refuses to restore when the safety backup fails unless -Force' {
+        $tmp = Join-Path $env:TEMP ('rb9_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $null = New-FakeBackup -Dir $tmp -Domain 'services' -Stamp '20260101_000000'
+            Mock Backup-DomainState { $null }
+            Mock Restore-Services   { @{restored = 1; details = @(); error = $null} }
+
+            $r = Invoke-Rollback -BackupDir $tmp
+            $r.ok | Should -BeFalse
+            @($r.results).Count | Should -Be 1
+            $r.results[0].error | Should -Match '无法备份当前状态'
+            Assert-MockCalled -CommandName 'Restore-Services' -Times 0
+
+            $null = Invoke-Rollback -BackupDir $tmp -Force
+            Assert-MockCalled -CommandName 'Restore-Services' -Times 1
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Invoke-Rollback returns a clean error when there is no backup at all' {
+        $tmp = Join-Path $env:TEMP ('rb10_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $r = Invoke-Rollback -BackupDir $tmp
+            $r.ok | Should -BeFalse
+            $r.error | Should -Not -BeNullOrEmpty
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Describe 'Optimize.Core per-domain restore helpers (shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+
+    It 'Restore-Services honours -File instead of picking the newest backup' {
+        $tmp = Join-Path $env:TEMP ('rs_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $f = Join-Path $tmp 'services_backup_20260101_000000.csv'
+            Set-Content -LiteralPath $f -Value "Name,StartType,Date`r`nDiagTrack,Automatic,2026-01-01 00:00:00" -Encoding UTF8
+            Mock Set-Service {}
+            $r = Restore-Services -BackupDir $tmp -File $f
+            $r.restored | Should -Be 1
+            $r.backup   | Should -Be $f
+            $r.error    | Should -BeNullOrEmpty
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Restore-StartupItems recreates a missing registry value and counts failures' {
+        $tmp = Join-Path $env:TEMP ('rs2_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $f = Join-Path $tmp 'startup_backup_20260101_000000.csv'
+            Set-Content -LiteralPath $f -Value 'Name,Value,Scope,Source,Path' -Encoding UTF8
+            Add-Content -LiteralPath $f -Value 'FakeEntry,C:\fake.exe,当前用户,注册表,HKCU:\Software\Fake\Run' -Encoding UTF8
+            Mock Get-ItemProperty  { $null }
+            Mock New-Item          {}
+            Mock New-ItemProperty  {}
+            $r = Restore-StartupItems -BackupDir $tmp -File $f
+            $r.error    | Should -BeNullOrEmpty
+            $r.restored | Should -Be 1
+            $r.details[0].name   | Should -Be 'FakeEntry'
+            $r.details[0].result | Should -Be '已恢复'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Restore-StartupItems restores registry rows even when Source reads as mojibake' {
+        $tmp = Join-Path $env:TEMP ('rs2b_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $f = Join-Path $tmp 'startup_backup_20260101_010101.csv'
+            # 旧工具 / 非 UTF8 CSV 会把 Source 列读成乱码，此时仍应按路径形态识别为注册表条目
+            Set-Content -LiteralPath $f -Value 'Name,Value,Scope,Source,Path' -Encoding UTF8
+            Add-Content -LiteralPath $f -Value 'FakeEntry,C:\fake.exe,当前用户,Âå¨®Â¥Â¬,HKCU:\Software\Fake\Run' -Encoding UTF8
+            Mock Get-ItemProperty  { $null }
+            Mock New-Item          {}
+            Mock New-ItemProperty  {}
+            $r = Restore-StartupItems -BackupDir $tmp -File $f
+            $r.error    | Should -BeNullOrEmpty
+            $r.restored | Should -Be 1
+            $r.details[0].result | Should -Be '已恢复'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Restore-StartupItems reports a clean error when no backup exists' {
+        $tmp = Join-Path $env:TEMP ('rs3_' + (New-Guid).ToString('N'))
+        try {
+            $r = Restore-StartupItems -BackupDir $tmp
+            $r.error | Should -Match '未找到'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Restore-VisualEffects writes every backed-up registry value back' {
+        $tmp = Join-Path $env:TEMP ('rs4_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $f = Join-Path $tmp 'visual_backup_20260101_000000.json'
+            @{
+                VisualEffects = @{ VisualFXSetting = 3 }
+                DWM           = @{ EnableAeroPeek  = 0 }
+                Advanced      = @{ TaskbarAnimations = 0 }
+                Desktop       = @{ DragFullWindows = '0'; MenuShowDelay = '0' }
+            } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $f -Encoding UTF8
+
+            Mock Test-Path         { $true }
+            Mock Get-ItemProperty  { $null }
+            Mock New-Item          {}
+            Mock New-ItemProperty  {}
+            Mock Set-ItemProperty  {}
+
+            $r = Restore-VisualEffects -BackupDir $tmp -File $f
+            $r.error    | Should -BeNullOrEmpty
+            $r.restored | Should -Be 5
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Restore-PowerPlan switches back to the backed-up plan GUID' {
+        $tmp = Join-Path $env:TEMP ('rs5_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $f = Join-Path $tmp 'power_backup_20260101_000000.json'
+            @{ activeGuid = '381b4222-f694-41f0-9685-ff5bb260df2e'; activeName = '已平衡' } |
+                ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $f -Encoding UTF8
+
+            Mock Invoke-PowerCfg { '' }
+            Mock Get-ActivePowerPlan { '381b4222-f694-41f0-9685-ff5bb260df2e' }
+            $r = Restore-PowerPlan -BackupDir $tmp -File $f
+            $r.error    | Should -BeNullOrEmpty
+            $r.restored | Should -Be 1
+            Assert-MockCalled -CommandName 'Invoke-PowerCfg' -Times 1 `
+                -ParameterFilter { $CfgArgs -contains '/setactive' -and $CfgArgs -contains '381b4222-f694-41f0-9685-ff5bb260df2e' }
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Restore-PowerPlan explains legacy txt backups instead of guessing' {
+        $tmp = Join-Path $env:TEMP ('rs6_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $f = Join-Path $tmp 'power_backup_20200101_000000.txt'
+            Set-Content -LiteralPath $f -Value 'powercfg /query' -Encoding UTF8
+            Mock Invoke-PowerCfg { '' }
+            $r = Restore-PowerPlan -BackupDir $tmp -File $f
+            $r.error    | Should -BeNullOrEmpty
+            $r.restored | Should -Be 0
+            (@($r.details) -join '') | Should -Match '旧格式备份'
+            Assert-MockCalled -CommandName 'Invoke-PowerCfg' -Times 0
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Restore-NetworkSettings restores DNS through Set-AdapterDns and handles DHCP' {
+        $tmp = Join-Path $env:TEMP ('rs7_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $f = Join-Path $tmp 'network_backup_20260101_000000.json'
+            @{
+                Date = '2026-01-01 00:00:00'
+                Adapters = @(
+                    @{ InterfaceAlias = '以太网'; InterfaceIndex = 12; DnsServers = @('1.1.1.1','1.0.0.1') }
+                    @{ InterfaceAlias = 'WLAN';   InterfaceIndex = 7;  DnsServers = @() }
+                )
+            } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $f -Encoding UTF8
+
+            Mock Set-AdapterDns { [PSCustomObject]@{ ok = $true; applied = 'mocked' } }
+            Mock Set-DnsClientServerAddress {}
+            Mock netsh {}
+
+            $r = Restore-NetworkSettings -BackupDir $tmp -File $f
+            $r.error    | Should -BeNullOrEmpty
+            $r.restored | Should -Be 2
+            Assert-MockCalled -CommandName 'Set-AdapterDns' -Times 1 `
+                -ParameterFilter { $DnsServers.Count -eq 2 -and $DnsServers[0] -eq '1.1.1.1' }
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Restore-UpdateBackup imports the reg backup and then restores auto update' {
+        $tmp = Join-Path $env:TEMP ('rs8_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            $f = Join-Path $tmp 'winupdate_block_20260101_000000.reg'
+            Set-Content -LiteralPath $f -Value 'Windows Registry Editor Version 5.00' -Encoding UTF8
+            Mock reg {}
+            Mock Restore-AutoUpdate { @{ok = $true; details = @('wuauserv 已是自动'); error = $null} }
+            $r = Restore-UpdateBackup -File $f
+            $r.ok | Should -BeTrue
+            (@($r.details) -join ' ') | Should -Match '已导入注册表备份'
+            Assert-MockCalled -CommandName 'Restore-AutoUpdate' -Times 1
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Restore-DomainState dispatches every supported domain to its restore helper' {
+        Mock Restore-Services         { @{restored = 1; details = @(); error = $null} }
+        Mock Restore-StartupItems     { @{restored = 2; details = @(); error = $null} }
+        Mock Restore-VisualEffects    { @{restored = 3; details = @(); error = $null} }
+        Mock Restore-PowerPlan        { @{restored = 4; details = @(); error = $null} }
+        Mock Restore-NetworkSettings  { @{restored = 5; details = @(); error = $null} }
+        Mock Restore-TelemetryTasks   { @{restored = 6; details = @(); error = $null} }
+        Mock Restore-UpdateBackup     { @{ok = $true; restored = 7; details = @(); error = $null} }
+
+        $map = @{
+            'services'  = 'Restore-Services'
+            'startup'   = 'Restore-StartupItems'
+            'visual'    = 'Restore-VisualEffects'
+            'power'     = 'Restore-PowerPlan'
+            'network'   = 'Restore-NetworkSettings'
+            'telemetry' = 'Restore-TelemetryTasks'
+            'update'    = 'Restore-UpdateBackup'
+        }
+        foreach ($dom in $map.Keys) {
+            $r = Restore-DomainState -Domain $dom -File "D:\fake\$dom.dat" -BackupDir 'D:\fake'
+            $r | Should -Not -BeNullOrEmpty
+            Assert-MockCalled -CommandName $map[$dom] -Times 1 -Scope It
+        }
+    }
+
+    It 'Restore-DomainState returns null for domains that cannot be rolled back' {
+        (Restore-DomainState -Domain 'health')  | Should -BeNullOrEmpty
+        (Restore-DomainState -Domain 'unknown') | Should -BeNullOrEmpty
+        (Restore-DomainState -Domain '')        | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Optimize.Core profiles - optimization bundles (shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+
+    It 'Get-ProfileDefaults exposes every field a profile may specify' {
+        $d = Get-ProfileDefaults
+        foreach ($k in @('services','startup','visual','power','dns','telemetry','disk','compact_os')) {
+            $d.PSObject.Properties.Name | Should -Contain $k
+        }
+    }
+
+    It 'Get-BuiltinProfiles returns the 4 built-in bundles as a fallback' {
+        $b = Get-BuiltinProfiles
+        @($b.Keys).Count | Should -Be 4
+        foreach ($k in @('old_balanced','gaming','quiet_saver','minimal')) {
+            $b.Contains($k) | Should -BeTrue
+        }
+    }
+
+    It 'Get-Profiles returns config profiles with every spec field filled' {
+        $ps = @(Get-Profiles)
+        $ps.Count | Should -BeGreaterThan 0
+        foreach ($p in $ps) {
+            $p.name      | Should -Not -BeNullOrEmpty
+            $p.title     | Should -Not -BeNullOrEmpty
+            $p.desc      | Should -Not -BeNullOrEmpty
+            $p.services  | Should -Not -BeNullOrEmpty
+            $p.startup   | Should -Not -BeNullOrEmpty
+            $p.visual    | Should -Not -BeNullOrEmpty
+            $p.power     | Should -Not -BeNullOrEmpty
+            $p.dns       | Should -Not -BeNullOrEmpty
+            $p.disk      | Should -Not -BeNullOrEmpty
+            $p.telemetry | Should -BeOfType [bool]
+            $p.compactOs | Should -BeOfType [bool]
+        }
+    }
+
+    It 'Get-Profile looks up by name and by title, and returns null when unknown' {
+        $all = @(Get-Profiles)
+        $first = $all[0]
+        (Get-Profile -Name $first.name).name   | Should -Be $first.name
+        (Get-Profile -Name $first.title).name  | Should -Be $first.name
+        (Get-Profile -Name 'no_such_profile')  | Should -BeNullOrEmpty
+    }
+
+    It 'Get-ProfileSteps derives risk and auto from the profile spec' {
+        $safe = Get-ProfileSteps -Profile ([PSCustomObject]@{
+            name='t'; title='t'; desc='t'; services='safe'; startup='list'
+            visual='best_performance'; power='high'; dns='cloudflare'; telemetry=$true
+            disk='none'; compactOs=$false })
+        $svc = @($safe | Where-Object { $_.id -eq 'services' })[0]
+        $svc.risk | Should -Be 'low'
+        $svc.auto | Should -BeTrue
+
+        $agg = Get-ProfileSteps -Profile ([PSCustomObject]@{
+            name='t'; title='t'; desc='t'; services='recommended'; startup='all'
+            visual='keep'; power='keep'; dns='none'; telemetry=$false
+            disk='none'; compactOs=$false })
+        $svc2 = @($agg | Where-Object { $_.id -eq 'services' })[0]
+        $svc2.risk | Should -Be 'medium'
+        $st = @($agg | Where-Object { $_.id -eq 'startup' })[0]
+        $st.risk | Should -Be 'high'
+        $st.auto | Should -BeFalse
+        # startup=list 是只读步骤，必须 auto 且零风险
+        $list = @($safe | Where-Object { $_.id -eq 'startup' })[0]
+        $list.auto   | Should -BeTrue
+        $list.risk   | Should -Be 'none'
+        $list.params.ListOnly | Should -BeTrue
+    }
+
+    It 'Get-ProfileSteps maps power aliases to real GUIDs and drops keep/none' {
+        $mk = { param($power,$visual,$dns,$disk,$compactOs)
+            Get-ProfileSteps -Profile ([PSCustomObject]@{
+                name='t'; title='t'; desc='t'; services='none'; startup='none'
+                visual=$visual; power=$power; dns=$dns; telemetry=$false
+                disk=$disk; compactOs=$compactOs }) }
+        $high  = @(& $mk 'high'      'keep' 'none' 'none' $false | Where-Object { $_.id -eq 'power' })[0]
+        $ult   = @(& $mk 'ultimate'  'keep' 'none' 'none' $false | Where-Object { $_.id -eq 'power' })[0]
+        $sv    = @(& $mk 'power_saver' 'keep' 'none' 'none' $false | Where-Object { $_.id -eq 'power' })[0]
+        $high.params.Guid | Should -Be '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
+        $ult.params.Guid  | Should -Be 'e9a42b02-d5df-448d-aa00-03f14749eb61'
+        $ult.params.UnlockUltimate | Should -BeTrue
+        $sv.params.Guid   | Should -Be 'a1841308-3541-4fab-bc81-f71556f20b4a'
+        $raw  = @(& $mk 'e9a42b02-d5df-448d-aa00-03f14749eb61' 'keep' 'none' 'none' $false | Where-Object { $_.id -eq 'power' })[0]
+        $raw.params.Guid  | Should -Be 'e9a42b02-d5df-448d-aa00-03f14749eb61'
+        # keep / none / 未知别名都不该产生步骤
+        @(& $mk 'keep' 'keep' 'none' 'none' $false).Count | Should -Be 0
+        @(& $mk 'bogus' 'keep' 'none' 'none' $false).Count | Should -Be 0
+        @(& $mk 'keep' 'best_performance' 'none' 'none' $false | Where-Object { $_.id -eq 'visual' }).Count | Should -Be 1
+    }
+
+    It 'Get-ProfilePlan returns a read-only plan and errors on an unknown bundle' {
+        $name = @(Get-Profiles)[0].name
+        $p = Get-ProfilePlan -Name $name
+        $p.ok    | Should -BeTrue
+        $p.name  | Should -Be $name
+        @($p.steps).Count | Should -BeGreaterThan 0
+        $p.error | Should -BeNullOrEmpty
+
+        $bad = Get-ProfilePlan -Name 'no_such_bundle'
+        $bad.ok    | Should -BeFalse
+        $bad.error | Should -Match '未找到组合包'
+    }
+
+    It 'Invoke-Profile -WhatIf is side-effect free and reports dryRun' {
+        $name = @(Get-Profiles | Where-Object { $_.services -eq 'safe' })[0].name
+        $tmp = Join-Path $env:TEMP ('prof_wi_' + (New-Guid).ToString('N'))
+        try {
+            $r = Invoke-Profile -Name $name -BackupDir $tmp -WhatIf
+            $r.ok     | Should -BeTrue
+            $r.dryRun | Should -BeTrue
+            $r.forced | Should -BeFalse
+            # 预演不得落盘任何备份
+            Test-Path $tmp | Should -BeFalse
+            @($r.results).Count | Should -BeGreaterThan 0
+            foreach ($s in $r.results) { $s.ok | Should -BeTrue }
+            foreach ($s in $r.results) { $s.backup | Should -BeNullOrEmpty }
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Invoke-Profile skips high-risk and manual steps unless -Force is given' {
+        $tmp = Join-Path $env:TEMP ('prof_g_' + (New-Guid).ToString('N'))
+        try {
+            $r = Invoke-Profile -Name 'gaming' -BackupDir $tmp -WhatIf
+            $r.ok     | Should -BeTrue
+            $r.dryRun | Should -BeTrue
+            $r.forced | Should -BeFalse
+            $skipIds = @($r.skipped | ForEach-Object { $_.id })
+            $skipIds | Should -Contain 'startup'
+            $ran = @($r.results | ForEach-Object { $_.id })
+            $ran | Should -Not -Contain 'startup'
+            # -Force 放行后该步骤必须进入 results，且 skipped 清空
+            $f = Invoke-Profile -Name 'gaming' -BackupDir $tmp -WhatIf -Force
+            $f.forced | Should -BeTrue
+            @($f.skipped).Count | Should -Be 0
+            @($f.results | ForEach-Object { $_.id }) | Should -Contain 'startup'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Invoke-Profile rejects an unknown bundle without touching the system' {
+        $tmp = Join-Path $env:TEMP ('prof_bad_' + (New-Guid).ToString('N'))
+        try {
+            $r = Invoke-Profile -Name 'no_such_bundle' -BackupDir $tmp
+            $r.ok     | Should -BeFalse
+            $r.error  | Should -Match '未找到组合包'
+            @($r.results).Count | Should -Be 0
+            Test-Path $tmp | Should -BeFalse
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Invoke-Profile executes a low-risk bundle end to end with mocked helpers' {
+        Mock Disable-Services        { @{ disabled = 3; skipped = 0 } }
+        Mock Set-VisualEffectProfile { @{ ok = $true; details = @('已应用'); backup = $null } }
+        Mock Set-PowerPlan           { @{ ok = $true; details = @('已切换'); backup = $null; fallback = $false } }
+        Mock Disable-TelemetryTasks  { @{ disabled = 2; skipped = 0; details = @(); backup = $null } }
+        Mock Get-StartupItems        { @() }
+
+        $tmp = Join-Path $env:TEMP ('prof_run_' + (New-Guid).ToString('N'))
+        try {
+            $r = Invoke-Profile -Name 'old_balanced' -BackupDir $tmp
+            $r.dryRun | Should -BeFalse
+            $r.ok     | Should -BeTrue
+            $r.error  | Should -BeNullOrEmpty
+            @($r.results).Count | Should -BeGreaterThan 0
+            foreach ($s in $r.results) { $s.ok | Should -BeTrue }
+            Assert-MockCalled -CommandName 'Disable-Services'       -Times 1 -Scope It
+            Assert-MockCalled -CommandName 'Set-VisualEffectProfile' -Times 1 -Scope It
+            Assert-MockCalled -CommandName 'Set-PowerPlan'          -Times 1 -Scope It
+            Assert-MockCalled -CommandName 'Disable-TelemetryTasks' -Times 1 -Scope It
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }

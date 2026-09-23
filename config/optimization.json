@@ -38,6 +38,56 @@
     "disk": {
         "compact_os_default": false
     },
+    "profiles": {
+        "old_balanced": {
+            "title": "老机均衡",
+            "desc": "通用首选：安全禁用服务、关闭动画特效、切高性能电源",
+            "services": "safe",
+            "startup": "list",
+            "visual": "best_performance",
+            "power": "high",
+            "dns": "cloudflare",
+            "telemetry": true,
+            "disk": "none",
+            "compact_os": false
+        },
+        "gaming": {
+            "title": "游戏加速",
+            "desc": "更激进：safe+recommended 服务全禁、动画全关、卓越性能、阿里 DNS",
+            "services": "recommended",
+            "startup": "all",
+            "visual": "best_performance",
+            "power": "ultimate",
+            "dns": "aliyun",
+            "telemetry": true,
+            "disk": "none",
+            "compact_os": false
+        },
+        "quiet_saver": {
+            "title": "静音省电",
+            "desc": "笔记本电池模式：仅安全禁用服务、保留基本动画、切省电计划",
+            "services": "safe",
+            "startup": "list",
+            "visual": "balanced",
+            "power": "power_saver",
+            "dns": "114",
+            "telemetry": true,
+            "disk": "none",
+            "compact_os": false
+        },
+        "minimal": {
+            "title": "最小干预",
+            "desc": "几乎不动系统：仅关闭遥测计划任务，服务/动画/电源/DNS 全部保持原状",
+            "services": "none",
+            "startup": "none",
+            "visual": "keep",
+            "power": "keep",
+            "dns": "none",
+            "telemetry": true,
+            "disk": "none",
+            "compact_os": false
+        }
+    },
     "telemetry_tasks": [
         "\\Microsoft\\Windows\\Application Experience\\Microsoft Compatibility Appraiser",
         "\\Microsoft\\Windows\\Application Experience\\ProgramDataUpdater",

@@ -1,4 +1,4 @@
-{
+﻿{
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/PC-Optimizer/optimization.schema.json",
   "title": "PC-Optimizer optimization config",
@@ -54,6 +54,27 @@
         "items": { "type": "string", "minLength": 1 },
         "minItems": 1,
         "maxItems": 2
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "description": "优化组合包（Profiles）：name -> {title, desc, services, startup, visual, power, dns, telemetry, disk, compact_os}。config 驱动，社区可直接贡献；缺失时 lib 回退内置默认。",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "title": { "type": "string", "minLength": 1 },
+          "desc": { "type": "string" },
+          "services": { "type": "string", "enum": ["none", "safe", "recommended", "all"] },
+          "startup": { "type": "string", "enum": ["none", "list", "all"] },
+          "visual": { "type": "string", "enum": ["keep", "balanced", "best_performance"] },
+          "power": { "type": "string", "pattern": "^(keep|high|ultimate|balanced|power_saver|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$" },
+          "dns": { "type": "string", "enum": ["none", "cloudflare", "google", "aliyun", "114", "tencent"] },
+          "telemetry": { "type": "boolean" },
+          "disk": { "type": "string", "enum": ["none", "optimize"] },
+          "compact_os": { "type": "boolean" }
+        },
+        "additionalProperties": false
       }
     },
     "telemetry_tasks": {

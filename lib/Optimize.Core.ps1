@@ -198,6 +198,7 @@ function Backup-TelemetryTaskStates {
         host  = $env:COMPUTERNAME
         tasks = $rows
     } | ConvertTo-Json -Depth 4 | Set-Content -Path $backupFile -Encoding UTF8
+    Write-BackupManifest -BackupFile $backupFile -Domain 'telemetry' -ItemCount $rows.Count | Out-Null
     return $backupFile
 }
 
@@ -305,6 +306,7 @@ function Backup-ServiceStates {
         }
     }
     $rows | Export-Csv -Path $backupFile -NoTypeInformation -Encoding UTF8
+    Write-BackupManifest -BackupFile $backupFile -Domain 'services' -ItemCount $rows.Count | Out-Null
     return $backupFile
 }
 
@@ -340,13 +342,18 @@ function Disable-Services {
     return @{ disabled = $disabled; skipped = $skipped; details = $details }
 }
 
-# 从最近备份 CSV 恢复服务状态
-# 参数: BackupDir
+# 从备份 CSV 恢复服务状态。省略 File 时取最近一份 services_backup_*.csv
+# 参数: BackupDir, File(可选，指定备份文件全路径)
 # 返回: @{ restored; backup; details: @(@{name; result}) }
 function Restore-Services {
-    param([string]$BackupDir)
-    $csv = Get-ChildItem -Path $BackupDir -Filter "services_backup_*.csv" -ErrorAction SilentlyContinue |
-           Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    param([string]$BackupDir, [string]$File)
+    $csv = $null
+    if ($File) {
+        $csv = Get-Item -LiteralPath $File -ErrorAction SilentlyContinue
+    } else {
+        $csv = Get-ChildItem -Path $BackupDir -Filter "services_backup_*.csv" -ErrorAction SilentlyContinue |
+               Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    }
     if (-not $csv) { return @{restored = 0; backup = $null; details = @(); error = "未找到服务备份"} }
     $rows = Import-Csv $csv.FullName -ErrorAction Stop
     $restored = 0; $details = @()
@@ -631,6 +638,7 @@ function Backup-StartupItems {
         # 空列表也写出表头，避免下游读取时因缺列而报错
         Set-Content -Path $file -Value 'Name,Value,Scope,Source,Path' -Encoding UTF8
     }
+    Write-BackupManifest -BackupFile $file -Domain 'startup' -ItemCount @($Items).Count | Out-Null
     return $file
 }
 
@@ -757,6 +765,7 @@ function Backup-VisualEffects {
     try {
         ($backup | ConvertTo-Json -Depth 3) | Set-Content -Path $file -Encoding UTF8
     } catch { }
+    Write-BackupManifest -BackupFile $file -Domain 'visual' -ItemCount $backup.Keys.Count | Out-Null
     return $file
 }
 
@@ -900,13 +909,30 @@ function Get-ActivePowerPlan {
     return $null
 }
 
-# 备份当前电源计划（powercfg /query 全文），返回备份文件路径
+# 备份当前电源计划，返回备份文件路径
+# 2026-09-23 起改为结构化 JSON：除 powercfg /query 全文外，额外记录
+#   activeGuid / activeName —— 还原时靠 GUID 精确切回原计划；
+#   旧版 .txt 备份只有纯文本，无法可靠解析活动方案，只能给手动提示。
 function Backup-PowerPlan {
     param([string]$BackupDir)
     $dir = Get-OptBackupDir -BackupDir $BackupDir
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    $file = Join-Path $dir ('power_backup_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.txt')
-    try { powercfg /query 2>&1 | Out-File -FilePath $file -Encoding UTF8 } catch { }
+    $file = Join-Path $dir ('power_backup_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.json')
+    $activeGuid = Get-ActivePowerPlan
+    $activeName = ''
+    foreach ($p in @(Get-PowerPlanCatalog)) { if ($p.GUID -eq $activeGuid) { $activeName = $p.Title } }
+    $query = ''
+    try { $query = (@(& powercfg /query 2>&1) -join "`n") } catch { }
+    try {
+        [PSCustomObject]@{
+            date       = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+            host       = $env:COMPUTERNAME
+            activeGuid = $activeGuid
+            activeName = $activeName
+            query      = $query
+        } | ConvertTo-Json -Depth 4 | Out-File -FilePath $file -Encoding UTF8
+    } catch { }
+    Write-BackupManifest -BackupFile $file -Domain 'power' -ItemCount 1 | Out-Null
     return $file
 }
 
@@ -1119,6 +1145,7 @@ function Backup-NetworkSettings {
         Date     = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         Adapters = $adapters
     } | ConvertTo-Json -Depth 5 | Out-File -FilePath $file -Encoding UTF8
+    Write-BackupManifest -BackupFile $file -Domain 'network' -ItemCount $adapters.Count | Out-Null
     return $file
 }
 
@@ -2118,5 +2145,1022 @@ function Invoke-HealthRemediation {
     $res.results  = $results
     $res.ok       = (@($results | Where-Object { -not $_.ok }).Count -eq 0)
     if ($res.error) { $res.ok = $false }
+    return $res
+}
+
+# ============================================================
+#  备份元数据 manifest / 优化时间线 / 一键回滚
+# ============================================================
+# 背景：此前各域备份都是扁平堆在 backups/ 下，恢复要逐域翻菜单，
+#   用户既说不清「上周到底改了什么」，也无法整体退回某个时间点。
+# 现约定（三端共用，避免再次漂移）：
+#   1) 每次 Backup-* 在写备份文件的同时，写一份 <备份文件>.manifest.json
+#      元数据（域 / 时间 / 条目数 / 版本 / 主机 / 备注）；manifest 写失败
+#      绝不影响备份本身。
+#   2) Get-OptimizationTimeline 聚合全部 manifest，按时间倒序给时间线；
+#      旧备份没有 manifest 时按文件名推断域、按文件时间兜底，并标注「元数据缺失」。
+#   3) Get-RollbackPlan 只读地算出「将回滚哪些备份」；
+#      Invoke-Rollback 按固定顺序（服务→启动项→视觉→电源→网络→遥测→更新）
+#      调用既有 Restore-* 还原，并在还原前先把当前状态再备份一遍（后悔药）。
+
+# 内部小工具：安全取数组长度（避免个别主机上 $null.Count 抛错）
+function Get-SafeCount {
+    param($Items)
+    if ($null -eq $Items) { return 0 }
+    return @($Items).Count
+}
+
+# 写备份元数据 manifest，返回 manifest 文件路径；失败返回 $null（不影响备份主流程）
+function Write-BackupManifest {
+    param(
+        [Parameter(Mandatory=$true)][string]$BackupFile,
+        [Parameter(Mandatory=$true)][string]$Domain,
+        [int]$ItemCount = 0,
+        [string]$Note = ''
+    )
+    try {
+        $file = Get-Item -LiteralPath $BackupFile -ErrorAction SilentlyContinue
+        if (-not $file) { return $null }
+        $now = Get-Date
+        $manifest = [PSCustomObject]@{
+            version  = (Get-OptVersion)
+            domain   = $Domain
+            file     = $file.Name
+            date     = $now.ToString('yyyy-MM-dd HH:mm:ss')
+            time     = $now.ToString('yyyy-MM-ddTHH:mm:ss')
+            items    = [int]$ItemCount
+            bytes    = [long]$file.Length
+            host     = $env:COMPUTERNAME
+            user     = $env:USERNAME
+            note     = $Note
+        }
+        $manifestFile = ($file.FullName + '.manifest.json')
+        ($manifest | ConvertTo-Json -Depth 4) | Set-Content -LiteralPath $manifestFile -Encoding UTF8
+        return $manifestFile
+    } catch {
+        return $null
+    }
+}
+
+# 备份域 -> 中文标签（三端展示统一，避免各端各写一套文案）
+function Get-BackupDomainLabel {
+    param([string]$Domain)
+    switch ($Domain) {
+        'services'  { return '服务' }
+        'startup'   { return '启动项' }
+        'visual'    { return '视觉效果' }
+        'power'     { return '电源计划' }
+        'network'   { return '网络 DNS' }
+        'telemetry' { return '遥测计划任务' }
+        'update'    { return 'Windows 更新' }
+        'health'    { return '体检报告' }
+        'clean'     { return '临时文件清理' }
+        default     { return '其它' }
+    }
+}
+
+# 由备份文件名推断域（旧备份没有 manifest 时用）。先匹配更具体的模式。
+function Get-BackupDomainFromName {
+    param([string]$Name)
+    $n = [string]$Name
+    if     ($n -like 'services_backup_*')   { return 'services' }
+    elseif ($n -like 'startup_backup_*')    { return 'startup' }
+    elseif ($n -like 'visual_backup_*')     { return 'visual' }
+    elseif ($n -like 'power_backup_*')      { return 'power' }
+    elseif ($n -like 'network_backup_*')    { return 'network' }
+    elseif ($n -like 'telemetry_backup_*')  { return 'telemetry' }
+    elseif ($n -like 'winupdate_block_*')   { return 'update' }
+    elseif ($n -like 'manual_update_*')     { return 'update' }
+    # 旧 GUI / WebUI 命名：services_*.csv / startup_*.csv / power_*.txt / visual_*.txt
+    elseif ($n -like 'services_*')          { return 'services' }
+    elseif ($n -like 'startup_*')           { return 'startup' }
+    elseif ($n -like 'visual_*')            { return 'visual' }
+    elseif ($n -like 'power_*')             { return 'power' }
+    elseif ($n -like 'network_*')           { return 'network' }
+    elseif ($n -like 'telemetry_*')         { return 'telemetry' }
+    elseif ($n -like 'health_*')            { return 'health' }
+    else { return 'unknown' }
+}
+
+# 由单个备份文件生成时间线条目（manifest 存在则元数据完整，否则按文件名/时间容错）
+function New-BackupTimelineEntry {
+    param($FileInfo)
+    if (-not $FileInfo) { return $null }
+    $f = $FileInfo
+    $dom = Get-BackupDomainFromName $f.Name
+    $timeText = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
+    $timeValue = $f.LastWriteTime.ToString('yyyy-MM-ddTHH:mm:ss')
+    $items = 0; $hostName = ''; $ver = ''; $note = ''; $missing = $true
+
+    $manifestFile = ($f.FullName + '.manifest.json')
+    if (Test-Path -LiteralPath $manifestFile) {
+        try {
+            $mf = Get-Content -LiteralPath $manifestFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($mf.domain) { $dom       = [string]$mf.domain }
+            if ($mf.date)   { $timeText  = [string]$mf.date }
+            if ($mf.time)   { $timeValue = [string]$mf.time }
+            if ($null -ne $mf.items)  { $items    = [int]$mf.items }
+            if ($mf.host)   { $hostName = [string]$mf.host }
+            if ($mf.version){ $ver      = [string]$mf.version }
+            if ($mf.note)   { $note     = [string]$mf.note }
+            $missing = $false
+        } catch { }
+    }
+
+    return [PSCustomObject]@{
+        id              = $f.BaseName
+        timeText        = $timeText
+        time            = $timeValue
+        domain          = $dom
+        domainLabel     = (Get-BackupDomainLabel -Domain $dom)
+        file            = $f.Name
+        path            = $f.FullName
+        items           = $items
+        host            = $hostName
+        version         = $ver
+        note            = $note
+        metadataMissing = $missing
+        sizeKB          = [math]::Round($f.Length / 1KB, 1)
+    }
+}
+
+# 聚合全部备份，给出「优化时间线」（按时间倒序）。纯只读。
+# 返回数组元素：id / time / timeText / domain / domainLabel / file / path /
+#               items / host / version / note / metadataMissing / sizeKB
+function Get-OptimizationTimeline {
+    param([string]$BackupDir, [int]$Max = 200)
+    $dir = Get-OptBackupDir -BackupDir $BackupDir
+    if (-not (Test-Path -LiteralPath $dir)) { return @() }
+    $entries = @()
+    foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue)) {
+        if ($f.Name -like '*.manifest.json') { continue }
+        $e = New-BackupTimelineEntry -FileInfo $f
+        if ($e) { $entries += $e }
+    }
+    # 同一秒内可能连建多份备份（manifest 的 time 只到秒），
+    # 用文件名（内含 yyyyMMdd_HHmmss）做次级排序保证顺序确定
+    $sorted = @($entries | Sort-Object `
+        @{Expression = { [datetime]$_.time }; Descending = $true}, `
+        @{Expression = { $_.file }; Descending = $true})
+    if ($Max -gt 0 -and $sorted.Count -gt $Max) { $sorted = @($sorted | Select-Object -First $Max) }
+    return $sorted
+}
+
+# 计算「将回滚哪些备份」。纯只读，不碰系统。
+#   Since    回滚到该时间点：每个域取 <= Since 的最新一份备份（即该时间点的状态）
+#   Last     回滚到最近第 N 条备份所在的时间点（与 Since 同一套语义）
+#   Domain   只处理这些域（services/startup/visual/power/network/telemetry/update）
+#   File     直接指定单个备份文件（GUI 单选某一份备份时用）
+# 返回 @{ ok; mode; since; entries; domains; error }
+function Get-RollbackPlan {
+    param(
+        [string]$BackupDir,
+        [datetime]$Since = [datetime]::MinValue,
+        [int]$Last = 0,
+        [string[]]$Domain,
+        [string]$File
+    )
+    $res = [PSCustomObject]@{ ok = $true; mode = ''; since = $null; entries = @(); domains = @(); error = $null }
+    $dir = Get-OptBackupDir -BackupDir $BackupDir
+
+    # --- 模式一：指定单个备份文件 ---
+    if ($File) {
+        $target = Get-Item -LiteralPath $File -ErrorAction SilentlyContinue
+        if (-not $target) {
+            try { $target = Get-Item -LiteralPath (Join-Path $dir $File) -ErrorAction Stop } catch { $target = $null }
+        }
+        if (-not $target) {
+            $res.ok = $false; $res.error = '指定的备份文件不存在（或已被删除）'
+            return $res
+        }
+        $res.mode   = 'file'
+        $res.since  = $target.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
+        $res.entries = @(New-BackupTimelineEntry -FileInfo $target)
+        $res.domains = @($res.entries | ForEach-Object { $_.domain })
+        return $res
+    }
+
+    $timeline = @(Get-OptimizationTimeline -BackupDir $BackupDir)
+    if ($timeline.Count -eq 0) {
+        $res.ok = $false; $res.error = '没有任何备份，无法回滚'
+        return $res
+    }
+
+    # --- 模式二：回到某个时间点（每个域取该时间点之前的最新备份）---
+    # 未指定 Since / Last 时取「最近的一份备份」（boundary 用极大值等于不过滤）
+    $hasSince = ($Since -gt [datetime]::MinValue)
+    $boundary = [datetime]::MaxValue
+    if ($Last -gt 0) {
+        $nth = @($timeline | Select-Object -Skip ($Last - 1) -First 1)
+        if ($nth.Count -eq 0) {
+            $res.ok = $false; $res.error = "备份数量不足 $Last 条，无法回滚"
+            return $res
+        }
+        $boundary = [datetime]$nth[0].time
+    }
+    elseif ($hasSince) {
+        $boundary = $Since
+    }
+    $res.mode  = 'point'
+    $res.since = if ($boundary -eq [datetime]::MaxValue) { '最近的备份' } else { $boundary.ToString('yyyy-MM-dd HH:mm:ss') }
+
+    $picked = @()
+    $done = @{}
+    foreach ($e in ($timeline | Sort-Object `
+        @{Expression = { [datetime]$_.time }; Descending = $true}, `
+        @{Expression = { $_.file }; Descending = $true})) {
+        if ([datetime]$e.time -gt $boundary) { continue }
+        if ($done.ContainsKey($e.domain)) { continue }
+        $done[$e.domain] = $true
+        $picked += $e
+    }
+
+    if ($Domain -and $Domain.Count -gt 0) {
+        $want = @()
+        foreach ($d in $Domain) {
+            foreach ($p in $picked) { if ($p.domain -eq $d) { $want += $p } }
+        }
+        $picked = @($want)
+    }
+
+    if ($picked.Count -eq 0) {
+        $res.ok = $false
+        $res.error = if ($Domain -and $Domain.Count -gt 0) { '指定域在该时间点没有可回滚的备份' } else { '该时间点之前没有任何备份' }
+        return $res
+    }
+    $res.entries = $picked
+    $res.domains = @($picked | ForEach-Object { $_.domain })
+    return $res
+}
+
+# 把还原结果里的 details 渲染成一行可读文本。
+# details 既可能是字符串（如 Restore-UpdateBackup），也可能是 @{name;result} 哈希表。
+function Format-RestoreDetails {
+    param($Details, [string]$Fallback = '')
+    $parts = @()
+    foreach ($d in @($Details)) {
+        if ($null -eq $d) { continue }
+        if ($d -is [string]) { $parts += $d }
+        else {
+            $name = ''
+            $text = ''
+            try { $name = [string]$d.name } catch { }
+            try { $text = [string]$d.result } catch { }
+            if ($name -and $text) { $parts += ("{0}: {1}" -f $name, $text) }
+            elseif ($text)       { $parts += $text }
+            elseif ($name)       { $parts += $name }
+        }
+    }
+    if ($parts.Count -eq 0) { return $Fallback }
+    return ($parts -join '；')
+}
+
+# 备份某个域的当前状态（回滚前的「后悔药」），返回备份文件路径；失败返回 $null
+function Backup-DomainState {
+    param([string]$Domain, [string]$BackupDir)
+    try {
+        switch ($Domain) {
+            'services'  { return (Backup-ServiceStates     -BackupDir $BackupDir -Services (Get-ServiceList)) }
+            'startup'   { return (Backup-StartupItems      -BackupDir $BackupDir -Items    (Get-StartupItems)) }
+            'visual'    { return (Backup-VisualEffects    -BackupDir $BackupDir) }
+            'power'     { return (Backup-PowerPlan        -BackupDir $BackupDir) }
+            'network'   { return (Backup-NetworkSettings  -BackupDir $BackupDir) }
+            'telemetry' { return (Backup-TelemetryTaskStates -BackupDir $BackupDir) }
+        }
+    } catch { }
+    return $null
+}
+
+# 按域调度对应的还原函数（三端共用的单一分发点）
+#   Domain 不可回滚（health / unknown）时返回 $null，由调用方自己提示
+#   File 省略时各域自己取最近一份备份
+function Restore-DomainState {
+    param([string]$Domain, [string]$File, [string]$BackupDir)
+    switch ($Domain) {
+        'services'  { return (Restore-Services        -BackupDir $BackupDir -File $File) }
+        'startup'   { return (Restore-StartupItems    -BackupDir $BackupDir -File $File) }
+        'visual'    { return (Restore-VisualEffects   -BackupDir $BackupDir -File $File) }
+        'power'     { return (Restore-PowerPlan       -BackupDir $BackupDir -File $File) }
+        'network'   { return (Restore-NetworkSettings -BackupDir $BackupDir -File $File) }
+        'telemetry' { return (Restore-TelemetryTasks  -BackupDir $BackupDir -File $File) }
+        'update'    { return (Restore-UpdateBackup    -File            $File) }
+    }
+    return $null
+}
+
+# ============================================================
+#  各域还原（三端共用的单一实现，此前 CLI/GUI/WebUI 各写一份且读不懂彼此的备份）
+# ============================================================
+
+# 从备份 CSV 恢复启动项（列名统一为 Name,Value,Scope,Source,Path）
+#   注册表项：值已缺失时按备份值重建
+#   启动文件夹项：从 backups/startup_items 移回原位置
+#   系统启动命令（WMI 视图）：与上面两类条目重复，只登记不动作
+# 返回 @{ restored; failed; backup; details; error }
+function Restore-StartupItems {
+    param([string]$BackupDir, [string]$File)
+    try {
+        $dir = Get-OptBackupDir -BackupDir $BackupDir
+        $target = $null
+        if ($File) {
+            $target = Get-Item -LiteralPath $File -ErrorAction SilentlyContinue
+        } else {
+            $target = Get-ChildItem -Path $dir -Filter 'startup_backup_*.csv' -ErrorAction SilentlyContinue |
+                      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        }
+        if (-not $target) {
+            return @{restored = 0; failed = 0; backup = $null; details = @(); error = '未找到启动项备份'}
+        }
+
+        $rows = @(Import-Csv -LiteralPath $target.FullName -Encoding UTF8)
+        $restored = 0; $failed = 0; $details = @()
+
+        foreach ($row in $rows) {
+            $name = [string]$row.Name
+            $path = [string]$row.Path
+            # Source 列是中文，旧工具写的或非 UTF8 编码的 CSV 读进来可能变成乱码，
+            # 因此不背依中文 Source 判别：先看路径形态（注册表路径 / 启动文件夹路径），
+            # 中文 Source 只作为启动文件夹的补充判据
+            $isStartupFolder = ($path -like '*\Start Menu\*') -or ([string]$row.Source -eq '启动文件夹')
+            $isRegistryPath  = $path -like '?*:\*'
+            try {
+                if ($isStartupFolder) {
+                    $leaf = Split-Path -Leaf ([string]$row.Value)
+                    $src  = Join-Path $dir ("startup_items\" + $leaf)
+                    if (-not (Test-Path -LiteralPath $src)) {
+                        $failed++
+                        $details += @{name = $name; result = '跳过: 启动文件夹备份文件不存在'}
+                    } else {
+                        $destDir = $path
+                        if (-not (Test-Path -LiteralPath $destDir)) {
+                            New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+                        }
+                        Move-Item -LiteralPath $src -Destination (Join-Path $destDir $leaf) -Force -ErrorAction Stop
+                        $restored++
+                        $details += @{name = $name; result = '已还原到启动文件夹'}
+                    }
+                }
+                elseif ($isRegistryPath) {
+                    # 只有注册表路径才写注册表；路径不像注册表路径时一律跳过，
+                    # 避免把 'Startup' 之类的 WMI 位置字符串当成文件系统路径而误建目录
+                    if ([string]::IsNullOrWhiteSpace($path)) {
+                        $failed++
+                        $details += @{name = $name; result = '失败: 备份缺少 Path 列（旧格式）'}
+                    }
+                    elseif (-not (Test-Path -LiteralPath $path)) {
+                        New-Item -Path $path -Force | Out-Null
+                        New-ItemProperty -Path $path -Name $name -Value $row.Value -PropertyType String -Force | Out-Null
+                        $restored++
+                        $details += @{name = $name; result = '已恢复'}
+                    }
+                    elseif (Get-ItemProperty -Path $path -Name $name -ErrorAction SilentlyContinue) {
+                        $details += @{name = $name; result = '已存在，跳过'}
+                    }
+                    else {
+                        New-ItemProperty -Path $path -Name $name -Value $row.Value -PropertyType String -Force | Out-Null
+                        $restored++
+                        $details += @{name = $name; result = '已恢复'}
+                    }
+                }
+                else {
+                    # 系统启动命令（WMI 视图）与注册表 / 启动文件夹条目重复，无需单独还原
+                    $details += @{name = $name; result = '跳过: 与注册表/启动文件夹条目重复'}
+                }
+            } catch {
+                $failed++
+                $details += @{name = $name; result = ('失败: ' + $_.Exception.Message)}
+            }
+        }
+
+        return @{restored = $restored; failed = $failed; backup = $target.FullName; details = $details; error = $null}
+    } catch {
+        return @{restored = 0; failed = 0; backup = $null; details = @(); error = $_.Exception.Message}
+    }
+}
+
+# 从备份 JSON 恢复视觉效果相关注册表键（覆盖 Set-VisualEffectProfile 写入的项）
+# 返回 @{ restored; backup; details; error }
+function Restore-VisualEffects {
+    param([string]$BackupDir, [string]$File)
+    try {
+        $dir = Get-OptBackupDir -BackupDir $BackupDir
+        $target = $null
+        if ($File) {
+            $target = Get-Item -LiteralPath $File -ErrorAction SilentlyContinue
+        } else {
+            $target = Get-ChildItem -Path $dir -Filter 'visual_backup_*.json' -ErrorAction SilentlyContinue |
+                      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        }
+        if (-not $target) { return @{restored = 0; backup = $null; details = @(); error = '未找到视觉效果备份'} }
+        $data = Get-Content -LiteralPath $target.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not $data) { return @{restored = 0; backup = $target.FullName; details = @(); error = '备份内容为空或已损坏'} }
+
+        $keyMap = [ordered]@{
+            VisualEffects = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
+            DWM           = 'HKCU:\Software\Microsoft\Windows\DWM'
+            Advanced      = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+            Desktop       = 'HKCU:\Control Panel\Desktop'
+        }
+        $restored = 0; $details = @()
+        foreach ($k in $keyMap.Keys) {
+            $section = $null
+            $prop = $data.PSObject.Properties[$k]
+            if ($prop) { $section = $prop.Value }
+            if (-not $section) { continue }
+            $regPath = $keyMap[$k]
+            if (-not (Test-Path -LiteralPath $regPath)) {
+                try { New-Item -Path $regPath -Force | Out-Null } catch { }
+            }
+            foreach ($p in ($section.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' })) {
+                try {
+                    $existing = Get-ItemProperty -Path $regPath -Name $p.Name -ErrorAction SilentlyContinue
+                    if ($existing) {
+                        # 值已存在：不指定类型，保留原类型（DWord / Binary / String 都不变形）
+                        Set-ItemProperty -Path $regPath -Name $p.Name -Value $p.Value -ErrorAction Stop
+                    } else {
+                        $regType = 'String'
+                        if ($p.Value -is [int] -or $p.Value -is [long] -or $p.Value -is [bool]) { $regType = 'DWord' }
+                        elseif ($p.Value -is [Array]) { $regType = 'Binary' }
+                        New-ItemProperty -Path $regPath -Name $p.Name -Value $p.Value -PropertyType $regType -Force | Out-Null
+                    }
+                    $restored++
+                } catch {
+                    $details += ("{0}\{1} 恢复失败: {2}" -f $k, $p.Name, $_.Exception.Message)
+                }
+            }
+        }
+        return @{restored = $restored; backup = $target.FullName; details = $details; error = $null}
+    } catch {
+        return @{restored = 0; backup = $null; details = @(); error = $_.Exception.Message}
+    }
+}
+
+# 从备份恢复电源计划。
+#   power_backup_*.json（新版，记录 activeGuid）：powercfg /setactive 精确切回
+#   power_backup_*.txt（旧版，仅 powercfg /query 文本）：无法可靠解析，只给手动提示
+# 返回 @{ restored; backup; details; error }
+function Restore-PowerPlan {
+    param([string]$BackupDir, [string]$File)
+    try {
+        $dir = Get-OptBackupDir -BackupDir $BackupDir
+        $target = $null
+        if ($File) {
+            $target = Get-Item -LiteralPath $File -ErrorAction SilentlyContinue
+        } else {
+            $target = Get-ChildItem -Path $dir -Filter 'power_backup_*' -ErrorAction SilentlyContinue |
+                      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        }
+        if (-not $target) { return @{restored = 0; backup = $null; details = @(); error = '未找到电源计划备份'} }
+
+        if ($target.Extension -eq '.json') {
+            $data = Get-Content -LiteralPath $target.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+            $guid = ''
+            if ($data.PSObject.Properties.Name -contains 'activeGuid') { $guid = [string]$data.activeGuid }
+            if ([string]::IsNullOrWhiteSpace($guid)) {
+                return @{restored = 0; backup = $target.FullName; details = @('备份中未记录电源计划 GUID，无法自动恢复'); error = $null}
+            }
+            Invoke-PowerCfg @('/setactive', $guid) | Out-Null
+            $now = Get-ActivePowerPlan
+            if ($now -eq $guid) {
+                return @{restored = 1; backup = $target.FullName; guid = $guid; details = @("已切回电源计划 $guid"); error = $null}
+            }
+            return @{restored = 0; backup = $target.FullName; guid = $guid; details = @(); error = '设置电源计划失败（可能需要管理员权限）'}
+        }
+
+        return @{restored = 0; backup = $target.FullName;
+                 details = @('旧格式备份（.txt）未记录计划 GUID，请在 控制面板→电源选项 手动选择原计划，或运行 powercfg /restoredefaultschemes');
+                 error = $null}
+    } catch {
+        return @{restored = 0; backup = $null; details = @(); error = $_.Exception.Message}
+    }
+}
+
+# 从备份 JSON 恢复各网卡 DNS（含「备份时为 DHCP 自动获取」的情况）
+# 返回 @{ restored; failed; backup; details; error }
+function Restore-NetworkSettings {
+    param([string]$BackupDir, [string]$File)
+    try {
+        $dir = Get-OptBackupDir -BackupDir $BackupDir
+        $target = $null
+        if ($File) {
+            $target = Get-Item -LiteralPath $File -ErrorAction SilentlyContinue
+        } else {
+            $target = Get-ChildItem -Path $dir -Filter 'network_backup_*.json' -ErrorAction SilentlyContinue |
+                      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        }
+        if (-not $target) { return @{restored = 0; failed = 0; backup = $null; details = @(); error = '未找到网络 DNS 备份'} }
+        $data = Get-Content -LiteralPath $target.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+        $restored = 0; $failed = 0; $details = @()
+
+        foreach ($a in @($data.Adapters)) {
+            if (-not $a) { continue }
+            $name = [string]$a.InterfaceAlias
+            $idx  = 0
+            if ($null -ne $a.InterfaceIndex) { $idx = [int]$a.InterfaceIndex }
+            $servers = @()
+            foreach ($s in @($a.DnsServers)) { if ($s) { $servers += [string]$s } }
+
+            if ($servers.Count -eq 0) {
+                # 备份时是自动获取：置空 / dhcp 即恢复
+                $okReset = $false
+                if ($idx -gt 0) {
+                    try { Set-DnsClientServerAddress -InterfaceIndex $idx -ResetServerAddresses -ErrorAction Stop; $okReset = $true } catch { }
+                }
+                if (-not $okReset) {
+                    try { netsh interface ip set dns name="$name" dhcp 2>&1 | Out-Null; $okReset = $true } catch { }
+                }
+                if ($okReset) { $restored++; $details += "$name -> 自动获取 (DHCP)" }
+                else { $failed++; $details += "$name -> 恢复 DHCP 失败" }
+                continue
+            }
+
+            $r = Set-AdapterDns -Name $name -IfIndex $idx -DnsServers $servers
+            if ($r.ok) { $restored++; $details += "$name -> $($servers -join ', ')" }
+            else { $failed++; $details += "$name 失败: $($r.error)" }
+        }
+        return @{restored = $restored; failed = $failed; backup = $target.FullName; details = $details; error = $null}
+    } catch {
+        return @{restored = 0; failed = 0; backup = $null; details = @(); error = $_.Exception.Message}
+    }
+}
+
+# 导入 Windows 更新屏蔽备份（*.reg），并调用 Restore-AutoUpdate 兜底清理策略/任务
+# 返回 @{ ok; details; error }
+function Restore-UpdateBackup {
+    param([string]$File)
+    $details = @()
+    try {
+        if ($File -and (Test-Path -LiteralPath $File) -and $File -like '*.reg') {
+            & reg import $File 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { $details += "已导入注册表备份: $File" }
+            else { $details += "注册表导入退出码: $LASTEXITCODE（可能需要管理员权限）" }
+        }
+        $r = Restore-AutoUpdate
+        foreach ($d in @($r.details)) { $details += [string]$d }
+        if ($r.error) { return @{ok = $false; details = $details; error = $r.error} }
+        return @{ok = $true; details = $details; error = $null}
+    } catch {
+        return @{ok = $false; details = $details; error = $_.Exception.Message}
+    }
+}
+
+# 一键回滚：按固定顺序调用既有 Restore-* 还原，并遵守「修改必备份」红线——
+#   还原前先把当前状态整体再备份一遍（可用 -SkipBackup 关闭，不推荐）。
+#   Since     回到该时间点（每个域取 <= Since 的最新备份；省略则为最近的备份）
+#   Last      回到最近第 N 条备份所在的时间点
+#   Domain    只回滚这些域
+#   File      只回滚某一个备份文件（GUI 单选）
+#   DryRun    只输出「将做什么」，零副作用（连安全备份都不写）
+#   SkipBackup 跳过还原前的当前状态备份
+#   Force     安全备份失败时仍继续
+# 返回 @{ ok; dryRun; mode; since; safetyBackups; results; skipped; error }
+function Invoke-Rollback {
+    param(
+        [string]$BackupDir,
+        [datetime]$Since = [datetime]::MinValue,
+        [int]$Last = 0,
+        [string[]]$Domain,
+        [string]$File,
+        [switch]$DryRun,
+        [switch]$SkipBackup,
+        [switch]$Force
+    )
+    $res = [PSCustomObject]@{
+        ok            = $true
+        dryRun        = [bool]$DryRun
+        mode          = ''
+        since         = $null
+        safetyBackups = @()
+        results       = @()
+        skipped       = @()
+        error         = $null
+    }
+
+    $plan = Get-RollbackPlan -BackupDir $BackupDir -Since $Since -Last $Last -Domain $Domain -File $File
+    if (-not $plan.ok) {
+        $res.ok = $false; $res.error = $plan.error
+        return $res
+    }
+    $res.mode  = $plan.mode
+    $res.since = $plan.since
+
+    $bdir = Get-OptBackupDir -BackupDir $BackupDir
+    # 固定回滚顺序：服务→启动项→视觉→电源→网络→遥测→更新（与依赖关系一致：先服务后启动）
+    $order = @('services', 'startup', 'visual', 'power', 'network', 'telemetry', 'update')
+
+    # 没有自动还原实现的域单独记账，保证用户看得见、不会静默吞掉
+    foreach ($e in @($plan.entries)) {
+        if ($order -notcontains $e.domain) {
+            $res.skipped += [PSCustomObject]@{
+                domain = $e.domain; domainLabel = $e.domainLabel; file = $e.file
+                reason = '该域没有可用的自动还原实现，需手动处理'
+            }
+        }
+    }
+
+    foreach ($dom in $order) {
+        $e = @($plan.entries | Where-Object { $_.domain -eq $dom } | Select-Object -First 1)[0]
+        if (-not $e) { continue }
+
+        $step = [PSCustomObject]@{
+            domain       = $dom
+            domainLabel  = $e.domainLabel
+            file         = $e.file
+            path         = $e.path
+            ok           = $false
+            restored     = 0
+            summary      = ''
+            safetyBackup = $null
+            error        = $null
+        }
+
+        if ($DryRun) {
+            $step.ok      = $true
+            $step.summary = "将从 $($e.file) 恢复（执行前会先备份当前状态）"
+            $res.results += $step
+            continue
+        }
+
+        # 还原前先把当前状态备份一遍——回滚本身也要可回滚
+        if (-not $SkipBackup) {
+            try {
+                $sb = Backup-DomainState -Domain $dom -BackupDir $bdir
+                if ($sb) { $step.safetyBackup = $sb }
+                else { $step.error = '无法备份当前状态' }
+            } catch { $step.error = "无法备份当前状态: $($_.Exception.Message)" }
+            if ($step.error -and -not $Force) {
+                $res.results += $step
+                continue
+            }
+        }
+
+        switch ($dom) {
+            'services'  { $r = Restore-Services        -BackupDir $bdir -File $e.path }
+            'startup'   { $r = Restore-StartupItems    -BackupDir $bdir -File $e.path }
+            'visual'    { $r = Restore-VisualEffects   -BackupDir $bdir -File $e.path }
+            'power'     { $r = Restore-PowerPlan       -BackupDir $bdir -File $e.path }
+            'network'   { $r = Restore-NetworkSettings -BackupDir $bdir -File $e.path }
+            'telemetry' { $r = Restore-TelemetryTasks  -BackupDir $bdir -File $e.path }
+            'update'    { $r = Restore-UpdateBackup    -File        $e.path }
+        }
+
+        if (-not $r) {
+            $step.error = '还原函数未返回结果'
+        } else {
+            if ($null -ne $r.restored) { $step.restored = [int]$r.restored }
+            $step.ok = [bool](-not $r.error)
+            $step.summary = Format-RestoreDetails -Details $r.details -Fallback ('已完成（还原 {0} 项）' -f $step.restored)
+            if ($r.error)   { $step.error = [string]$r.error }
+        }
+        $res.results += $step
+    }
+
+    $res.safetyBackups = @($res.results | Where-Object { $_.safetyBackup } | ForEach-Object { $_.safetyBackup })
+    $failed = @($res.results | Where-Object { -not $_.ok })
+    $res.ok = ($failed.Count -eq 0)
+    if (@($res.results).Count -eq 0) {
+        $res.ok = $false
+        if (-not $res.error) { $res.error = '没有匹配的备份可回滚' }
+    }
+    elseif (-not $res.ok -and -not $res.error) {
+        $res.error = ("有 {0} 个域还原失败，详见 results" -f $failed.Count)
+    }
+    return $res
+}
+
+# ============================================================
+#  优化组合包 Profiles（P0-3）
+#  纯编排：每一步都调用已存在的域函数，不新增任何系统操作面，
+#  因此天然获得「修改必备份」与 Win7 兼容保障，三端共用同一份计划。
+#  单个优化域要 5~6 次点击，不同场景（老机均衡/游戏/省电/最小干预）取舍完全不同；
+#  组合包把「该禁哪些服务、动画关多少、电源切哪个、DNS 换哪家」固化成一份配置。
+# ============================================================
+
+# 组合包字段缺省值：config 未写的字段按此补全，旧 config 也能跑
+function Get-ProfileDefaults {
+    return [PSCustomObject]@{
+        services   = 'none'
+        startup    = 'none'
+        visual     = 'keep'
+        power      = 'keep'
+        dns        = 'none'
+        telemetry  = $false
+        disk       = 'none'
+        compact_os = $false
+    }
+}
+
+# 内置组合包：config/optimization.json 的 profiles 缺失时兜底（三端永远有可用项）
+function Get-BuiltinProfiles {
+    return [ordered]@{
+        'old_balanced' = @{
+            title = '老机均衡'; desc = '通用首选：安全禁用服务、关闭动画特效、切高性能电源'
+            services = 'safe'; startup = 'list'; visual = 'best_performance'; power = 'high'
+            dns = 'cloudflare'; telemetry = $true; disk = 'none'; compact_os = $false
+        }
+        'gaming' = @{
+            title = '游戏加速'; desc = '更激进：safe+recommended 服务全禁、动画全关、卓越性能、阿里 DNS'
+            services = 'recommended'; startup = 'all'; visual = 'best_performance'; power = 'ultimate'
+            dns = 'aliyun'; telemetry = $true; disk = 'none'; compact_os = $false
+        }
+        'quiet_saver' = @{
+            title = '静音省电'; desc = '笔记本电池模式：仅安全禁用服务、保留基本动画、切省电计划'
+            services = 'safe'; startup = 'list'; visual = 'balanced'; power = 'power_saver'
+            dns = '114'; telemetry = $true; disk = 'none'; compact_os = $false
+        }
+        'minimal' = @{
+            title = '最小干预'; desc = '几乎不动系统：仅关闭遥测计划任务，服务/动画/电源/DNS 全部保持原状'
+            services = 'none'; startup = 'none'; visual = 'keep'; power = 'keep'
+            dns = 'none'; telemetry = $true; disk = 'none'; compact_os = $false
+        }
+    }
+}
+
+# 组合包清单：config/optimization.json 的 profiles 为唯一真源，缺失时回退内置默认
+function Get-Profiles {
+    $src = Get-BuiltinProfiles
+    try {
+        $cfg = Get-OptConfig
+        if ($cfg -and $cfg.profiles) {
+            $src = [ordered]@{}
+            foreach ($p in @($cfg.profiles.PSObject.Properties)) { $src[$p.Name] = $p.Value }
+        }
+    } catch { }
+
+    $out = @()
+    foreach ($k in @($src.Keys)) {
+        $v  = $src[$k]
+        $d  = Get-ProfileDefaults
+        $pick = {
+            param($Field, $Default)
+            $val = $null
+            if ($v -is [System.Collections.IDictionary]) {
+                if ($v.Contains($Field)) { $val = $v[$Field] }
+            } else {
+                $prop = @($v.PSObject.Properties | Where-Object { $_.Name -eq $Field })[0]
+                if ($prop) { $val = $prop.Value }
+            }
+            if ($null -eq $val -or [string]$val -eq '') { return $Default }
+            return $val
+        }
+        $out += [PSCustomObject]@{
+            name      = [string]$k
+            title     = [string](& $pick 'title' $k)
+            desc      = [string](& $pick 'desc' '')
+            services  = [string](& $pick 'services'   $d.services)
+            startup   = [string](& $pick 'startup'   $d.startup)
+            visual    = [string](& $pick 'visual'     $d.visual)
+            power     = [string](& $pick 'power'      $d.power)
+            dns       = [string](& $pick 'dns'        $d.dns)
+            telemetry = [bool]  (& $pick 'telemetry'  $d.telemetry)
+            disk      = [string](& $pick 'disk'       $d.disk)
+            compactOs = [bool]  (& $pick 'compact_os' $d.compact_os)
+        }
+    }
+    return $out
+}
+
+function Get-Profile {
+    param([string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Name)) { return $null }
+    $n = $Name.Trim()
+    foreach ($p in @(Get-Profiles)) {
+        if ($p.name -ieq $n -or $p.title -ieq $n) { return $p }
+    }
+    return $null
+}
+
+# power 字段 -> powercfg GUID（power_saver / ultimate 需 Win7 适配，Set-PowerPlan 已有兼容层）
+function Get-ProfilePowerGuid {
+    param([string]$Key)
+    switch ($Key) {
+        'high'        { return '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c' }
+        'ultimate'    { return 'e9a42b02-d5df-448d-aa00-03f14749eb61' }
+        'balanced'    { return '381b4222-f694-41f0-9685-ff5bb260df2e' }
+        'power_saver' { return 'a1841308-3541-4fab-bc81-f71556f20b4a' }
+        default {
+            if ($Key -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') { return $Key }
+            return $null
+        }
+    }
+}
+
+# 把组合包展开成「步骤清单」（plan 与 invoke 共用，保证预览与执行零漂移）
+# 每步: id / domain / action / target / impact / auto / risk / params
+function Get-ProfileSteps {
+    param($Profile)
+    $steps = @()
+    if (-not $Profile) { return $steps }
+
+    if ($Profile.services -and $Profile.services -ne 'none') {
+        $mode  = 'all'
+        $label = 'safe + recommended 全部'
+        if ($Profile.services -eq 'safe') { $mode = 'safe'; $label = '仅安全禁用' }
+        $steps += [PSCustomObject]@{
+            id = 'services'; domain = '服务'; risk = $(if ($mode -eq 'safe') { 'low' } else { 'medium' }); auto = $true
+            action = "禁用服务（$label）"
+            target = $(if ($mode -eq 'safe') { 'config.services.safe_to_disable' } else { 'config.services 全量' })
+            impact = '关闭后台服务，开机更快、内存占用更低；改前自动备份服务状态'
+            params = @{ Mode = $mode }
+        }
+    }
+
+    if ($Profile.startup -and $Profile.startup -ne 'none') {
+        if ($Profile.startup -eq 'list') {
+            $steps += [PSCustomObject]@{
+                id = 'startup'; domain = '启动项'; risk = 'none'; auto = $true
+                action = '仅列出启动项清单'
+                target = 'Get-StartupItems'
+                impact = '只读，不动手；请按清单自行决定禁用哪些'
+                params = @{ ListOnly = $true }
+            }
+        } else {
+            $steps += [PSCustomObject]@{
+                id = 'startup'; domain = '启动项'; risk = 'high'; auto = $false
+                action = '禁用全部启动项'
+                target = 'Disable-StartupItems'
+                impact = '输入法/显卡面板/云同步等也会被禁用，需逐项确认；改前自动备份'
+                params = @{ ListOnly = $false }
+            }
+        }
+    }
+
+    if ($Profile.visual -and $Profile.visual -ne 'keep') {
+        $pnum = 2; $vlabel = '平衡模式'
+        if ($Profile.visual -eq 'best_performance') { $pnum = 1; $vlabel = '最佳性能' }
+        $steps += [PSCustomObject]@{
+            id = 'visual'; domain = '视觉效果'; risk = 'low'; auto = $true
+            action = "设置视觉效果（$vlabel）"
+            target = "Set-VisualEffectProfile -Profile $pnum"
+            impact = '关闭动画与淡入淡出，窗口响应更快；改前自动备份注册表'
+            params = @{ Profile = $pnum }
+        }
+    }
+
+    if ($Profile.power -and $Profile.power -ne 'keep') {
+        $guid = Get-ProfilePowerGuid -Key $Profile.power
+        if ($guid) {
+            $steps += [PSCustomObject]@{
+                id = 'power'; domain = '电源计划'; risk = 'low'; auto = $true
+                action = "切换电源计划（$($Profile.power)）"
+                target = $guid
+                impact = '影响 CPU 频率与休眠策略；改前自动备份当前计划'
+                params = @{ Guid = $guid; UnlockUltimate = ($Profile.power -eq 'ultimate') }
+            }
+        }
+    }
+
+    if ($Profile.dns -and $Profile.dns -ne 'none') {
+        $opt = @(Get-DnsOptions | Where-Object { $_.Key -ieq $Profile.dns })[0]
+        if ($opt) {
+            $steps += [PSCustomObject]@{
+                id = 'network'; domain = '网络'; risk = 'low'; auto = $true
+                action = ("优化网络（DNS 切到 {0}）" -f $opt.Label)
+                target = ("Invoke-NetworkOptimization -DnsOption {0}" -f $opt.Value)
+                impact = '可能影响内网 DNS 解析或专线访问；改前自动备份网卡 DNS 与 TCP 参数'
+                params = @{ DnsOption = [int]$opt.Value }
+            }
+        }
+    }
+
+    if ($Profile.telemetry) {
+        $steps += [PSCustomObject]@{
+            id = 'telemetry'; domain = '遥测计划任务'; risk = 'low'; auto = $true
+            action = '禁用遥测计划任务'
+            target = 'config.telemetry_tasks'
+            impact = '停止系统自动回传 diagnostic 数据；改前自动备份任务状态'
+            params = @{}
+        }
+    }
+
+    if ($Profile.disk -and $Profile.disk -ne 'none') {
+        $steps += [PSCustomObject]@{
+            id = 'disk'; domain = '磁盘'; risk = 'high'; auto = $false
+            action = ("磁盘优化（TRIM/碎片整理{0}）" -f $(if ($Profile.compactOs) { ' + CompactOS' } else { '' }))
+            target = 'Invoke-DiskOptimization'
+            impact = '耗时数分钟；CompactOS 回滚需再跑一次 Compact.exe /CompactOS:never'
+            params = @{ Compact = [bool]$Profile.compactOs }
+        }
+    }
+
+    return $steps
+}
+
+# 只读预览：返回组合包将做什么，不碰系统
+function Get-ProfilePlan {
+    param([string]$Name)
+    $p = Get-Profile -Name $Name
+    if (-not $p) {
+        return [PSCustomObject]@{ ok = $false; name = $Name; title = $null; desc = $null; steps = @(); error = "未找到组合包: $Name" }
+    }
+    $steps = @(Get-ProfileSteps -Profile $p)
+    return [PSCustomObject]@{
+        ok = $true; name = $p.name; title = $p.title; desc = $p.desc
+        steps = $steps; error = $null
+    }
+}
+
+# 执行组合包。单步失败不中断（续跑），汇总到 results
+#   -WhatIf            完全零副作用（连备份都不落盘）
+#   -Force             允许执行 risk=high/medium 的步骤（默认只跑 low）
+function Invoke-Profile {
+    [CmdletBinding()]
+    param(
+        [string]$Name,
+        [string]$BackupDir,
+        [switch]$WhatIf,
+        [switch]$Force
+    )
+    $plan = Get-ProfilePlan -Name $Name
+    $res  = [PSCustomObject]@{
+        ok       = $false
+        name     = $Name
+        title    = $plan.title
+        desc     = $plan.desc
+        dryRun   = [bool]$WhatIf
+        forced   = [bool]$Force
+        steps    = @($plan.steps)
+        results  = @()
+        skipped  = @()
+        error    = $null
+    }
+    if (-not $plan.ok) { $res.error = $plan.error; return $res }
+
+    $bkDir = $BackupDir
+    if (-not $bkDir) { $bkDir = Get-OptBackupDir }
+
+    foreach ($s in @($plan.steps)) {
+        # 闸门：auto=false 或 high 风险的步骤默认跳过，必须显式 -Force 才执行；
+        # low / medium 的 auto 步骤直接跑，且每个域执行前都会自动备份。
+        if (-not $Force -and (-not $s.auto -or $s.risk -eq 'high')) {
+            $reason = if (-not $s.auto) { "需人工确认后执行（$($s.action)）" } else { "风险级别 $($s.risk)，需 -Force" }
+            $res.skipped += [PSCustomObject]@{ id = $s.id; domain = $s.domain; risk = $s.risk; reason = $reason; action = $s.action }
+            continue
+        }
+        $r = [PSCustomObject]@{ id = $s.id; domain = $s.domain; action = $s.action; ok = $false; summary = ''; backup = $null; error = $null }
+        try {
+            switch ($s.id) {
+                'services' {
+                    $x = Disable-Services -Services (Get-ServiceList) -Mode $s.params.Mode -WhatIf:$WhatIf
+                    $r.summary = "禁用 $($x.disabled) 项，跳过 $($x.skipped) 项"
+                    $r.ok = $true
+                }
+                'startup' {
+                    $items = @(Get-StartupItems)
+                    if ($s.params.ListOnly) {
+                        $r.summary = "共 $($items.Count) 个启动项，已列出（未改动）"
+                        $r.ok = $true
+                    } else {
+                        $x = Disable-StartupItems -BackupDir $bkDir -Items $items -WhatIf:$WhatIf
+                        $r.summary = "禁用 $($x.disabled) 项，失败 $($x.failed) 项"
+                        $r.backup = $x.backup
+                        $r.ok = $true
+                    }
+                }
+                'visual' {
+                    $x = Set-VisualEffectProfile -Profile $s.params.Profile -BackupDir $bkDir -WhatIf:$WhatIf
+                    $r.summary = (@($x.details) -join ' / ')
+                    $r.backup = $x.backup
+                    $r.ok = [bool]$x.ok
+                }
+                'power' {
+                    $x = Set-PowerPlan -Guid $s.params.Guid -BackupDir $bkDir -UnlockUltimate:$s.params.UnlockUltimate -FallbackToHighPerf -WhatIf:$WhatIf
+                    $r.summary = (@($x.details) -join ' / ')
+                    if (-not $r.summary) { $r.summary = $(if ($WhatIf) { "（预演）切换电源计划 $($s.params.Guid)" } else { "已切换电源计划 $($s.params.Guid)" }) }
+                    $r.backup = $x.backup
+                    $r.ok = [bool]$x.ok
+                    if ($x.fallback) { $r.summary = ($r.summary + '；已回退高性能计划').Trim('；') }
+                }
+                'network' {
+                    $x = Invoke-NetworkOptimization -BackupDir $bkDir -DnsOption $s.params.DnsOption -WhatIf:$WhatIf
+                    $r.summary = (@($x.details) -join ' / ')
+                    $r.ok = [bool]$x.ok
+                    if (-not $x.ok -and $x.error) { $r.error = $x.error }
+                }
+                'telemetry' {
+                    $x = Disable-TelemetryTasks -BackupDir $bkDir -WhatIf:$WhatIf
+                    $r.summary = "禁用 $($x.disabled) 项，跳过 $($x.skipped) 项"
+                    $r.ok = $true
+                }
+                'disk' {
+                    $x = Invoke-DiskOptimization -BackupDir $bkDir -Compact:$s.params.Compact -WhatIf:$WhatIf
+                    $r.summary = (@($x.details) -join ' / ')
+                    if (-not $r.summary) { $r.summary = $(if ($WhatIf) { '（预演）执行磁盘优化' } else { '磁盘优化已执行' }) }
+                    $r.ok = [bool]$x.ok
+                }
+                default {
+                    $r.error = "未知步骤: $($s.id)"
+                }
+            }
+        } catch {
+            $r.error = $_.Exception.Message
+        }
+        $res.results += $r
+    }
+
+    $failed = @($res.results | Where-Object { -not $_.ok })
+    $res.ok = (@($res.results).Count -gt 0 -and $failed.Count -eq 0)
+    if (@($res.results).Count -eq 0) { $res.error = '该组合包没有可执行的步骤' }
+    elseif (-not $res.ok) { $res.error = ("有 {0} 个步骤失败，详见 results" -f $failed.Count) }
     return $res
 }
