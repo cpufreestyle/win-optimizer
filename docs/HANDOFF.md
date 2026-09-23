@@ -227,6 +227,8 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 
 - ~~**CLI 的 CompactOS 默认无条件执行**~~ → **已于 2026-09-18 收口**（见 §3.3）：三端统一为「显式开关、默认关闭」，默认来源 `config` 的 `disk.compact_os_default`。
 - **GUI 体检页 `gui/pages/Health.ps1` 仅做了静态校验（语法 + BOM + 接入一致性），未真机点验**，上线前需在真机确认渲染。
+- **GUI 首页 `gui/pages/Dashboard.ps1` 的「优化组合包」卡片同理仅做了静态校验**（语法 / BOM / CRLF / 引用完整性），InputBox 与 MessageBox 的交互路径需真机点验。
+- 既有缺陷（非本轮引入，待独立修）：`webui/ps/02_clean.ps1` 在第 25 行调用 `Get-CleanTargets -Web`，但第 29 行才 dot-source lib，导致 `/api/clean/scan` 报 `Get-CleanTargets` 未找到。
 - ~~PR #5 / #6 合并顺序与潜在冲突~~ → 已在本集成分支按 `#5 → #6` 顺序合并，**零冲突**；剩最后一步是你在 GitHub 点 Merge（见 §2）。
 
 ---
@@ -239,4 +241,5 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 2. 合并后清理远程残留分支：`feat/optimizations`、`fix/cli-error-isolation-version`、`perf/folder-size-and-logging`、`release/v3.1.0`（这些已合并分支的 `origin/*` 引用仍残留，可删）。
 3. 打 tag `v3.3.0` 触发 Actions 编译 Release（见 `docs/DEVELOPMENT.md` 发布流程）。
 4. 真机验收 GUI 体检页（§7）。
-5. 后续功能建议（按价值排序）：「一键优化组合包」「优化回滚向导」「计划任务定时体检」。
+5. 后续功能建议（按价值排序）：「计划任务定时体检」→「前后对比报告导出」→「优化前自动创建系统还原点」。
+   「一键优化组合包」（P0-3）与「优化回滚向导」（P0-4）均已落地（见 §3.4、§3.5）。
