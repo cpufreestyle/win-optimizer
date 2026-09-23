@@ -1,4 +1,4 @@
-﻿﻿# 渲染优化组合包执行结果
+﻿# 渲染优化组合包执行结果
 function Show-ProfileReport {
     param($Result)
     if (-not $Result) { Write-Log "组合包未返回结果。" "ERROR"; return }
@@ -212,7 +212,7 @@ function Build-Dashboard {
         }
     })
     $page.Controls.Add($btnFull)
-﻿    # --- 优化组合包卡片 ---
+    # --- 优化组合包卡片 ---
     $yProf = [int]($yDisk + 4 + $cardSysHeight + 62)
     $cardProf = New-Object System.Windows.Forms.Panel
     $cardProf.Location = New-Object System.Drawing.Point(20, $yProf)

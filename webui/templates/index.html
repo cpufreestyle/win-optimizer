@@ -904,7 +904,7 @@ async function runRemediate(maxSeverity, force){
   log(d.ok?'修复完成，建议重新体检对比':'部分项目失败，详见日志', d.ok?'':'err');
   renderHealth();
 }
-﻿async function renderProfiles(){
+async function renderProfiles(){
   content.innerHTML = `<div class="page-title">优化组合包</div>
     <div class="page-sub">一键套用预设优化方案（服务 / 启动项 / 视觉效果 / 电源 / 网络 / 遥测），每步执行前自动备份</div>
     <div class="card">
