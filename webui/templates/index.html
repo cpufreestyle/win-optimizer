@@ -744,6 +744,25 @@ async function renderHealth(){
         <div class="muted" style="margin-top:4px">建议：${esc(i.suggestion)}</div>
       </div>`).join('');
   }
+  // --- 自动修复预览（只读；与 CLI / GUI 共用 lib 的同一份计划）---
+  const plan = d.plan || [];
+  const actionable = plan.filter(p=>p.auto).length;
+  h += `<h3 style="margin:16px 0 8px">自动修复预览</h3>`;
+  if(!plan.length){ h += `<p class="muted">未发现可自动修复的项目。</p>`; }
+  else {
+    h += `<div class="table-wrap"><table>
+      <thead><tr><th>类型</th><th>问题</th><th>动作</th><th>目标</th><th>预估影响</th></tr></thead><tbody>
+      ${plan.map(p=>`<tr>
+        <td>${p.auto?badge('可修复','ok'):badge('仅建议','info')}</td>
+        <td>${badge(p.severity,kd(p.severity))} ${esc(p.title)}</td>
+        <td>${esc(p.action)}</td>
+        <td>${esc(p.target)}</td>
+        <td class="muted">${esc(p.impact)}</td>
+      </tr>`).join('')}
+      </tbody></table></div>
+      <p class="muted" style="margin-top:6px">共 ${actionable} 项可一键修复（每步执行前自动备份；High 级高危项不会自动执行）。</p>
+      <div class="row" style="margin-top:8px">${btn('一键修复（中低危）','green',()=>runRemediate('Medium',false), actionable===0)}${btn('包含高危项','yellow',()=>runRemediate('High',true))}</div>`;
+  }
   const c = d.comparison;
   h += `<h3 style="margin:16px 0 8px">与上次体检对比</h3>`;
   if(!c){ h += `<p class="muted">这是首次体检，暂无历史报告。优化后再跑一次即可看到前后变化。</p>`; }
@@ -758,8 +777,26 @@ async function renderHealth(){
   }
   h += `<div class="row" style="margin-top:12px">${btn('重新体检','green',renderHealth)}</div>`;
   $('#healthCard').innerHTML = h;
+  bindBtns($('#healthCard'));
 }
 
+async function runRemediate(maxSeverity, force){
+  const dangerous = (maxSeverity === 'High');
+  const msg = dangerous
+    ? '即将执行包含 High 级高危项的自动修复（含禁用服务 / 清理文件），每步执行前会自动备份。确认继续？'
+    : '即将执行中低危问题的自动修复，每步执行前会自动备份。确认继续？';
+  if(!confirm(msg)) return;
+  log('开始自动修复（'+(dangerous?'含高危':'中低危')+'）');
+  const d = await api('/api/health/remediate',{method:'POST',body:{max_severity:maxSeverity, force:!!force}});
+  if(!d.ok){ log('修复失败：'+d.error,'err'); return; }
+  (d.results||[]).forEach(s=>{
+    log((s.ok?'[成功] ':'[失败] ')+s.id+'（'+s.domain+'）'+s.summary+(s.backup?(' 备份:'+s.backup):''));
+    if(s.error) log('  错误：'+s.error,'err');
+  });
+  (d.skipped||[]).forEach(s=>log('[跳过] '+s.id+' —— '+s.reason));
+  log(d.ok?'修复完成，建议重新体检对比':'部分项目失败，详见日志', d.ok?'':'err');
+  renderHealth();
+}
 // ---------------- 路由 ----------------
 const pages = {
   overview:renderOverview, health:renderHealth, clean:renderClean, services:renderServices,

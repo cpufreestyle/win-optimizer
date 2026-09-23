@@ -792,7 +792,8 @@ function Set-VisualEffectProfile {
         details = @()
     }
 
-    if ($BackupDir) { $res.backup = Backup-VisualEffects -BackupDir $BackupDir }
+    # -WhatIf 时同样不落盘：预览必须零副作用（与 Disable-TelemetryTasks 保持一致）
+    if ($BackupDir -and -not $WhatIf) { $res.backup = Backup-VisualEffects -BackupDir $BackupDir }
 
     $visualKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
     $perfKey   = 'HKCU:\Control Panel\Desktop'
@@ -944,7 +945,7 @@ function Set-PowerPlan {
     }
     $highPerf = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
 
-    if ($BackupDir -and -not $SkipBackup) { $res.backup = Backup-PowerPlan -BackupDir $BackupDir }
+    if ($BackupDir -and -not $SkipBackup -and -not $WhatIf) { $res.backup = Backup-PowerPlan -BackupDir $BackupDir }
 
     # 卓越性能需先解锁；解锁失败时可回退高性能
     if ($UnlockUltimate) {
@@ -1233,7 +1234,8 @@ function Invoke-NetworkOptimization {
     $ok      = $true
 
     # 统一先备份（此前 GUI / WebUI 完全没有备份，改坏无法恢复）
-    if (-not $SkipBackup) {
+    # -WhatIf 时同样不落盘：预览必须零副作用
+    if (-not $SkipBackup -and -not $WhatIf) {
         try { $backup = Backup-NetworkSettings -BackupDir $BackupDir }
         catch { $details += "备份失败: $($_.Exception.Message)" }
     }
@@ -1558,7 +1560,10 @@ function New-HealthIssue {
         [string]$Severity,   # High / Medium / Low
         [string]$Title,
         [string]$Detail,
-        [string]$Suggestion
+        [string]$Suggestion,
+        # 可选：建议动作代码，取值见 Get-HealthRemediationCatalog。
+        # 在 issue 产生处一次性声明，三端据此零漂移地展示与执行『自动修复』。
+        [string]$Remediation = ''
     )
     $penalty = switch ($Severity) {
         'High'   { 15 }
@@ -1571,6 +1576,7 @@ function New-HealthIssue {
         title      = $Title
         detail     = $Detail
         suggestion = $Suggestion
+        remediation = $Remediation
         penalty    = $penalty
     }
 }
@@ -1597,7 +1603,7 @@ function Get-SystemHealthReport {
     if ($memTotalMB -gt 0 -and $memFreePct -lt 20) {
         $issues += New-HealthIssue 'memory.low' 'High' '可用内存偏低' `
             "可用 ${memFreeMB}MB / 共 ${memTotalMB}MB（${memFreePct}%）" `
-            '关闭占用内存的程序，或减少开机启动项（菜单 [4]）'
+            '关闭占用内存的程序，或减少开机启动项（菜单 [4]）' ''
     }
 
     # --- 服务：仍为自动启动的可优化服务 ---
@@ -1614,7 +1620,7 @@ function Get-SystemHealthReport {
     $metrics.servicesStillAuto   = $autoSvc.Count
     if ($autoSvc.Count -gt 0) {
         $issues += New-HealthIssue 'services.auto' 'Medium' "$($autoSvc.Count) 个可优化服务仍自动启动" `
-            ($autoSvc -join '、') '使用菜单 [3] 服务优化禁用不必要的后台服务'
+            ($autoSvc -join '、') '使用菜单 [3] 服务优化禁用不必要的后台服务' 'services.disable'
     }
 
     # --- 启动项 ---
@@ -1622,7 +1628,7 @@ function Get-SystemHealthReport {
     $metrics.startupCount = $startups.Count
     if ($startups.Count -gt 15) {
         $issues += New-HealthIssue 'startup.many' 'Medium' "开机启动项偏多（$($startups.Count) 项）" `
-            '启动项越多，开机越慢、后台占用越高' '使用菜单 [4] 启动项优化'
+            '启动项越多，开机越慢、后台占用越高' '使用菜单 [4] 启动项优化' 'startup.list'
     }
 
     # --- 视觉效果：统计尚未关闭的特效开关 ---
@@ -1643,7 +1649,7 @@ function Get-SystemHealthReport {
     $metrics.visualFXSetting    = Get-VisualEffectState
     if ($visualLeft.Count -gt 0) {
         $issues += New-HealthIssue 'visual.effects' 'Low' "$($visualLeft.Count)/$($toggles.Count) 项视觉特效仍开启" `
-            ($visualLeft -join '、') '使用菜单 [5] 视觉效果优化切换为"最佳性能"'
+            ($visualLeft -join '、') '使用菜单 [5] 视觉效果优化切换为"最佳性能"' 'visual.profile'
     }
 
     # --- 电源计划 ---
@@ -1658,7 +1664,7 @@ function Get-SystemHealthReport {
     $metrics.powerPlanTitle = $planTitle
     if ($planGuid -eq '381b4222-f694-41f0-9685-ff5bb260df2e') {
         $issues += New-HealthIssue 'power.balanced' 'Medium' '当前为"平衡"电源计划' `
-            '平衡计划会限制 CPU 频率，老电脑上体感更明显' '使用菜单 [6] 切换为高性能/卓越性能'
+            '平衡计划会限制 CPU 频率，老电脑上体感更明显' '使用菜单 [6] 切换为高性能/卓越性能' 'power.plan'
     }
 
     # --- 磁盘空间 ---
@@ -1686,7 +1692,7 @@ function Get-SystemHealthReport {
     $metrics.tightDisks = $tightDisks.Count
     if ($tightDisks.Count -gt 0) {
         $issues += New-HealthIssue 'disk.space' 'High' "$($tightDisks.Count) 个分区空间紧张" `
-            ($tightDisks -join '；') '使用菜单 [2] 清理临时文件、[7] 磁盘优化'
+            ($tightDisks -join '；') '使用菜单 [2] 清理临时文件、[7] 磁盘优化' ''
     }
 
     # --- 可清理空间（递归统计，较慢，可用 -SkipCleanScan 跳过）---
@@ -1704,7 +1710,7 @@ function Get-SystemHealthReport {
         $metrics.cleanTargets = $perTarget
         if ($metrics.cleanableMB -gt 500) {
             $issues += New-HealthIssue 'disk.cleanable' 'Medium' "可回收约 $($metrics.cleanableMB) MB" `
-                '临时文件/缓存/更新下载缓存等占用较多空间' '使用菜单 [2] 临时文件清理'
+                '临时文件/缓存/更新下载缓存等占用较多空间' '使用菜单 [2] 临时文件清理' 'disk.clean'
         }
     }
 
@@ -1719,7 +1725,7 @@ function Get-SystemHealthReport {
         foreach ($d in $dns) { if ($fastDns -contains $d) { $isFast = $true; break } }
         if (-not $isFast -and $dns.Count -gt 0) {
             $issues += New-HealthIssue "network.dns.$($a.Name)" 'Low' "适配器 $($a.Name) 未使用公共快速 DNS" `
-                "当前 DNS: $($dns -join ', ')" '使用菜单 [8] 网络优化切换为 Cloudflare / 阿里 / 114 等'
+                "当前 DNS: $($dns -join ', ')" '使用菜单 [8] 网络优化切换为 Cloudflare / 阿里 / 114 等' 'network.dns'
         }
     }
     $metrics.activeAdapters = $adapters.Count
@@ -1818,4 +1824,299 @@ function Compare-HealthReports {
         new          = @($After.issues  | Where-Object { $beforeIds -notcontains $_.id })
         metricDeltas = $deltas
     }
+}
+# ============================================================
+#  体检自动修复（Auto-Remediation，CLI / GUI / WebUI 三端共享）
+#
+#  背景：体检只告诉用户"哪里有问题"，老电脑用户面对十几个菜单依然无从下手。
+#  这里把 issue 映射成"具体动作"，并编排**已存在**的域函数完成修复：
+#
+#  1. 单一映射来源：Get-HealthRemediationCatalog 是唯一一张 issue -> 动作表，
+#     issue 产生处（New-HealthIssue 的 -Remediation）按 code 引用它，三端零漂移；
+#  2. 纯编排，不新增任何系统操作面，因此天然继承各域的备份与 Win7 兼容层；
+#  3. 只读先行：Get-HealthRemediationPlan 不碰系统，可随时预览；
+#  4. 修改必备份：Invoke-HealthRemediation 每一步前自动调用对应域 Backup-*；
+#  5. High 级问题一律不自动执行，需 -MaxSeverity High 且 -Force 双重确认；
+#  6. startup.many / memory.low / disk.space 只给建议，永远不自动执行。
+# ============================================================
+
+# 严重级别排序权重：数值越大越严重，用于"允许自动执行的最高级别"判定
+function Get-HealthSeverityRank {
+    param([string]$Severity)
+    switch ($Severity) {
+        'High'   { return 3 }
+        'Medium' { return 2 }
+        'Low'    { return 1 }
+        default  { return 0 }
+    }
+}
+
+# issue -> 动作 的唯一映射表（lib 单点定义，三端零漂移）
+#   Code      issue 的 remediation 字段值，即 New-HealthIssue -Remediation 的取值
+#   IdPattern 兜底匹配模式：旧报告 / 手工构造的报告没有 remediation 字段时按 issue id 匹配
+#   Domain    目标域，三端据此分域展示
+#   Action    将要调用的既有 lib 函数
+#   Auto      $true = 可自动执行；$false = 仅列清单或给建议，永不自动执行
+function Get-HealthRemediationCatalog {
+    return @(
+        [PSCustomObject]@{ Code = 'services.disable'; IdPattern = 'services.auto';  Domain = 'services'; Action = 'Disable-Services';            Auto = $true  }
+        [PSCustomObject]@{ Code = 'startup.list';    IdPattern = 'startup.many';    Domain = 'startup';  Action = 'List-StartupItems';          Auto = $false }
+        [PSCustomObject]@{ Code = 'visual.profile';  IdPattern = 'visual.effects';  Domain = 'visual';   Action = 'Set-VisualEffectProfile';    Auto = $true  }
+        [PSCustomObject]@{ Code = 'power.plan';      IdPattern = 'power.balanced';  Domain = 'power';    Action = 'Set-PowerPlan';              Auto = $true  }
+        [PSCustomObject]@{ Code = 'disk.clean';      IdPattern = 'disk.cleanable';  Domain = 'clean';    Action = 'Remove-FolderContent';       Auto = $true  }
+        [PSCustomObject]@{ Code = 'network.dns';     IdPattern = 'network.dns.*';   Domain = 'network';  Action = 'Invoke-NetworkOptimization'; Auto = $true  }
+        [PSCustomObject]@{ Code = '';                IdPattern = 'memory.low';      Domain = 'memory';   Action = '';                          Auto = $false }
+        [PSCustomObject]@{ Code = '';                IdPattern = 'disk.space';      Domain = 'disk';     Action = '';                          Auto = $false }
+    )
+}
+
+# 由单个 issue 反查映射；无映射时返回 $null
+function Resolve-HealthRemediation {
+    param([object]$Issue)
+    if (-not $Issue) { return $null }
+    $cat  = @(Get-HealthRemediationCatalog)
+    $code = ''
+    if ($Issue.PSObject.Properties.Name -contains 'remediation') {
+        $code = [string]$Issue.remediation
+    }
+    if ($code) {
+        foreach ($m in $cat) { if ($m.Code -eq $code) { return $m } }
+        return $null
+    }
+    foreach ($m in $cat) {
+        if ($m.IdPattern -and [string]$Issue.id -like $m.IdPattern) { return $m }
+    }
+    return $null
+}
+
+# 生成「将做什么」清单。纯只读，不改动任何系统设置。
+#   Report        指定体检报告；省略时自动体检（可加 -SkipCleanScan 提速）
+#   PowerPlanGuid 电源计划目标 GUID，省略时用高性能计划
+#   DnsOption     DNS 选项编号（见 Get-DnsOptions），默认 1 = Cloudflare
+# 返回数组，元素字段：
+#   id / severity / title / detail / domain / action / actionKey / auto / target / impact
+function Get-HealthRemediationPlan {
+    param(
+        [object]$Report,
+        [string]$PowerPlanGuid = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c',
+        [int]$DnsOption = 1,
+        [switch]$SkipCleanScan
+    )
+    if (-not $Report) { $Report = Get-SystemHealthReport -SkipCleanScan:$SkipCleanScan }
+    if (-not $Report) { return @() }
+
+    $svcCount     = @(Get-ServiceList).Count
+    $cleanTargets = @(Get-CleanTargets -Web)
+    $dnsLabel     = ''
+    foreach ($o in @(Get-DnsOptions))  { if ($o.Value -eq $DnsOption) { $dnsLabel = $o.Label } }
+    $planTitle = ''
+    foreach ($p in @(Get-PowerPlanCatalog)) { if ($p.GUID -eq $PowerPlanGuid) { $planTitle = $p.Title } }
+
+    $plan = @()
+    foreach ($i in @($Report.issues)) {
+        $m = Resolve-HealthRemediation -Issue $i
+        if (-not $m) { continue }
+
+        $target = ''
+        $impact = ''
+        switch ($m.Code) {
+            'services.disable' {
+                $target = "config 全部可优化服务（$svcCount 项）"
+                $impact = '相关后台服务停止运行；已自动备份服务状态，可随时恢复'
+            }
+            'startup.list' {
+                $target = '开机启动项清单'
+                $impact = '无任何改动，仅输出清单交由人工确认'
+            }
+            'visual.profile' {
+                $target = '最佳性能（关闭全部视觉特效）'
+                $impact = '窗口动画 / 阴影关闭，界面观感变化；已备份注册表，可恢复'
+            }
+            'power.plan' {
+                $target = $(if ($planTitle) { $planTitle } else { $PowerPlanGuid })
+                $impact = 'CPU 保持高频，耗电与发热上升；已备份电源配置，可恢复'
+            }
+            'disk.clean' {
+                $target = "$($cleanTargets.Count) 个清理目标（临时文件 / 缓存 / 更新下载缓存）"
+                $impact = '临时文件删除后不可恢复，浏览器缓存会重新生成'
+            }
+            'network.dns' {
+                $target = "全部活动网卡 -> $dnsLabel"
+                $impact = 'DNS 切换后个别站点需重连；已备份原 DNS，可恢复'
+            }
+            default {
+                $target = '无（仅建议）'
+                $impact = '仅给出建议，不执行任何改动'
+            }
+        }
+
+        $plan += [PSCustomObject]@{
+            id        = [string]$i.id
+            severity  = [string]$i.severity
+            title     = [string]$i.title
+            detail    = [string]$i.detail
+            domain    = $m.Domain
+            action    = $m.Action
+            actionKey = $m.Code
+            auto      = [bool]$m.Auto
+            target    = $target
+            impact    = $impact
+        }
+    }
+    return $plan
+}
+
+# 按 plan 逐个执行修复，每一步前自动调用对应域 Backup-*。
+#   Report          指定体检报告；省略时自动体检
+#   IssueCode       只修这些 issue id（如 'visual.effects'）；省略表示全部
+#   MaxSeverity     允许自动执行的最高严重级别，默认 Medium（即 Low + Medium 可自动修）
+#   PowerPlanGuid   电源计划目标 GUID，默认高性能
+#   DnsOption       DNS 选项编号，默认 1 = Cloudflare
+#   BackupDir       备份目录，省略时用 lib 默认 backups 目录
+#   SkipBackup      跳过自动备份（不推荐，出问题将无法恢复）
+#   SkipCleanScan   Report 省略时跳过可清理空间统计以提速
+#   WhatIf          只预览将做什么，不实际执行
+#   Force           允许自动执行 High 级问题（需配合 -MaxSeverity High）
+#   SkipExplorerRestart 视觉修复后不自动重启资源管理器（CLI 默认行为）
+# 返回 @{ ok; whatIf; executed; skipped; results; error }
+function Invoke-HealthRemediation {
+    param(
+        [object]$Report,
+        [string[]]$IssueCode,
+        [ValidateSet('High', 'Medium', 'Low')][string]$MaxSeverity = 'Medium',
+        [string]$PowerPlanGuid = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c',
+        [int]$DnsOption = 1,
+        [string]$BackupDir,
+        [switch]$SkipBackup,
+        [switch]$SkipCleanScan,
+        [switch]$WhatIf,
+        [switch]$Force,
+        [switch]$SkipExplorerRestart
+    )
+
+    $res = [PSCustomObject]@{
+        ok       = $true
+        whatIf   = [bool]$WhatIf
+        executed = @()
+        skipped  = @()
+        results  = @()
+        error    = $null
+    }
+
+    $plan = @(Get-HealthRemediationPlan -Report $Report -PowerPlanGuid $PowerPlanGuid `
+                                       -DnsOption $DnsOption -SkipCleanScan:$SkipCleanScan)
+    if ($plan.Count -eq 0) {
+        $res.ok = $false
+        $res.error = '没有可执行的修复项（未发现问题，或问题无对应动作）'
+        return $res
+    }
+
+    $bdir      = Get-OptBackupDir -BackupDir $BackupDir
+    $bdirOrNil = if ($SkipBackup) { $null } else { $bdir }
+
+    # 安全天花板：MaxSeverity 是本次允许的上限；High 级还需 -Force 才放行
+    $cap = Get-HealthSeverityRank $MaxSeverity
+    if (-not $Force -and $cap -gt 2) { $cap = 2 }
+
+    $svcList  = @(Get-ServiceList)
+    $done     = @{}
+    $executed = @()
+    $skips    = @()
+    $results  = @()
+
+    foreach ($item in $plan) {
+        # 指定了 IssueCode 时只处理这些 issue，其余连 skip 都不记录
+        if ($IssueCode -and $IssueCode.Count -gt 0) {
+            $hit = $false
+            foreach ($c in $IssueCode) { if ($c -eq $item.id) { $hit = $true; break } }
+            if (-not $hit) { continue }
+        }
+
+        $reason = ''
+        if (-not $item.auto) {
+            $reason = '该问题只提供建议，不自动执行'
+        }
+        elseif ((Get-HealthSeverityRank $item.severity) -gt $cap) {
+            if ($item.severity -eq 'High') { $reason = 'High 级问题需 -Force 才会自动执行' }
+            else { $reason = "严重级别高于 -MaxSeverity $MaxSeverity" }
+        }
+        elseif ($done.ContainsKey($item.actionKey)) {
+            # 例如多个网卡都命中 network.dns.*，合并为一次网络优化
+            $reason = '同一动作已执行（重复问题已合并）'
+        }
+
+        if ($reason) {
+            $skips += [PSCustomObject]@{
+                id = $item.id; severity = $item.severity; title = $item.title; reason = $reason
+            }
+            continue
+        }
+        $done[$item.actionKey] = $true
+
+        $step = [PSCustomObject]@{
+            id        = $item.id
+            domain    = $item.domain
+            action    = $item.action
+            ok        = $false
+            backup    = $null
+            summary   = ''
+            error     = $null
+        }
+
+        if ($item.actionKey -eq 'services.disable') {
+            if (-not $SkipBackup -and -not $WhatIf) {
+                try { $step.backup = Backup-ServiceStates -BackupDir $bdir -Services $svcList }
+                catch { $step.error = "备份失败: $($_.Exception.Message)" }
+            }
+            $r = Disable-Services -Services $svcList -Mode 'all' -WhatIf:$WhatIf
+            # skipped 同时包含『未安装』与『执行失败』，只有真的失败才算 ok=False
+            $svcFailed = @($r.details | Where-Object { [string]$_.result -like '失败*' }).Count
+            $step.ok      = ($svcFailed -eq 0)
+            $step.summary = "禁用 $($r.disabled) 项，跳过 $($r.skipped) 项"
+            if ($svcFailed -gt 0) { $step.error = ($svcFailed.ToString() + ' 个服务禁用失败（可能未以管理员运行）') }
+        }
+        elseif ($item.actionKey -eq 'visual.profile') {
+            $r = Set-VisualEffectProfile -Profile 1 -BackupDir $bdirOrNil `
+                                         -SkipExplorerRestart:$SkipExplorerRestart -WhatIf:$WhatIf
+            $step.ok      = $r.ok
+            $step.backup  = $r.backup
+            $step.summary = '已切换为最佳性能（关闭全部视觉特效）'
+        }
+        elseif ($item.actionKey -eq 'power.plan') {
+            $r = Set-PowerPlan -Guid $PowerPlanGuid -BackupDir $bdirOrNil -SkipBackup:$SkipBackup -WhatIf:$WhatIf
+            $step.ok      = $r.ok
+            $step.backup  = $r.backup
+            $step.summary = "电源计划已切换为 $(if ($r.appliedGuid) { $r.appliedGuid } else { $PowerPlanGuid })"
+        }
+        elseif ($item.actionKey -eq 'disk.clean') {
+            $freed = 0
+            foreach ($t in @(Get-CleanTargets -Web)) {
+                $freed += [int](Remove-FolderContent -Path $t.path -WhatIf:$WhatIf)
+            }
+            $step.ok      = $true
+            $step.summary = "清理 $(@(Get-CleanTargets -Web).Count) 个目标，删除 $freed 个条目"
+        }
+        elseif ($item.actionKey -eq 'network.dns') {
+            $r = Invoke-NetworkOptimization -BackupDir $bdirOrNil -DnsOption $DnsOption `
+                                            -SkipBackup:$SkipBackup -WhatIf:$WhatIf
+            $step.ok      = $r.ok
+            $step.backup  = $r.backup
+            $step.summary = (@($r.details) -join '；')
+            if ($r.error) { $step.error = $r.error }
+        }
+        else {
+            $step.error = "未知动作: $($item.actionKey)"
+        }
+
+        if (-not $step.ok -and -not $res.error) { $res.error = $step.error }
+        $results  += $step
+        $executed += $item.id
+    }
+
+    $res.executed = $executed
+    $res.skipped  = $skips
+    $res.results  = $results
+    $res.ok       = (@($results | Where-Object { -not $_.ok }).Count -eq 0)
+    if ($res.error) { $res.ok = $false }
+    return $res
 }

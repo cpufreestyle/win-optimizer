@@ -1,4 +1,4 @@
-# 项目交接文档（HANDOFF）
+﻿# 项目交接文档（HANDOFF）
 
 > 生成日期：2026-09-16
 > 最近复核：2026-09-23（实测：远端 `main` 与本地一致，无需同步；PR #7 仍 OPEN 未合并，见 §2）
@@ -62,6 +62,26 @@
 
 体检**只读取系统状态，不改任何设置**；报告存 `backups/health/`（已 gitignore），再次运行可与上一份对比（分数变化 / 已解决问题 / 新增问题 / 指标差值）。
 
+### 3.2.1 体检自动修复 Auto-Remediation（2026-09-23）
+
+体检此前只能"告诉用户该去点哪个菜单"，老电脑用户面对十几个菜单依然无从下手。现在把 issue
+映射成具体动作并编排**已存在**的域函数一键修复：
+
+| 层 | 内容 |
+|----|------|
+| lib | `Get-HealthRemediationCatalog`（唯一映射表：issue → 域 / 函数 / 是否可自动执行）、`Resolve-HealthRemediation`、`Get-HealthRemediationPlan`（只读预览）、`Invoke-HealthRemediation`（执行） |
+| CLI | `scripts/15-HealthCheck.ps1` 报告后追加「自动修复预览」+ `Y` 确认执行 |
+| GUI | `gui/pages/Health.ps1` 新增「自动修复预览」文本框与「一键修复」按钮（确认框 + 执行后自动重新体检） |
+| WebUI | `webui/ps/15_health.ps1` 增加 `-Action plan|remediate`；路由 `/api/health/plan`、`/api/health/remediate`；MCP 工具 `health_plan` / `health_remediate`；前端 `renderHealth()` 渲染预览表格 + 两个修复按钮 |
+
+安全约束（lib 强制，三端无法绕过）：
+- **只读先行**：`Get-HealthRemediationPlan` 不碰系统，可随时预览；`-WhatIf` 完全零副作用（连备份都不写）。
+- **修改必备份**：每步执行前自动调用对应域 `Backup-*`（服务 / 视觉 / 电源 / 网络 DNS）。
+- **高危不放行**：`High` 级 issue 一律不自动执行，需 `-MaxSeverity High` 且 `-Force` 双确认（默认只放开 Medium/Low）。
+- **仅建议不动手**：`startup.many` / `memory.low` / `disk.space` 只列清单，永不自动执行。
+- **动作合并**：多个网卡同时命中 `network.dns.*` 时合并为一次网络优化，避免重复备份/重复改 DNS。
+
+### 3.3 CompactOS：显式开关、默认关闭（2026-09-18 收口，原 §7.1）
 ### 3.3 CompactOS：显式开关、默认关闭（2026-09-18 收口，原 §7.1）
 
 此前 CLI 的 `scripts/07-DiskOptimize.ps1` **无条件**执行 `Compact.exe /CompactOS:always`，

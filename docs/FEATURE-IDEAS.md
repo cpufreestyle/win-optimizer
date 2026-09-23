@@ -1,4 +1,4 @@
-# 创新功能优化方案（Roadmap 草案）
+﻿# 创新功能优化方案（Roadmap 草案）
 
 > 提出日期：2026-09-23
 > 基线：v3.3.0（`lib` 51 函数、三端共享核心、88 个 Pester 用例、MCP 工具齐备）
@@ -52,11 +52,17 @@ WebUI `webui/ps/03_services.ps1` 完全没有这个功能。这正是 B1 想消�
 | `network.dns.*` | `Invoke-NetworkOptimization`（默认 Cloudflare，可参数指定） | 是 |
 | `memory.low` / `disk.space` | 仅给建议，不自动动作 | 否 |
 
+实际落地与上表的偏差：`services.auto` 走 `Disable-Services -Mode all`（safe + recommended 全量，已备份）；
+`network.dns.*` 多个网卡合并为一次 `Invoke-NetworkOptimization`，避免重复备份与重复改 DNS。
+
 **落点**：`scripts/15-HealthCheck.ps1` 增加 `[R]` 交互；GUI `gui/pages/Health.ps1` 每条 issue 后
 加「修复」按钮；WebUI 加 `/api/health/remediate` + 前端按钮。`New-HealthIssue` 增加可选
 `remediation` 字段（lib 内单点定义，三端零漂移）。
 
 **风险**：中。必须带 `-WhatIf` 与确认；`High` 级一律不自动执行。建议首发只放开 Medium/Low。
+
+已实现：默认 `-MaxSeverity Medium`（即放开 Medium/Low）；`High` 级需 `-MaxSeverity High` + `-Force`；
+`-WhatIf` 零副作用（连备份都不落盘，与 `Disable-TelemetryTasks` 对齐）。
 
 ---
 

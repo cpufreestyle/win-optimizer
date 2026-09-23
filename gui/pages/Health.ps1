@@ -39,7 +39,7 @@
 
     $script:TxtHealthIssues = New-Object System.Windows.Forms.TextBox
     $script:TxtHealthIssues.Location = New-Object System.Drawing.Point(20, 386)
-    $script:TxtHealthIssues.Size = New-Object System.Drawing.Size(760, 180)
+    $script:TxtHealthIssues.Size = New-Object System.Drawing.Size(760, 140)
     $script:TxtHealthIssues.Font = $Fonts.Body
     $script:TxtHealthIssues.ForeColor = $Theme.TextMain
     $script:TxtHealthIssues.BackColor = $Theme.BgCard
@@ -50,8 +50,26 @@
     $script:TxtHealthIssues.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
     $page.Controls.Add($script:TxtHealthIssues)
 
+    # 自动修复预览（只读：只展示「将做什么」，不执行）
+    $lblRemediation = New-Label "自动修复预览" 20 540 300 24 $Fonts.Sub $Theme.Accent
+    $page.Controls.Add($lblRemediation)
+
+    $script:TxtHealthRemediation = New-Object System.Windows.Forms.TextBox
+    $script:TxtHealthRemediation.Location = New-Object System.Drawing.Point(20, 570)
+    $script:TxtHealthRemediation.Size = New-Object System.Drawing.Size(760, 130)
+    $script:TxtHealthRemediation.Font = $Fonts.Small
+    $script:TxtHealthRemediation.ForeColor = $Theme.TextMain
+    $script:TxtHealthRemediation.BackColor = $Theme.BgCard
+    $script:TxtHealthRemediation.Multiline = $true
+    $script:TxtHealthRemediation.ReadOnly = $true
+    $script:TxtHealthRemediation.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
+    $script:TxtHealthRemediation.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+    $script:TxtHealthRemediation.Text = "体检后这里会列出可一键修复的项目、目标与预估影响。"
+    $script:TxtHealthRemediation.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+    $page.Controls.Add($script:TxtHealthRemediation)
+
     # 执行按钮
-    $script:BtnHealthScan = New-Button "开始体检" 20 586 160 40 $Theme.Success 11
+    $script:BtnHealthScan = New-Button "开始体检" 20 716 150 40 $Theme.Success 11
     $script:BtnHealthScan.Add_Click({
         try {
             $this.Enabled = $false
@@ -60,12 +78,15 @@
             $script:LblHealthGrade.Text = "扫描中"
             $script:TxtHealthMetrics.Text = ""
             $script:TxtHealthIssues.Text = ""
+            $script:TxtHealthRemediation.Text = ""
             Invoke-UIRefresh
 
             # 先取上一次报告（在保存本次之前），用于对比
             $prev = Get-PreviousHealthReport -BackupDir $script:BackupDir
             $r = Get-SystemHealthReport
             $null = Save-HealthReport -Report $r -BackupDir $script:BackupDir
+            # 供「一键修复」复用本次报告，避免重复扫描
+            $script:HealthReport = $r
 
             $color = if ($r.score -ge 90) { $Theme.Success }
                      elseif ($r.score -ge 75) { $Theme.Accent }
@@ -104,6 +125,24 @@
                 $script:TxtHealthIssues.Lines = $out
             }
 
+            # --- 自动修复预览（只读，来源与 CLI/WebUI 完全一致）---
+            $plan = @(Get-HealthRemediationPlan -Report $r -SkipCleanScan)
+            $script:HealthPlan = $plan
+            $script:BtnHealthFix.Enabled = (@($plan | Where-Object { $_.auto }).Count -gt 0)
+            $pl = @()
+            foreach ($p in $plan) {
+                $flag = if ($p.auto) { '[可修复]' } else { '[仅建议]' }
+                $pl += ("{0} [{1}] {2}" -f $flag, $p.severity, $p.title)
+                $pl += ("    动作: {0} -> {1}" -f $p.action, $p.target)
+                $pl += ("    影响: {0}" -f $p.impact)
+                $pl += ""
+            }
+            if ($pl.Count -eq 0) { $pl = @("未发现可自动修复的项目。") }
+            else {
+                $pl += "说明: 每步执行前会自动备份；High 级高危项不会自动执行。"
+            }
+            $script:TxtHealthRemediation.Lines = $pl
+
             # --- 与上次对比 ---
             $script:LblHealthCompare.Text = if ($prev) {
                 $c = Compare-HealthReports -Before $prev -After $r
@@ -129,8 +168,64 @@
     })
     $page.Controls.Add($script:BtnHealthScan)
 
+    # 一键修复按钮：确认后执行，每步前自动备份
+    $script:BtnHealthFix = New-Button "一键修复" 180 716 150 40 $Theme.Warning 11
+    $script:BtnHealthFix.Enabled = $false
+    $script:BtnHealthFix.Add_Click({
+        try {
+            if (-not $script:HealthReport) {
+                [System.Windows.Forms.MessageBox]::Show("请先点击「开始体检」。", "提示", `
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+                return
+            }
+            $plan = @($script:HealthPlan | Where-Object { $_.auto })
+            if ($plan.Count -eq 0) {
+                [System.Windows.Forms.MessageBox]::Show("当前没有可自动修复的项目。", "提示", `
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+                return
+            }
+            $preview = ""
+            foreach ($p in $plan) { $preview += ("[{0}] {1}`n    {2} -> {3}`n" -f $p.severity, $p.title, $p.action, $p.target) }
+            $ans = [System.Windows.Forms.MessageBox]::Show(
+                "将执行以下修复（每步前自动备份）:`n`n$preview`n是否继续？",
+                "确认一键修复",
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Warning)
+            if ($ans -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+
+            $this.Enabled = $false
+            $this.Text = "修复中..."
+            Invoke-UIRefresh
+
+            $rr = Invoke-HealthRemediation -Report $script:HealthReport -MaxSeverity 'Medium' `
+                                           -BackupDir $script:BackupDir -SkipCleanScan
+            foreach ($s in @($rr.results)) {
+                if ($s.ok) { Write-Log "修复 [$($s.domain)] $($s.id)：$($s.summary)" "SUCCESS" }
+                else { Write-Log "修复 [$($s.domain)] $($s.id) 失败：$($s.error)" "ERROR" }
+                if ($s.backup) { Write-Log "  备份: $($s.backup)" "INFO" }
+            }
+            foreach ($s in @($rr.skipped)) { Write-Log "跳过 $($s.id)：$($s.reason)" "INFO" }
+
+            $doneTxt = if ($rr.ok) { "修复完成，建议重新体检查看前后对比。" }
+                       else { "部分项目修复失败，详情见日志。" }
+            [System.Windows.Forms.MessageBox]::Show($doneTxt, "一键修复", `
+                [System.Windows.Forms.MessageBoxButtons]::OK, `
+                [System.Windows.Forms.MessageBoxIcon]::Information)
+
+            $this.Enabled = $true
+            $this.Text = "一键修复"
+            # 修复后自动重新体检，让分数与预览立即刷新
+            $script:BtnHealthScan.PerformClick()
+        } catch {
+            Write-Log "自动修复出错: $($_.Exception.Message)" "ERROR"
+            $this.Enabled = $true
+            $this.Text = "一键修复"
+        }
+    })
+    $page.Controls.Add($script:BtnHealthFix)
+
     # 对比结果提示
-    $script:LblHealthCompare = New-Label "点击「开始体检」后，这里会显示与上一次体检的对比。" 200 596 580 24 $Fonts.Small $Theme.TextDim
+    $script:LblHealthCompare = New-Label "点击「开始体检」后，这里会显示与上一次体检的对比。" 340 726 440 24 $Fonts.Small $Theme.TextDim
     $script:LblHealthCompare.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
     $page.Controls.Add($script:LblHealthCompare)
 }

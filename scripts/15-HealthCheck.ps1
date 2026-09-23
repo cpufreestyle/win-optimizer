@@ -9,7 +9,9 @@
     报告以 JSON 存于 backups\health\，并与上一次体检对比，
     展示分数变化、已解决问题、新增问题与关键指标差值。
 
-    重要：本脚本全程只读，不修改任何系统设置。
+    重要：扫描过程全程只读。报告之后会给出『自动修复预览』清单，
+    仅在输入 Y 确认后调用 lib 的 Invoke-HealthRemediation 执行修复，
+    每步执行前自动备份；High 级高危项不在自动修复范围内。
 #>
 
 # 复用共享核心库（体检引擎的统一实现）
@@ -117,3 +119,57 @@ if (-not $prev) {
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
+# --- 自动修复（只读先行：先出「将做什么」清单，确认后才执行）---
+$remediationPlan = @(Get-HealthRemediationPlan -Report $report -SkipCleanScan)
+$actionable = @($remediationPlan | Where-Object { $_.auto })
+
+if ($actionable.Count -gt 0) {
+    Write-Host ""
+    Write-Host "============================================" -ForegroundColor Cyan
+    Write-Host "  自动修复预览" -ForegroundColor Cyan
+    Write-Host "============================================" -ForegroundColor Cyan
+    Write-Host "  以下问题可以一键修复（每步执行前会自动备份）:" -ForegroundColor DarkGray
+    $n = 0
+    foreach ($p in $actionable) {
+        $n++
+        $c = switch ($p.severity) { 'High' { 'Red' } 'Medium' { 'Yellow' } default { 'Gray' } }
+        Write-Host ("    {0}. [{1}] {2}" -f $n, $p.severity, $p.title) -ForegroundColor $c
+        Write-Host ("       动作  : {0} -> {1}" -f $p.action, $p.target) -ForegroundColor DarkGray
+        Write-Host ("       影响  : {0}" -f $p.impact) -ForegroundColor DarkGray
+    }
+    $adviceOnly = @($remediationPlan | Where-Object { -not $_.auto })
+    if ($adviceOnly.Count -gt 0) {
+        Write-Host ""
+        Write-Host "  以下问题只给建议，不会自动执行:" -ForegroundColor Gray
+        foreach ($p in $adviceOnly) {
+            Write-Host ("    - [{0}] {1}（{2}）" -f $p.severity, $p.title, $p.target) -ForegroundColor Gray
+        }
+    }
+
+    $answer = Read-Host "`n  是否一键修复以上项目？输入 Y 确认，其它键跳过"
+    if ($answer -eq 'Y' -or $answer -eq 'y') {
+        Write-Host "`n  开始自动修复（High 级高危项不在本流程内）..." -ForegroundColor Yellow
+        $rr = Invoke-HealthRemediation -Report $report -MaxSeverity 'Medium' -BackupDir $backupDir `
+                                       -SkipCleanScan -SkipExplorerRestart
+        Write-Host ""
+        foreach ($s in @($rr.results)) {
+            $mark = if ($s.ok) { '[成功]' } else { '[失败]' }
+            $color = if ($s.ok) { 'Green' } else { 'Red' }
+            Write-Host ("    {0} {1} ({2}) {3}" -f $mark, $s.id, $s.domain, $s.summary) -ForegroundColor $color
+            if ($s.backup) { Write-Host ("           备份: {0}" -f $s.backup) -ForegroundColor DarkGray }
+            if ($s.error)  { Write-Host ("           错误: {0}" -f $s.error) -ForegroundColor DarkGray }
+        }
+        foreach ($s in @($rr.skipped)) {
+            Write-Host ("    [跳过] {0} —— {1}" -f $s.id, $s.reason) -ForegroundColor Gray
+        }
+        Write-Host ""
+        if ($rr.ok) {
+            Write-Host "  修复完成。若切换了视觉效果，重启资源管理器后生效。" -ForegroundColor Green
+            Write-Host "  建议重新运行一次体检查看前后对比。" -ForegroundColor Green
+        } else {
+            Write-Host "  部分项目修复失败，详见上方错误信息。" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  已跳过自动修复。" -ForegroundColor Gray
+    }
+}

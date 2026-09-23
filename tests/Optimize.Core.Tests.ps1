@@ -347,12 +347,12 @@ Describe 'Optimize.Core visual effects (shared by CLI/GUI/WebUI)' {
         }
     }
 
-    It 'Set-VisualEffectProfile -WhatIf reports backup without modifying system' {
+    It 'Set-VisualEffectProfile -WhatIf is side-effect free (no backup written)' {
         $tmp = Join-Path $env:TEMP ('vis2_' + (New-Guid).ToString('N'))
         try {
             $r = Set-VisualEffectProfile -Profile 1 -BackupDir $tmp -SkipExplorerRestart -WhatIf
             $r.profile | Should -Be 1
-            $r.backup | Should -Not -BeNullOrEmpty
+            $r.backup | Should -BeNullOrEmpty
             $r.details.Count | Should -BeGreaterOrEqual 1
         } finally {
             Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
@@ -398,7 +398,7 @@ Describe 'Optimize.Core power plans (shared by CLI/GUI/WebUI)' {
         }
     }
 
-    It 'Set-PowerPlan -WhatIf reports plan, backup and details without modifying system' {
+    It 'Set-PowerPlan -WhatIf is side-effect free (no backup written)' {
         $tmp = Join-Path $env:TEMP ('pwr2_' + (New-Guid).ToString('N'))
         try {
             $r = Set-PowerPlan -Guid '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c' -MinPercent 100 -MaxPercent 100 `
@@ -406,7 +406,7 @@ Describe 'Optimize.Core power plans (shared by CLI/GUI/WebUI)' {
             $r.ok | Should -BeTrue
             $r.appliedGuid | Should -Be '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
             $r.details.Count | Should -BeGreaterOrEqual 3
-            $r.backup | Should -Not -BeNullOrEmpty
+            $r.backup | Should -BeNullOrEmpty
         } finally {
             Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -907,5 +907,154 @@ Describe 'Optimize.Core telemetry tasks (shared by CLI/GUI/WebUI)' {
         } finally {
             Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
+    }
+}
+
+Describe 'Optimize.Core health auto-remediation (shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+        # 构造轻量报告，保证确定性与速度（不跑真实扫描）
+        $script:RemRep = [PSCustomObject]@{
+            timestamp = 't'; score = 50; grade = '一般'
+            issues = @(
+                (New-HealthIssue 'services.auto'       'Medium' 'svc'  'd' 's' 'services.disable'),
+                (New-HealthIssue 'startup.many'        'Medium' 'st'   'd' 's' 'startup.list'),
+                (New-HealthIssue 'visual.effects'      'High'   'vis'  'd' 's' 'visual.profile'),
+                (New-HealthIssue 'power.balanced'      'High'   'pwr'  'd' 's' 'power.plan'),
+                (New-HealthIssue 'disk.cleanable'      'Medium' 'cln'  'd' 's' 'disk.clean'),
+                (New-HealthIssue 'network.dns.adapterA' 'Low'   'dnsA' 'd' 's' 'network.dns'),
+                (New-HealthIssue 'network.dns.adapterB' 'Low'   'dnsB' 'd' 's' 'network.dns'),
+                (New-HealthIssue 'memory.low'          'High'   'mem'  'd' 's' ''),
+                (New-HealthIssue 'disk.space'          'High'   'spc'  'd' 's' '')
+            )
+            metrics = [PSCustomObject]@{}
+        }
+    }
+
+    It 'New-HealthIssue exposes an optional remediation field (defaults to empty)' {
+        (New-HealthIssue 'a' 'Low' 't' 'd' 's').remediation | Should -Be ''
+        (New-HealthIssue 'a' 'Low' 't' 'd' 's' 'visual.profile').remediation | Should -Be 'visual.profile'
+    }
+
+    It 'Get-HealthSeverityRank orders High > Medium > Low' {
+        (Get-HealthSeverityRank 'High')   | Should -BeGreaterThan (Get-HealthSeverityRank 'Medium')
+        (Get-HealthSeverityRank 'Medium') | Should -BeGreaterThan (Get-HealthSeverityRank 'Low')
+        Get-HealthSeverityRank 'unknown' | Should -Be 0
+    }
+
+    It 'Get-HealthRemediationCatalog keeps domain/action pairs unique' {
+        $cat = @(Get-HealthRemediationCatalog)
+        $cat.Count | Should -BeGreaterThan 0
+        $keys = @($cat | ForEach-Object { $_.IdPattern })
+        $keys.Count | Should -Be ($keys | Select-Object -Unique).Count
+        $cat | Where-Object { $_.Auto } | ForEach-Object { $_.Action | Should -Not -BeNullOrEmpty }
+    }
+
+    It 'Resolve-HealthRemediation matches dynamic network issue ids by pattern' {
+        $m = Resolve-HealthRemediation -Issue @($script:RemRep.issues | Where-Object { $_.id -eq 'network.dns.adapterA' })[0]
+        $m.Code | Should -Be 'network.dns'
+        $m.Domain | Should -Be 'network'
+    }
+
+    It 'Resolve-HealthRemediation falls back to id match when remediation is absent' {
+        $legacy = [PSCustomObject]@{ id = 'services.auto'; severity = 'Medium'; title='t'; detail='d'; suggestion='s' }
+        (Resolve-HealthRemediation -Issue $legacy).Code | Should -Be 'services.disable'
+    }
+
+    It 'Resolve-HealthRemediation returns null for unmapped issues' {
+        Resolve-HealthRemediation -Issue (New-HealthIssue 'foo.bar' 'Low' 't' 'd' 's') | Should -BeNullOrEmpty
+    }
+
+    It 'Get-HealthRemediationPlan maps every issue to a domain and stays read-only' {
+        $plan = @(Get-HealthRemediationPlan -Report $script:RemRep -SkipCleanScan)
+        $plan.Count | Should -Be 9
+        $plan | ForEach-Object {
+            $_.domain | Should -Not -BeNullOrEmpty
+            $_.PSObject.Properties.Name | Should -Contain 'auto'
+            $_.PSObject.Properties.Name | Should -Contain 'target'
+            $_.PSObject.Properties.Name | Should -Contain 'impact'
+        }
+        @($plan | Where-Object { $_.auto }).Count      | Should -Be 6
+        @($plan | Where-Object { -not $_.auto }).Count | Should -Be 3
+    }
+
+    It 'Get-HealthRemediationPlan keeps advice-only issues non-actionable' {
+        $plan = @(Get-HealthRemediationPlan -Report $script:RemRep -SkipCleanScan)
+        foreach ($id in @('startup.many', 'memory.low', 'disk.space')) {
+            @($plan | Where-Object { $_.id -eq $id })[0].auto | Should -BeFalse
+        }
+    }
+
+    It 'Get-HealthRemediationPlan accepts a real (non-synthetic) report shape' {
+        $real = Get-SystemHealthReport -SkipCleanScan
+        $plan = @(Get-HealthRemediationPlan -Report $real -SkipCleanScan)
+        foreach ($p in $plan) {
+            $p.PSObject.Properties.Name | Should -Contain 'actionKey'
+            if ($p.auto) {
+                $p.actionKey | Should -Not -BeNullOrEmpty
+                $p.action    | Should -Not -BeNullOrEmpty
+            }
+        }
+    }
+
+    It 'Invoke-HealthRemediation -WhatIf never writes a backup and reports whatIf' {
+        $tmp = Join-Path $env:TEMP ('rem_' + (New-Guid).ToString('N'))
+        try {
+            $r = Invoke-HealthRemediation -Report $script:RemRep -BackupDir $tmp -WhatIf -SkipCleanScan
+            $r.whatIf | Should -BeTrue
+            @($r.results).Count | Should -Be 3
+            (Test-Path $tmp -PathType Container) | Should -BeFalse
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Invoke-HealthRemediation blocks High severity unless -Force is given' {
+        $tmp = Join-Path $env:TEMP ('rem2_' + (New-Guid).ToString('N'))
+        try {
+            $r = Invoke-HealthRemediation -Report $script:RemRep -BackupDir $tmp -WhatIf -SkipCleanScan
+            @($r.executed) | Should -Not -Contain 'visual.effects'
+            @($r.executed) | Should -Not -Contain 'power.balanced'
+            @($r.skipped | Where-Object { $_.id -eq 'visual.effects' }).Count | Should -Be 1
+
+            $r2 = Invoke-HealthRemediation -Report $script:RemRep -BackupDir $tmp -WhatIf -SkipCleanScan -MaxSeverity 'High'
+            @($r2.executed) | Should -Not -Contain 'power.balanced'
+
+            $r3 = Invoke-HealthRemediation -Report $script:RemRep -BackupDir $tmp -WhatIf -SkipCleanScan -MaxSeverity 'High' -Force
+            @($r3.executed) | Should -Contain 'visual.effects'
+            @($r3.executed) | Should -Contain 'power.balanced'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Invoke-HealthRemediation merges repeated network issues into one execution' {
+        $tmp = Join-Path $env:TEMP ('rem3_' + (New-Guid).ToString('N'))
+        try {
+            $r = Invoke-HealthRemediation -Report $script:RemRep -BackupDir $tmp -WhatIf -SkipCleanScan
+            @($r.executed | Where-Object { $_ -like 'network.dns.*' }).Count | Should -Be 1
+            @($r.skipped  | Where-Object { $_.id -eq 'network.dns.adapterB' }).Count | Should -Be 1
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Invoke-HealthRemediation honours -IssueCode filtering' {
+        $tmp = Join-Path $env:TEMP ('rem4_' + (New-Guid).ToString('N'))
+        try {
+            $r = Invoke-HealthRemediation -Report $script:RemRep -BackupDir $tmp -WhatIf -SkipCleanScan `
+                                           -IssueCode @('services.auto')
+            @($r.executed) | Should -Be @('services.auto')
+            @($r.skipped).Count | Should -Be 0
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Invoke-HealthRemediation returns a structured failure when nothing is actionable' {
+        $empty = [PSCustomObject]@{ timestamp='t'; score=100; issues=@(); metrics=[PSCustomObject]@{} }
+        $r = Invoke-HealthRemediation -Report $empty -BackupDir (Join-Path $env:TEMP ('rem5_' + (New-Guid).ToString('N'))) -SkipCleanScan
+        $r.ok | Should -BeFalse
+        $r.error | Should -Not -BeNullOrEmpty
     }
 }
