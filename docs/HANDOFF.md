@@ -34,8 +34,6 @@
 - PR #5 / #6 保留 OPEN：#7 合并后，GitHub 会自动关闭它们（其提交已全部可达）。
   若你更倾向逐个合并，也可以直接按 `#5 → #6` 顺序在 GitHub 点合并，然后丢弃本分支。
 
----
-
 ## 3. 近期完成的大块工作
 
 ### 3.1 B1：五个域的逻辑下沉到 lib
@@ -81,7 +79,48 @@
 - **仅建议不动手**：`startup.many` / `memory.low` / `disk.space` 只列清单，永不自动执行。
 - **动作合并**：多个网卡同时命中 `network.dns.*` 时合并为一次网络优化，避免重复备份/重复改 DNS。
 
-### 3.3 CompactOS：显式开关、默认关闭（2026-09-18 收口，原 §7.1）
+### 3.4 优化时间线 + 一键回滚向导（P0-4，2026-09-24）
+
+此前每域各自备份到 `backups/`，恢复要逐域翻菜单，用户也无从知道「上周到底改了什么」。现已把备份元数据、
+时间线与回滚全部下沉 lib，三端共用同一实现：
+
+| 层 | 内容 |
+|----|------|
+| lib | `Write-BackupManifest`（每次 `Backup-*` 落一份 `<备份文件>.manifest.json`：version/domain/file/date/time/items/bytes/host/user/note，失败返回 `$null` 不影响备份本身）、`Get-BackupDomainFromName`（新命名 `services_backup_*` 与旧命名 `services_*`/`winupdate_block_*`/`manual_update_*` 都认）、`Get-BackupDomainLabel`、`New-BackupTimelineEntry`、`Get-OptimizationTimeline [-Max 200]`、`Get-RollbackPlan [-Since|-Last n] [-Domain] [-File]`、`Backup-DomainState`（回滚前的「后悔药」）、`Restore-DomainState`（按域分发，`health`/`unknown` 返回 `$null`）、`Format-RestoreDetails`、`Invoke-Rollback [-DryRun] [-SkipBackup] [-Force]` |
+| 新增域还原 | `Restore-StartupItems` / `Restore-VisualEffects` / `Restore-PowerPlan` / `Restore-NetworkSettings` / `Restore-UpdateBackup`；`Restore-Services` 补充 `-File`（省略仍取最新，行为不变） |
+| CLI | `scripts/09-BackupRestore.ps1` 重写：时间线（编号/时间/域/条目数/元数据缺失标记）→ 编号=单条恢复（先 `Backup-DomainState`）、`[A]`=每域最近备份、`[Z]`=一键回滚向导（1=时间点 / 2=回退 N 条，先只读预览再 `Y` 确认）、`[R]`=启动文件夹项、`[N]`=取消 |
+| GUI | `gui/pages/Backup.ps1` 重写：时间线 `DataGridView` + 「一键回滚向导」（InputBox 选模式 → 计划预览 → 确认执行）+「恢复选中备份」；创建备份改为 6 个域全走 `Backup-DomainState` |
+| WebUI | `webui/ps/09_backup.ps1` 增加 `-Action timeline|create|restore|rollback`（`-Since`/`-Last`/`-Domain`/`-File`/`-DryRun`/`-SkipBackup`）；`webui/app.py` 增加 `/api/backup/timeline`、`/api/backup/rollback` 与 MCP 工具 `backup_timeline` / `backup_rollback`；`webui/templates/index.html` 的 `renderBackup()` 渲染时间线表格 + 回滚预览卡片 + 确认执行 |
+
+安全约束（lib 强制，三端无法绕过）：回滚顺序固定为 `services → startup → visual → power → network → telemetry → update`；
+每个域还原前先 `Backup-DomainState` 备份当前状态（可再次反悔），该备份失败默认中止、`-Force` 才继续；
+`-DryRun` 与 `Get-RollbackPlan` / `Get-OptimizationTimeline` 全程只读零副作用；不可回滚域进 `skipped` 并说明原因。
+
+已知实现细节（改代码前先看）：`Backup-PowerPlan` 已从 `.txt` 改为结构化 `.json`（`activeGuid`/`activeName`/`query`），
+旧 `.txt` 无法可靠解析，只给手动提示；`Restore-StartupItems` 只处理「启动文件夹」与「注册表」两类来源，
+WMI「系统启动命令」行与它们重复，仅登记不动作。
+
+### 3.5 优化组合包 Profiles（P0-3，2026-09-24）
+
+完整优化原本要点 5~6 个菜单，不同场景（办公 / 游戏 / 省电）取舍也不同。现在把「按场景一键到位」下沉为 lib 编排层，三端共用同一份计划与同一套风险闸门：
+
+| 层 | 内容 |
+|----|------|
+| lib | `Get-ProfileDefaults`（字段默认值）、`Get-BuiltinProfiles`（4 个内置兜底包）、`Get-Profiles`（config `profiles` 为唯一真源，缺失回退内置）、`Get-Profile`（按 name/title 查）、`Get-ProfilePowerGuid`（high/ultimate/balanced/power_saver + 裸 GUID，未知返回 `$null`）、`Get-ProfileSteps`（展开为步骤）、`Get-ProfilePlan [-Name]`（只读预览）、`Invoke-Profile [-Name] [-BackupDir] [-WhatIf] [-Force]` |
+| config | `config/optimization.json` 新增 `profiles`（`old_balanced` / `gaming` / `quiet_saver` / `minimal`），`config/optimization.schema.json` 同步补 `profiles` 定义（含各字段 enum 与裸 GUID pattern） |
+| CLI | `scripts/16-Profiles.ps1`，`Optimize.ps1` 菜单 `[16] 优化组合包`：列表（编号/标题/步骤数/高风险标记）→ `Show-ProfilePlan` 只读预览 → `[1]` 预演 / `[2]` 确认执行 / `[N]` 取消；含高风险需二次 `Y` 确认 |
+| GUI | `gui/pages/Dashboard.ps1` 新增「优化组合包 Profiles」卡片 + `Show-ProfileReport`；InputBox 选编号 → 预览 → 确认执行 |
+| WebUI | `webui/ps/16_profiles.ps1`（`-Action list|plan|apply` + `-Name`/`-DryRun`/`-Force`）；`webui/app.py` 增加 `/api/profile/list`、`/api/profile/plan`、`/api/profile/apply` 与 MCP 工具 `profile_list`/`profile_plan`/`profile_apply`；前端 `renderProfiles()` 渲染组合包卡片 + 步骤预览表 + 预演/执行 |
+
+**`Invoke-Profile` 是纯编排**：只调用已存在的域函数（`Disable-Services`/`Disable-StartupItems`/`Set-VisualEffectProfile`/`Set-PowerPlan`/`Invoke-NetworkOptimization`/`Disable-TelemetryTasks`/`Invoke-DiskOptimization`），**没有新增任何系统操作面**，因此每个域天然继承既有备份与 Win7 兼容层。
+
+**风险闸门（lib 强制）**：`Get-ProfileSteps` 为每步派生 `risk`（low/medium/high）与 `auto`。
+默认只执行 `auto -eq $true` 且 `risk -ne 'high'` 的步骤；其余进 `skipped`（带 `id`/`domain`/`risk`/`reason`/`action`），必须显式 `-Force` 才放行。
+当前 config 下 `auto=$false` 与 `risk=high` 完全等价，只出现在两处：
+`startup=all` 的「禁用全部启动项」与 `disk` 磁盘优化（含 CompactOS）。执行顺序固定
+`services → startup → visual → power → network → telemetry → disk`，单步失败续跑不中断，结果汇总 `results`/`skipped`/`ok`/`dryRun`/`forced`。
+
+已知取舍：`startup` 只有 `list`（只读列出）与 `all`（全禁）两档，没有逐项交互；`disk`/`compact_os` 未在任何内置包里启用（磁盘优化仍走 07 页按需触发）；未知的 `dns`/`visual`/`power` 值只跳过对应步骤，不整包报错。
 ### 3.3 CompactOS：显式开关、默认关闭（2026-09-18 收口，原 §7.1）
 
 此前 CLI 的 `scripts/07-DiskOptimize.ps1` **无条件**执行 `Compact.exe /CompactOS:always`，
@@ -115,13 +154,14 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 | 电源计划 | 06-PowerPlan.ps1 | Power.ps1 | 06_power.ps1 | `Get-ActivePowerPlan` 等 |
 | 磁盘优化 | 07-DiskOptimize.ps1 | Disk.ps1 | 07_disk.ps1 | `Invoke-DiskOptimization` 等 |
 | 网络优化 | 08-NetworkOptimize.ps1 | Network.ps1 | 08_network.ps1 | `Invoke-NetworkOptimization` 等 |
-| 备份恢复 | 09-BackupRestore.ps1 | Backup.ps1 | 09_backup.ps1 | `Get-OptBackupDir` |
+| 备份恢复 | 09-BackupRestore.ps1 | Backup.ps1 | 09_backup.ps1 | `Backup-*` / `Restore-*` / `Get-OptimizationTimeline` / `Invoke-Rollback` |
 | 屏蔽 Win11 24H2 | 10-BlockWin1124H2.ps1 | Update.ps1 | 10_block_update.ps1 | — |
 | 手动更新模式 | 11-ManualUpdateMode.ps1 | Update.ps1 | 11_manual_mode.ps1 | — |
 | 隐藏更新 | 12-HideUpdates.ps1 | Update.ps1 | 12_hide_updates.ps1 | — |
 | Windows 功能 | 13-WindowsFeatures.ps1 | Update.ps1 | 13_features.ps1 | — |
 | 恢复自动更新 | 14-RestoreAutoUpdate.ps1 | Update.ps1 | 14_restore_autoupdate.ps1 | — |
 | 一键体检 | 15-HealthCheck.ps1 | Health.ps1 | 15_health.ps1 | `Get-SystemHealthReport` 等 |
+| 优化组合包 | 16-Profiles.ps1 | Dashboard.ps1（卡片） | 16_profiles.ps1 | `Get-Profiles` / `Get-ProfilePlan` / `Invoke-Profile` |
 
 更新相关域（10–14）在 GUI 中统一归入 `Update.ps1` 一个页面。
 
@@ -145,6 +185,28 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 10. **CompactOS 默认必须关闭**：默认值唯一来源是 `config/optimization.json` 的 `disk.compact_os_default`（`false`）。**不要把任何一端改回无条件 `Compact.exe /CompactOS:always`** —— 压缩耗时长且回滚要再跑一次 `Compact.exe /CompactOS:never`。有 AST 用例守着 CLI，改动会让测试失败。
 11. **版本号只改 config**：`config/optimization.json` 的 `version` 是唯一真源，其余（GUI 占位、`Start.bat` 初值、Build-EXE 回退）只是兜底，运行时/构建时会被覆盖（见 `docs/DEVELOPMENT.md`）。
 
+12. **`Import-Csv` 的编码必须与写入端一致**：`Backup-StartupItems` 用 `Export-Csv -Encoding UTF8`（PS 5.1 会带 BOM），
+    而测试/调试若用 `Set-Content` 手写 CSV（默认 ANSI），`Import-Csv -Encoding UTF8` 会把中文「注册表」读成乱码，
+    导致 `-eq '注册表'` 判定失败。因此 `Restore-StartupItems` 的注册表来源判定**不要依赖中文 `Source` 列**，
+    改用 `Path -like '?*:\*'` 做形态判断（中文列只作启动文件夹的补充判断）。
+13. **别把 WMI `Win32_StartupCommand` 的 `Location` 当路径用**：它的值是 `Startup` / `Common Startup` 这类位置串，
+    不是文件系统路径。早期版本按它 `New-Item` 在仓库根建出了 `Startup/`、`Common Startup/` 垃圾目录。
+    现在这类行在 `Restore-StartupItems` 里一律只登记「跳过: 与注册表/启动文件夹条目重复」。
+14. **时间线要防「同秒多份备份」**：manifest 的时间只到秒，同一秒连续备份会撞序，
+    因此 `Get-OptimizationTimeline` 用「时间 + 文件名」做次级排序键，保证顺序确定。
+15. **Python 改文件别踩通用换行陷阱**：`io.open(path,'r',encoding='utf-8-sig')` 默认 universal newlines 会把 `\r\n` 归一成 `\n`，
+    写回时若 `newline=""` 又不再加回 `\r\n`，整份 CRLF 文件会变 LF。务必读完 `split`、写前 `replace("\n","\r\n")`。
+    另外 `git show x | Set-Content y -NoNewline` 会把全文件拼成一行——取单行内容用 `Where-Object` 过滤后再写。
+16. **`Invoke-Profile` 必须带 `[CmdletBinding()]`**：无 `CmdletBinding` 的简单函数会把**未匹配的命名参数静默吞进 `$args`**——
+    既不报错也不生效。本次就因 `webui/ps/16_profiles.ps1` 把 `-DryRun:$DryRun` 传给参数名为 `-WhatIf` 的
+    `Invoke-Profile`，导致预演静默变成真跑。排查方法：写个最小复现（`function F { param([string]$Name,[switch]$WhatIf) ... }`
+    后 `F -Name x -DryRun:$true`），确认开关全为 `$false` 且 `$args` 里出现 `-DryRun:` 即坐实。
+17. **`[CmdletBinding()]` 要放在函数体内 `param(` 之前**，写在 `function` 外面是语法错误
+    （`Unexpected attribute 'CmdletBinding'`）。PS 5.1 解析器只认函数内属性这一种形式。
+18. **每次 exec/命令行的 PowerShell 是全新会话**：上一条命令里的 `$py`、`$code` 等变量下一条命令里取不到
+    （取到的是 `$null`）。写临时脚本再执行时，「定义变量 + 使用变量」必须在同一条命令里完成，
+    否则会写出 0 字节文件，然后静默跑出一个空脚本。
+
 ---
 
 ## 6. 如何验证改动
@@ -154,8 +216,9 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
   cd <项目根>
   Invoke-Pester -Path ./tests/Optimize.Core.Tests.ps1
   ```
-  当前 **88 个用例**（含各域「编号稳定 / 必须备份 / 行为契约」断言；其中 6 条是 CompactOS 契约用例、1 条用 Mock 覆盖「无活动网卡」分支）。新增 lib 函数时务必补对应用例。
+  当前 **151 个用例**（含各域「编号稳定 / 必须备份 / 行为契约」断言；其中 6 条是 CompactOS 契约用例、1 条用 Mock 覆盖「无活动网卡」分支）。新增 lib 函数时务必补对应用例。
 - **只读 smoke**：直接 `& scripts/15-HealthCheck.ps1` 或 `& webui/ps/15_health.ps1` 看 JSON 输出；磁盘/网络等可用 `-WhatIf` 预演不改系统。
+- **Profiles 四态回归**：`& webui/ps/16_profiles.ps1 -Action list|plan`、`-Action apply -Name minimal -DryRun`（断言 `dryRun:true`）、`-Action apply -Name gaming -DryRun`（断言 `startup` 进 `skipped`）、`-Action apply -Name gaming -DryRun -Force`（断言全步骤跑完、`skipped` 为空）、坏名字返回 `ok:$false`。
 - **提交前自检**：确认改动 `*.ps1` 均带 BOM、语法 0 错误（见第 5.1 的解析校验）。
 
 ---

@@ -1,4 +1,28 @@
-﻿function Build-Dashboard {
+﻿﻿# 渲染优化组合包执行结果
+function Show-ProfileReport {
+    param($Result)
+    if (-not $Result) { Write-Log "组合包未返回结果。" "ERROR"; return }
+    if (-not $Result.ok -and @($Result.results).Count -eq 0) {
+        Write-Log "组合包执行失败: $($Result.error)" "ERROR"
+        return
+    }
+    Write-Log ("组合包：{0}{1}{2}" -f $Result.title,
+        $(if ($Result.forced) { "（含高风险步骤）" } else { "" }),
+        $(if ($Result.dryRun) { "（预演）" } else { "" }))
+    foreach ($s in @($Result.results)) {
+        $mark = if ($s.ok) { '[成功]' } else { '[失败]' }
+        Write-Log ("  {0} {1}：{2}" -f $mark, $s.domain, $s.summary) $(if ($s.ok) { "SUCCESS" } else { "ERROR" })
+        if ($s.error)  { Write-Log "        错误: $($s.error)" "ERROR" }
+        if ($s.backup) { Write-Log "        备份: $(Split-Path -Leaf $s.backup)" }
+    }
+    foreach ($s in @($Result.skipped)) {
+        Write-Log "  [跳过] $($s.domain)：$($s.reason)" "WARN"
+    }
+    if ($Result.dryRun) { Write-Log "预演完成，未修改任何设置。" }
+    elseif ($Result.ok) { Write-Log "组合包执行完成，建议重启电脑使更改生效。" "SUCCESS" }
+    else { Write-Log "组合包部分步骤失败，详见上方日志。" "WARN" }
+}
+function Build-Dashboard {
     $page = $script:Pages["Dashboard"]
     $page.Controls.Clear()
 
@@ -188,4 +212,92 @@
         }
     })
     $page.Controls.Add($btnFull)
+﻿    # --- 优化组合包卡片 ---
+    $yProf = [int]($yDisk + 4 + $cardSysHeight + 62)
+    $cardProf = New-Object System.Windows.Forms.Panel
+    $cardProf.Location = New-Object System.Drawing.Point(20, $yProf)
+    $cardProf.Size = New-Object System.Drawing.Size(760, 104)
+    $cardProf.BackColor = $Theme.BgCard
+    $page.Controls.Add($cardProf)
+
+    $cardProf.Controls.Add((New-Label "优化组合包 Profiles" 16 10 720 26 $Fonts.Header $Theme.Accent))
+    $cardProf.Controls.Add((New-Label "一键套用预设方案（服务 / 启动项 / 视觉效果 / 电源 / 网络 / 遥测），每个域执行前自动备份" 16 36 720 22 $Fonts.Small $Theme.TextDim))
+
+    $btnProfile = New-Button "选择组合包" 16 62 150 30 $Theme.AccentDark 10
+    $btnProfile.Add_Click({
+        try { Add-Type -AssemblyName Microsoft.VisualBasic -ErrorAction SilentlyContinue } catch { }
+        if (-not ('Microsoft.VisualBasic.Interaction' -as [type])) {
+            [System.Windows.Forms.MessageBox]::Show("当前环境不支持输入框，请改用主菜单「16. 优化组合包」。", "提示",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+            return
+        }
+        $profs = @(Get-Profiles)
+        if ($profs.Count -eq 0) {
+            Write-Log "config/optimization.json 中没有可用的优化组合包。" "WARN"
+            return
+        }
+        $menu = @()
+        for ($i = 0; $i -lt $profs.Count; $i++) {
+            $n = @(Get-ProfileSteps -Profile $profs[$i]).Count
+            $menu += ("[{0}] {1}（{2} 步）" -f ($i + 1), $profs[$i].title, $n)
+        }
+        $menu += ""
+        $menu += "请输入组合包编号后确定"
+        $pick = [Microsoft.VisualBasic.Interaction]::InputBox(($menu -join "`n"), "优化组合包", "1")
+        if ([string]::IsNullOrWhiteSpace($pick)) { return }
+        $idx = 0
+        if (-not [int]::TryParse($pick.Trim(), [ref]$idx) -or $idx -lt 1 -or $idx -gt $profs.Count) {
+            Write-Log "组合包编号无效，已取消。" "WARN"
+            return
+        }
+        $pname = $profs[$idx - 1].name
+        $plan = Get-ProfilePlan -Name $pname
+        if (-not $plan.ok) {
+            Write-Log "无法生成组合包计划: $($plan.error)" "ERROR"
+            return
+        }
+        $txt = @()
+        $txt += ("组合包：{0}（{1}）" -f $plan.title, $pname)
+        $txt += ""
+        foreach ($s in @($plan.steps)) {
+            $txt += ("  [{0}] {1} -> {2}" -f $s.risk, $s.action, $s.target)
+        }
+        $guard = @($plan.steps | Where-Object { -not $_.auto -or $_.risk -eq 'high' })
+        $txt += ""
+        if ($guard.Count -gt 0) {
+            $txt += "以下步骤默认跳过："
+            foreach ($s in $guard) { $txt += ("  - {0}" -f $s.action) }
+        } else {
+            $txt += "该组合包没有高风险步骤。"
+        }
+        $forceStr = [Microsoft.VisualBasic.Interaction]::InputBox(
+            (($txt -join "`n") + "`n`n是否一并执行上面这些默认跳过的步骤？`nY = 执行，其它 = 跳过"), "执行预览", "N")
+        $isForce = ($forceStr -eq 'Y' -or $forceStr -eq 'y')
+        $ans = [System.Windows.Forms.MessageBox]::Show(
+            ("将执行组合包「{0}」{1}`n`n每个域执行前会自动备份，可到「备份恢复」页撤销。`n`n确认继续？" -f
+                $plan.title, $(if ($isForce) { "（含高风险步骤）" } else { "" })),
+            "确认执行", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+        if ($ans -ne [System.Windows.Forms.DialogResult]::Yes) {
+            Write-Log "已取消执行组合包。" "WARN"
+            return
+        }
+        $this.Enabled = $false
+        $this.Text = "执行中..."
+        Invoke-UIRefresh
+        try {
+            $bkDir = Join-Path $script:ProjectRoot "backups"
+            if (-not (Test-Path $bkDir)) { New-Item -ItemType Directory -Path $bkDir -Force | Out-Null }
+            $r = Invoke-Profile -Name $pname -BackupDir $bkDir -Force:$isForce
+            Show-ProfileReport -Result $r
+            Build-Dashboard
+        } catch {
+            Write-Log "组合包执行失败: $($_.Exception.Message)" "ERROR"
+            [System.Windows.Forms.MessageBox]::Show("组合包执行失败：$($_.Exception.Message)", "错误",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        } finally {
+            $this.Enabled = $true
+            $this.Text = "选择组合包"
+        }
+    })
+    $cardProf.Controls.Add($btnProfile)
 }

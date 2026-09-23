@@ -170,16 +170,67 @@ def _register_mcp_tools(server):
         return run_ps("09_backup.ps1", "-Action", "list")
 
     @server.tool()
+    def backup_timeline() -> dict:
+        """优化时间线（只读）：按时间倒序聚合全部备份元数据（域/条目数/时间）。"""
+        return run_ps("09_backup.ps1", "-Action", "timeline")
+
+    @server.tool()
     def backup_create() -> dict:
-        """创建新的系统设置备份。"""
+        """创建新的系统设置备份（服务/启动项/视觉/电源/网络/遥测，均写 manifest）。"""
         return run_ps("09_backup.ps1", "-Action", "create")
 
     @server.tool()
     def backup_restore(file: str = "") -> dict:
-        """恢复备份。file: 备份文件名（留空恢复最新）。"""
+        """恢复单个域的备份。file: 时间线中的备份文件名。还原前会先备份当前状态。"""
         if file:
             return run_ps("09_backup.ps1", "-Action", "restore", "-File", str(file))
         return run_ps("09_backup.ps1", "-Action", "restore")
+
+    @server.tool()
+    def backup_rollback(since: str = "", last: int = 0, domain: str = "",
+                        dry_run: bool = False, skip_backup: bool = False) -> dict:
+        """一键回滚：回到某个时间点之前，或回退最近 N 条备份。
+        since: 时间点 yyyy-MM-dd HH:mm:ss；last: 回退几条（与 since 二选一）；
+        domain: 限定域（服务/启动项/视觉/电源/网络/遥测，多个用逗号分隔）；
+        dry_run: 只出计划不执行；skip_backup: 跳过回滚前的当前状态备份。"""
+        args = ["-Action", "rollback"]
+        if since:
+            args += ["-Since", str(since)]
+        if int(last) > 0:
+            args += ["-Last", str(int(last))]
+        if domain:
+            args += ["-Domain"]
+            for d in str(domain).split(","):
+                d = d.strip()
+                if d:
+                    args.append(d)
+        if dry_run:
+            args.append("-DryRun")
+        if skip_backup:
+            args.append("-SkipBackup")
+        return run_ps("09_backup.ps1", *args)
+
+    @server.tool()
+    def profile_list() -> dict:
+        """列出预设优化组合包（Profiles）：名称/标题/步骤数/是否含高风险步骤。"""
+        return run_ps("16_profiles.ps1", "-Action", "list")
+
+    @server.tool()
+    def profile_plan(name: str) -> dict:
+        """查看某个优化组合包的只读预览：每一步做什么、风险级别、影响范围，不执行任何修改。"""
+        return run_ps("16_profiles.ps1", "-Action", "plan", "-Name", str(name))
+
+    @server.tool()
+    def profile_apply(name: str, dry_run: bool = False, force: bool = False) -> dict:
+        """执行优化组合包（服务/启动项/视觉/电源/网络/遥测/磁盘）。
+        dry_run: 只出计划不修改；force: 放行高风险步骤（如禁用全部启动项、CompactOS）。
+        默认会跳过高风险/需人工确认的步骤。每个域执行前自动备份。"""
+        args = ["-Action", "apply", "-Name", str(name)]
+        if dry_run:
+            args.append("-DryRun")
+        if force:
+            args.append("-Force")
+        return run_ps("16_profiles.ps1", *args, timeout=1800)
 
     @server.tool()
     def update_block(action: str = "status") -> dict:
@@ -597,6 +648,60 @@ def api_backup_restore():
     if f:
         return jsonify(run_ps("09_backup.ps1", "-Action", "restore", "-File", f))
     return jsonify(run_ps("09_backup.ps1", "-Action", "restore"))
+
+
+@app.route("/api/backup/timeline")
+def api_backup_timeline():
+    """优化时间线（只读）"""
+    return jsonify(run_ps("09_backup.ps1", "-Action", "timeline"))
+
+
+@app.route("/api/backup/rollback", methods=["POST"])
+def api_backup_rollback():
+    data = request.get_json(silent=True) or {}
+    args = ["-Action", "rollback"]
+    if data.get("since"):
+        args += ["-Since", str(data.get("since"))]
+    if data.get("last"):
+        args += ["-Last", str(int(data.get("last")))]
+    domains = data.get("domain") or data.get("domains") or []
+    if isinstance(domains, str):
+        domains = [d.strip() for d in domains.split(",") if d.strip()]
+    if domains:
+        args.append("-Domain")
+        args += [str(d) for d in domains]
+    if data.get("file"):
+        args += ["-File", str(data.get("file"))]
+    if data.get("dry_run"):
+        args.append("-DryRun")
+    if data.get("skip_backup"):
+        args.append("-SkipBackup")
+    return jsonify(run_ps("09_backup.ps1", *args))
+
+
+# ---------------- 优化组合包 Profiles ----------------
+@app.route("/api/profile/list")
+def api_profile_list():
+    """列出预设优化组合包"""
+    return jsonify(run_ps("16_profiles.ps1", "-Action", "list"))
+
+
+@app.route("/api/profile/plan")
+def api_profile_plan():
+    """组合包只读预览"""
+    name = request.args.get("name", "")
+    return jsonify(run_ps("16_profiles.ps1", "-Action", "plan", "-Name", str(name)))
+
+
+@app.route("/api/profile/apply", methods=["POST"])
+def api_profile_apply():
+    data = request.get_json(silent=True) or {}
+    args = ["-Action", "apply", "-Name", str(data.get("name", ""))]
+    if data.get("dry_run"):
+        args.append("-DryRun")
+    if data.get("force"):
+        args.append("-Force")
+    return jsonify(run_ps("16_profiles.ps1", *args, timeout=1800))
 
 
 def start_mcp_background(port: int = 5001):

@@ -131,6 +131,7 @@ function Show-Menu {
         Write-Host "   [13] Windows 可选功能     — 列出并启用微软默认未开启的功能"
         Write-Host "   [14] 恢复自动更新         — 恢复 Windows Update 服务与计划任务"
         Write-Host "   [15] 一键体检（只读）      — 体检分 + 问题清单，可优化前后对比"
+        Write-Host "   [16] 优化组合包          — 老机均衡/游戏/省电/最小干预，一键到位"
         Write-Host ""
         Write-Host " [工具]" -ForegroundColor Yellow
         Write-Host "   [B]  备份当前系统设置"
@@ -157,6 +158,7 @@ function Show-Menu {
             "13" { Invoke-ScriptModule "13-WindowsFeatures.ps1" }
             "14" { Invoke-ScriptModule "14-RestoreAutoUpdate.ps1" }
             "15" { Invoke-ScriptModule "15-HealthCheck.ps1" }
+            "16" { Invoke-ScriptModule "16-Profiles.ps1" }
             { $_ -eq "B" -or $_ -eq "b" } { Invoke-ScriptModule "09-BackupRestore.ps1" }
             { $_ -eq "R" -or $_ -eq "r" } { Invoke-ScriptModule "09-BackupRestore.ps1" }
             { $_ -eq "Q" -or $_ -eq "q" } { Write-Host "感谢使用，再见！" -ForegroundColor Green; return }

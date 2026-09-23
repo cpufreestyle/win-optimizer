@@ -113,6 +113,7 @@
     <div class="nav-item" data-page="disk">💽 磁盘优化</div>
     <div class="nav-item" data-page="network">🌐 网络优化</div>
     <div class="nav-item" data-page="backup">💾 备份恢复</div>
+    <div class="nav-item" data-page="profiles">📦 优化组合包</div>
   </div>
   <div class="main">
     <div id="content"></div>
@@ -124,6 +125,7 @@ const $ = (s,el=document)=>el.querySelector(s);
 const $$ = (s,el=document)=>[...el.querySelectorAll(s)];
 const content = $('#content');
 let logLines = [];
+let profSel = null;
 
 function log(msg,type=''){
   const t = new Date().toLocaleTimeString();
@@ -658,50 +660,155 @@ async function optimizeNetwork(){
 }
 
 // ---------------- 备份恢复 ----------------
+// 回滚预计划缓存：{ mode, since, entries:[{domain,domainLabel,file,items,metadataMissing}] }
+let bkPlan = null;
+
 async function renderBackup(){
   content.innerHTML = `<div class="page-title">备份恢复</div>
-    <div class="page-sub">管理优化操作的备份，可随时恢复</div>
+    <div class="page-sub">查看优化时间线，可恢复单个域或一键回滚到某个时间点</div>
     <div class="card">
       <div class="row">
         ${btn('创建备份','green',createBackup)}
         ${btn('恢复最近备份','yellow',restoreBackup)}
-        ${btn('刷新列表','ghost',renderBackup)}
+        ${btn('一键回滚向导','yellow',showRollbackWizard)}
+        ${btn('刷新时间线','ghost',renderBackup)}
       </div>
-      <h3 style="margin-top:14px">备份列表</h3>
+      <h3 style="margin-top:14px">优化时间线（新 → 旧）</h3>
+      <div id="bktimeline" class="muted" style="margin-top:8px">加载中…</div>
+    </div>
+    <div class="card" id="bkplanCard" style="display:none">
+      <h3>回滚预览</h3>
+      <div id="bkplan"></div>
+      <div class="row" style="margin-top:8px">
+        ${btn('确认执行回滚','red',runRollback)}
+        ${btn('取消','ghost',()=>{ bkPlan=null; $('#bkplanCard').style.display='none'; })}
+      </div>
+    </div>
+    <div class="card"><h3>备份文件列表</h3>
       <div id="bklist" class="muted" style="margin-top:8px">加载中…</div>
     </div>
     <div class="card"><h3>操作日志</h3><div class="log" id="logbox"></div></div>`;
   bindBtns(content);
+  bkPlan = null;
+  $('#bkplanCard').style.display='none';
+  const d = await api('/api/backup/timeline');
+  const tl = $('#bktimeline');
+  if(!d.ok){ tl.innerHTML=badge('失败','err')+' '+esc(d.error); }
+  else if(!d.timeline || !d.timeline.length){ tl.innerHTML='<p class="muted">暂无备份。各优化步骤默认会自动备份，备份后即可在此恢复。</p>'; }
+  else {
+    const rows = d.timeline.map((e,i)=>`<tr>
+      <td>${i+1}</td>
+      <td>${esc(e.timeText)}</td>
+      <td>${badge(e.domainLabel, e.domain==='services'?'info':(e.domain==='update'?'warn':'ok'))}</td>
+      <td>${e.metadataMissing?'?':e.items}</td>
+      <td class="muted">${esc(e.file)}</td>
+      <td>${e.metadataMissing?badge('元数据缺失','info'):''}</td>
+      <td><button class="btn ghost" onclick="restoreBackupFile('${esc(e.file)}')">恢复此域</button></td>
+    </tr>`).join('');
+    tl.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>时间</th><th>域</th><th>条目</th><th>备份文件</th><th>标记</th><th>操作</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  }
+  await loadBackupFiles();
+}
+
+async function loadBackupFiles(){
   const d = await api('/api/backup/list');
-  if(!d.ok){ $('#bklist').innerHTML=badge('失败','err')+' '+esc(d.error); return; }
-  if(!d.files.length){ $('#bklist').innerHTML='<p class="muted">暂无备份文件。</p>'; return; }
-  let rows = d.files.map(f=>`<tr>
+  const box = $('#bklist');
+  if(!d.ok){ box.innerHTML=badge('失败','err')+' '+esc(d.error); return; }
+  if(!d.files.length){ box.innerHTML='<p class="muted">暂无备份文件。</p>'; return; }
+  const rows = d.files.map(f=>`<tr>
     <td>${esc(f.name)}</td><td>${esc(f.type)}</td><td>${esc(f.date)}</td><td>${esc(f.size)}</td>
     <td><button class="btn ghost" onclick="restoreBackupFile('${esc(f.name)}')">恢复此备份</button></td>
   </tr>`).join('');
-  $('#bklist').innerHTML = `<div class="table-wrap"><table>
+  box.innerHTML = `<div class="table-wrap"><table>
     <thead><tr><th>文件名</th><th>类型</th><th>日期</th><th>大小</th><th>操作</th></tr></thead>
     <tbody>${rows}</tbody></table></div>`;
 }
+
 async function createBackup(){
   log('创建备份…');
   const d = await api('/api/backup/create',{method:'POST'});
-  if(d.ok){ log('备份已创建：'+d.created); renderBackup(); }
+  if(d.ok){
+    (d.created||[]).forEach(c=>log(c.file?('已备份 ' + c.domain + ' → ' + c.file):('失败 ' + c.domain + '：' + (c.error||'')), c.file?'':'err'));
+    log('备份已创建');
+    renderBackup();
+  }
   else log('失败：'+d.error,'err');
 }
+
 async function restoreBackup(){
-  if(!confirm('确认从最近备份恢复？将恢复服务与启动项。')) return;
+  if(!confirm('确认从各域最近的备份恢复？回滚前会先备份当前状态。')) return;
   log('恢复最近备份…');
-  const d = await api('/api/backup/restore',{method:'POST'});
-  if(d.ok){ (d.log||[]).forEach(l=>log(l)); log('恢复完成'); renderBackup(); }
-  else log('失败：'+d.error,'err');
+  const d = await api('/api/backup/rollback',{method:'POST',body:{}});
+  showRollbackResult(d);
 }
+
 async function restoreBackupFile(name){
-  if(!confirm('确认恢复备份：'+name+'？')) return;
+  if(!confirm('确认恢复备份：'+name+'\n（还原前会先备份该域当前状态）')) return;
   log('恢复备份：'+name);
   const d = await api('/api/backup/restore',{method:'POST',body:{file:name}});
-  if(d.ok){ (d.log||[]).forEach(l=>log(l)); log('恢复完成'); renderBackup(); }
-  else log('失败：'+d.error,'err');
+  if(d.ok){
+    log('已还原 '+d.restored+' 项'+(d.safetyBackup?('（回滚前备份：'+d.safetyBackup+'）'):''));
+    renderBackup();
+  } else { log('失败：'+d.error,'err'); if(d.details){ d.details.forEach(x=>log('  '+x.name+' : '+x.result)); } }
+}
+
+// 一键回滚向导：先用 DryRun 取计划，确认后才执行（零副作用预览）
+async function showRollbackWizard(){
+  const mode = prompt('回滚方式：\n1 = 回到指定时间点之前\n2 = 回退最近 N 条备份\n输入 1 或 2', '2');
+  if(mode===null) return;
+  const body = { dry_run: true };
+  if(mode==='1'){
+    const t = prompt('时间点（yyyy-MM-dd HH:mm:ss）', '');
+    if(!t) return;
+    body.since = t;
+  } else if(mode==='2'){
+    const n = prompt('回退几条备份？', '2');
+    if(!n) return;
+    body.last = parseInt(n,10)||1;
+  } else { log('已取消。'); return; }
+
+  log('正在计算回滚计划…');
+  const d = await api('/api/backup/rollback',{method:'POST',body:body});
+  if(!d.ok){ log('计划失败：'+d.error,'err'); return; }
+  bkPlan = body;
+  const entries = d.results||[];
+  const skipped = d.skipped||[];
+  let h = `<div class="muted">目标时点：${esc(String(d.since||''))}（${d.mode==='file'?'单个备份':'时间点'}）</div>`;
+  if(entries.length){
+    h += `<div class="table-wrap" style="margin-top:8px"><table>
+      <thead><tr><th>域</th><th>将使用备份</th><th>说明</th></tr></thead><tbody>
+      ${entries.map(e=>`<tr><td>${badge(e.domainLabel,'info')}</td><td class="muted">${esc(e.file)}</td><td class="muted">${esc(e.summary||'')}</td></tr>`).join('')}
+      </tbody></table></div>`;
+  } else { h += '<p class="muted">该时间范围内没有可回滚的备份。</p>'; }
+  if(skipped.length){
+    h += `<p class="muted" style="margin-top:6px">跳过：${skipped.map(s=>esc(s.domainLabel)+' → '+esc(s.reason)).join('、')}</p>`;
+  }
+  h += '<p class="muted" style="margin-top:6px">每个域还原前会先备份当前状态（可再次反悔）。</p>';
+  $('#bkplan').innerHTML = h;
+  $('#bkplanCard').style.display='';
+}
+
+async function runRollback(){
+  if(!bkPlan){ log('请先点击“一键回滚向导”生成计划。','err'); return; }
+  if(!confirm('确认执行回滚？将按固定顺序（服务→启动项→视觉→电源→网络→遥测→更新）还原。')) return;
+  log('开始回滚…');
+  const d = await api('/api/backup/rollback',{method:'POST',body:bkPlan});
+  showRollbackResult(d);
+}
+
+function showRollbackResult(d){
+  if(!d || !d.ok){ log('回滚失败：'+(d&&d.error?d.error:'未知错误'),'err'); return; }
+  (d.results||[]).forEach(s=>{
+    log((s.ok?'[成功] ':'[失败] ')+s.domainLabel+' ← '+s.file);
+    if(s.summary) log('    '+s.summary);
+    if(s.safetyBackup) log('    回滚前已备份当前状态: '+s.safetyBackup);
+    if(s.error) log('    错误: '+s.error,'err');
+  });
+  (d.skipped||[]).forEach(s=>log('[跳过] '+s.domainLabel+' ← '+s.file+' : '+s.reason));
+  log(d.dryRun?'(预览模式，未修改任何设置)':'回滚完成，建议重启电脑使更改生效');
+  if(!d.dryRun){ bkPlan=null; $('#bkplanCard').style.display='none'; renderBackup(); }
 }
 
 async function renderHealth(){
@@ -797,11 +904,130 @@ async function runRemediate(maxSeverity, force){
   log(d.ok?'修复完成，建议重新体检对比':'部分项目失败，详见日志', d.ok?'':'err');
   renderHealth();
 }
+﻿async function renderProfiles(){
+  content.innerHTML = `<div class="page-title">优化组合包</div>
+    <div class="page-sub">一键套用预设优化方案（服务 / 启动项 / 视觉效果 / 电源 / 网络 / 遥测），每步执行前自动备份</div>
+    <div class="card">
+      <div class="row">
+        ${btn('刷新','ghost',renderProfiles)}
+        <label><input type="checkbox" id="cbProfForce"> 包含高风险步骤（禁用全部启动项 / CompactOS）</label>
+      </div>
+      <div id="proflist" class="muted" style="margin-top:8px">加载中…</div>
+    </div>
+    <div class="card" id="profplanCard" style="display:none">
+      <h3 id="profplanTitle">执行预览</h3>
+      <div id="profplan"></div>
+      <div class="row">
+        ${btn('预演（不修改任何设置）','yellow',()=>runProfile(true))}
+        ${btn('确认执行','green',()=>runProfile(false))}
+        ${btn('取消','ghost',()=>{ profSel=null; $('#profplanCard').style.display='none'; })}
+      </div>
+    </div>
+    <div class="card" id="profresCard" style="display:none"><h3>执行结果</h3><div id="profres"></div></div>
+    <div class="card"><h3>操作日志</h3><div class="log" id="logbox"></div></div>`;
+  bindBtns(content);
+  profSel = null;
+  $('#profplanCard').style.display='none';
+  $('#profresCard').style.display='none';
+  const d = await api('/api/profile/list');
+  const box = $('#proflist');
+  if(!d.ok){ box.innerHTML = badge('失败','err')+' '+esc(d.error); return; }
+  if(!d.profiles || !d.profiles.length){
+    box.innerHTML = '<p class="muted">没有可用的组合包（config/optimization.json 的 profiles 为空）。</p>';
+    return;
+  }
+  box.innerHTML = `<div class="grid">${d.profiles.map(p=>`
+    <div class="stat">
+      <div class="k">${esc(p.name)}</div>
+      <div class="v">${esc(p.title)}</div>
+      <div class="muted" style="margin:6px 0">${esc(p.desc)}</div>
+      <div class="muted">共 ${p.steps} 步${p.highRisk?(' · 其中高风险 '+p.highRisk+' 步'):' · 无高风险步骤'}</div>
+      <div class="row">${btn('查看计划','ghost',()=>showProfilePlan(p.name))}</div>
+    </div>`).join('')}</div>`;
+  bindBtns($('#proflist'));
+  log('已加载 '+d.profiles.length+' 个优化组合包');
+}
+
+async function showProfilePlan(name){
+  log('查看组合包计划：'+name);
+  const card = $('#profplanCard');
+  const d = await api('/api/profile/plan?name='+encodeURIComponent(name));
+  if(!d.ok){
+    $('#profplan').innerHTML = badge('失败','err')+' '+esc(d.error);
+    log('加载计划失败：'+d.error,'err');
+    return;
+  }
+  profSel = d.name || name;
+  $('#profplanTitle').textContent = (d.title||profSel) + '（' + profSel + '）';
+  const steps = d.steps || [];
+  const guard = steps.filter(s=>!s.auto || s.risk==='high');
+  const rk = r=>r==='high'?'err':(r==='medium'?'warn':'ok');
+  const rt = r=>r==='high'?'高危':(r==='medium'?'中':'低');
+  let h = `<p class="muted">${esc(d.desc||'')}</p>`;
+  if(!steps.length){ h += `<p class="muted">该组合包没有可执行步骤。</p>`; }
+  else {
+    h += `<div class="table-wrap" style="margin-top:8px"><table>
+      <thead><tr><th>风险</th><th>域</th><th>动作</th><th>目标</th><th>执行方式</th></tr></thead><tbody>
+      ${steps.map(s=>`<tr>
+        <td>${badge(rt(s.risk),rk(s.risk))}</td>
+        <td>${esc(s.domain)}</td>
+        <td>${esc(s.action)}</td>
+        <td class="muted">${esc(s.target)}</td>
+        <td>${s.auto?'自动执行':'需人工确认'}</td>
+      </tr>`).join('')}
+      </tbody></table></div>`;
+  }
+  if(guard.length){
+    h += `<div class="alert" style="margin-top:10px">以下步骤默认跳过，只有勾选「包含高风险步骤」后才会执行：`
+       + guard.map(s=>esc(s.action)).join('、') + '</div>';
+  }
+  $('#profplan').innerHTML = h;
+  card.style.display = '';
+}
+
+async function runProfile(dryRun){
+  if(!profSel){ log('请先点击某个组合包的「查看计划」','err'); return; }
+  const force = !!($('#cbProfForce') && $('#cbProfForce').checked);
+  if(!dryRun){
+    const msg = '即将执行「'+profSel+'」组合包，每个域执行前会自动备份。\n'
+      + (force ? '已勾选高风险步骤，会一并执行禁用全部启动项 / CompactOS 等操作。\n' : '高风险步骤会保持跳过。\n')
+      + '确认执行？';
+    if(!confirm(msg)) return;
+  }
+  log((dryRun?'预演':'执行')+'组合包：'+profSel+(force?'（含高风险）':''));
+  const d = await api('/api/profile/apply',{method:'POST',body:{name:profSel,dry_run:dryRun,force:force}});
+  const card = $('#profresCard'), box = $('#profres');
+  card.style.display = '';
+  if(!d.ok){ box.innerHTML = badge('失败','err')+' '+esc(d.error); log('执行失败：'+d.error,'err'); return; }
+  let h = `<div class="muted">${esc(d.title||d.name)}${d.dryRun?'（预演模式，未修改任何设置）':''}${d.forced?'（含高风险步骤）':''}</div>`;
+  const res = d.results || [];
+  if(res.length){
+    h += `<div class="table-wrap" style="margin-top:8px"><table>
+      <thead><tr><th>域</th><th>动作</th><th>结果</th></tr></thead><tbody>
+      ${res.map(s=>`<tr>
+        <td>${esc(s.domain)}</td>
+        <td>${esc(s.action)}</td>
+        <td>${s.ok?badge('成功','ok'):badge('失败','err')}<div class="muted">${esc(s.summary||'')}${s.error?(' · '+esc(s.error)):''}</div></td>
+      </tr>`).join('')}
+      </tbody></table></div>`;
+  }
+  const sk = d.skipped || [];
+  if(sk.length){
+    h += `<div class="alert" style="margin-top:10px">已跳过 ${sk.length} 步：`
+       + sk.map(s=>esc(s.action)+'（'+esc(s.reason)+'）').join('；') + '</div>';
+  }
+  box.innerHTML = h;
+  res.forEach(s=>log((s.ok?'[成功] ':'[失败] ')+s.domain+'：'+s.summary+(s.error?(' 错误：'+s.error):'')));
+  sk.forEach(s=>log('[跳过] '+s.domain+' —— '+s.reason));
+  if(d.dryRun){ log('预演完成，未修改任何设置'); }
+  else { log(d.ok?'执行完成，全部成功':'执行完成，有失败项，详见结果', d.ok?'':'err'); log('如需撤销，可到「备份恢复」页按域恢复或一键回滚'); }
+}
 // ---------------- 路由 ----------------
 const pages = {
   overview:renderOverview, health:renderHealth, clean:renderClean, services:renderServices,
   startup:renderStartup, update:renderUpdate, visual:renderVisual,
-  power:renderPower, disk:renderDisk, network:renderNetwork, backup:renderBackup
+  power:renderPower, disk:renderDisk, network:renderNetwork, backup:renderBackup,
+  profiles:renderProfiles
 };
 $$('.nav-item').forEach(n=>{
   n.onclick=()=>{

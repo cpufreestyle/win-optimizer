@@ -66,7 +66,7 @@ WebUI `webui/ps/03_services.ps1` 完全没有这个功能。这正是 B1 想消�
 
 ---
 
-## P0-3 优化组合包 Profiles（一键到位）
+## P0-3 优化组合包 Profiles（一键到位）—— 已实现
 
 **痛点**：完整优化要依次点 5~6 个菜单（服务→启动项→视觉→电源→网络），中途易放弃；不同用户场景
 （办公 / 游戏 / 省电）需要的取舍完全不同。
@@ -80,13 +80,33 @@ WebUI `webui/ps/03_services.ps1` 完全没有这个功能。这正是 B1 想消�
 最小干预:  services=safe,       startup=none,        visual=balanced,        power=keep,      dns=none,       compact_os=false
 ```
 
-lib 新增 `Get-Profiles` / `Get-ProfilePlan <name>` / `Invoke-Profile <name> [-WhatIf]`——
+lib 新增 `Get-Profiles` / `Get-ProfilePlan <name>` / `Invoke-Profile <name> [-WhatIf] [-Force]`——
 **纯编排现有域函数，不新增任何系统操作面**，天然获得全部备份与兼容性保障。
 
-**落点**：CLI 新菜单项；GUI 首页/Dashboard 大按钮卡片；WebUI `/api/profile/apply` + 首页卡片。
-执行时输出分域进度与失败续跑（复用 CLI 一键优化的错误隔离模式）。
+**落点（三端均已落地）**：
+- CLI：`scripts/16-Profiles.ps1`，`Optimize.ps1` 菜单 `[16]`（列表 → 只读预览 → `[1]` 预演 / `[2]` 确认执行）。
+- GUI：`gui/pages/Dashboard.ps1` 新增「优化组合包 Profiles」卡片（选中编号 → 预览 → 确认执行）。
+- WebUI：`webui/ps/16_profiles.ps1` + `/api/profile/list|plan|apply` + MCP `profile_list`/`profile_plan`/`profile_apply`，
+  前端 `renderProfiles()` 组合包卡片 + 预览表格 + 预演/执行。
+执行时输出分域进度与失败续跑（单步失败不中断，结束汇总 success/failed/skipped）。
 
-**风险**：低-中。`ultimate`/`power_saver` 计划 GUID 需 Win7 适配（lib 的 `Invoke-PowerCfg` 已有兼容层，需确认失败回退）。
+**风险闸门**：`Get-ProfileSteps` 为每步派生 `risk`（low/medium/high）与 `auto`。默认只跑 `auto` 且非
+`high` 的步骤；`auto=false` 或 `risk=high` 的步骤必须显式 `-Force` 才执行。内置 `config` 中
+`auto=false` 与 `risk=high` 完全等价（仅 `startup=all` 的「禁用全部启动项」与 `disk` 磁盘优化两处），
+因此 `-Force` 是唯一的高危开关，三端入口一致。
+
+**与原方案的偏差**
+- `startup` 字段取值从 `interactive`/`trim` 改为 `list`（只读列出启动项清单）与 `all`（禁用全部）：
+  「交互式逐项决定」在 CLI/GUI/WebUI 三端都需要一套额外的勾选 UI，收益低于复杂度，
+  故首版用「只读清单 + 高危爆破」两档，取消逐项交互。
+- 磁盘优化的 `compact_os` 在 lib 内部扁平化为 `compactOs`（`Get-Profiles` 统一输出该字段），
+  config 仍以 `profiles.<name>.compact_os` 书写；`disk`/`compact_os` 未在本轮内置组合包里启用
+  （`minimal` 等四个都是 `disk=none`），磁盘优化仍由 07-DiskOptimize / WebUI 磁盘页按需触发。
+- `dns` 字段直接复用 08-NetworkOptimize 的 DNS 选项编号（1=Cloudflare 2=Google 3=阿里 4=114），
+  不新增枚举；未知 DNS/visual/power 值对应步骤直接不生成，而不是报错中断整包。
+- `services=recommended` 定为 medium（可自动执行），`services=safe` 定为 low；`dns`/`visual`/`telemetry` 定为 low。
+- `power_saver` 的 GUID 为 `a1841308-3541-4fab-bc81-f71556f20b4a`，`ultimate` 沿用
+  `e9a42b02-d5df-448d-aa00-03f14749eb61`；裸 GUID 直接透传，失败由 `Set-PowerPlan` 的既有回退兜底。
 
 ---
 
@@ -106,6 +126,32 @@ lib 新增 `Get-Profiles` / `Get-ProfilePlan <name>` / `Invoke-Profile <name> [-
 列表 + 单选回滚；WebUI `/api/backup/timeline` + 按范围恢复。旧备份无 manifest 时按目录名容错解析并标注「元数据缺失」。
 
 **风险**：中。跨域回滚顺序需固定（服务→启动项→视觉→电源→网络→磁盘），任一步失败要可续跑。
+
+**已实现（2026-09-24）**：
+
+| 层 | 落点 |
+|----|------|
+| lib | `Write-BackupManifest`（6 个 `Backup-*` 全部写 `<备份文件>.manifest.json`：域/时间/条目数/字节/主机/版本）、`Get-BackupDomainFromName`、`Get-BackupDomainLabel`、`New-BackupTimelineEntry`、`Get-OptimizationTimeline`、`Get-RollbackPlan`、`Backup-DomainState`（后悔药）、`Restore-DomainState`（按域分发）、`Format-RestoreDetails`、`Invoke-Rollback` |
+| CLI | `scripts/09-BackupRestore.ps1` 重写为时间线视图 + `[A]` 全量恢复 / `[Z]` 一键回滚向导 / 编号单条恢复 |
+| GUI | `gui/pages/Backup.ps1` 时间线表格 + 「一键回滚向导」 + 「恢复选中备份」 |
+| WebUI | `webui/ps/09_backup.ps1` 增加 `-Action timeline|create|restore|rollback`；路由 `/api/backup/timeline`、`/api/backup/rollback`；MCP 工具 `backup_timeline` / `backup_rollback`；前端 `renderBackup()` 渲染时间线表格与回滚预览 |
+
+与原方案的偏差（均已按可行性调整）：
+
+1. **电源计划备份改结构化 JSON**：原方案的 `.txt`（`powercfg /list` 文本）无法可靠解析出活动 GUID，
+   改为 `.json`（`activeGuid` / `activeName` / `query`），还原时 `powercfg /setactive` 后回读校验；
+   解析不了的旧 `.txt` 只给手动提示，不猜。
+2. **更新域回滚用 `Restore-UpdateBackup`**（`reg import` + `Restore-AutoUpdate`），不再走域开关。
+3. **回滚固定顺序**：服务 → 启动项 → 视觉 → 电源 → 网络 → 遥测 → 更新（原方案把磁盘列在末位，
+   实际磁盘无备份，`health`/`unknown` 统一进 `skipped`）。
+4. **`Restore-StartupItems` 跳过 WMI「系统启动命令」行**：这些行与注册表 / 启动文件夹条目重复，
+   只登记不动作；注册表来源按 `Path` 形态（`?*:\*`）判定而非中文 `Source`，避免 CSV 编码差异导致误判。
+5. **`-DryRun` 零副作用**：不进任何还原函数、不写任何备份，仅返回计划（与 `Invoke-HealthRemediation -WhatIf` 对齐）。
+6. **manifest 缺失容错**：旧备份按文件名推断域、按文件时间排序，时间线标注「元数据缺失」。
+
+安全约束（lib 强制，三端无法绕过）：回滚前 `Backup-DomainState` 先备份当前状态；该备份失败默认中止
+（`-Force` 才继续）；时间线与 `Get-RollbackPlan` 全程只读。
+
 
 ---
 
@@ -153,5 +199,5 @@ config 新增 `safety.create_restore_point`（默认 `false`，与 `disk.compact
 5. P1-1 → P1-2 → P1-3
 6. P2 按社区反馈取舍
 
-每步都走「集成分支 + PR」流程（见 HANDOFF §2），PR 前确认：Pester 88+ 全绿、
+每步都走「集成分支 + PR」流程（见 HANDOFF §2），PR 前确认：Pester 151+ 全绿、
 `*.ps1` 全 BOM、`config/optimization.schema.json` 同步更新、GUI 改动真机点验。
