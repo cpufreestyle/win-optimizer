@@ -1,6 +1,7 @@
 # 项目交接文档（HANDOFF）
 
 > 生成日期：2026-09-16
+> 最近复核：2026-09-23（实测：远端 `main` 与本地一致，无需同步；PR #7 仍 OPEN 未合并，见 §2）
 > 适用对象：接手 PC-Optimizer-7thGen 维护的开发者
 > 配套文档：`README.md`（用户向）、`docs/DEVELOPMENT.md`（开发向，本文不重复其中的架构 / 配置 / 版本 / SSH 说明）
 
@@ -16,6 +17,12 @@
 ## 2. 当前分支与待合并 PR（最关键）
 
 > 2026-09-18 更新：本轮已按 §8 的建议收口，详见文末 §9。
+
+> ✅ **2026-09-23 复核（实测，已推翻「main 严重落后」的旧结论）**：
+> - `git ls-remote origin refs/heads/main` 返回 `7cb9d17`，与本地 `main` **完全一致**——本地 `main` 并不落后，无需先同步。
+>   判断远端真实 HEAD 一律以 `git ls-remote` 为准（tracking ref 不一定反映真实远端状态）。
+> - PR #5 / #6 / #7 **均仍未合并**：`refs/pull/{5,6,7}/head` 存在，`main` 自 PR #4 合并后未再前进，最新 tag 仍是 `v3.2.0`。
+> - 当前 checkout 在 `sync/v3.3.0-main`（`7268793`），其历史**已包含** PR #5/#6 合并，可直接用于合并 PR #7。
 
 - **当前工作分支：`sync/v3.3.0-main`**（v3.3.0 集成分支）
   - 内容 = `main` + PR #5 + PR #6 完整合并（零冲突）+ 本轮收口改动。
@@ -143,8 +150,10 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 
 ## 8. 建议的下一步
 
+0. 合并前核对远端真实 HEAD：`git ls-remote origin refs/heads/main`（复核时应为 `7cb9d17` 或更高），并确认 PR #7 的 Actions 为绿。
 1. 在 GitHub 合并 **PR [#7](https://github.com/cpufreestyle/win-optimizer/pull/7)**（本集成分支，`sync/v3.3.0-main` → `main`）。
    （备选：按 #5 → #6 逐个在 GitHub 点合并，然后丢弃本分支。）
-2. 打 tag `v3.3.0` 触发 Actions 编译 Release（见 `docs/DEVELOPMENT.md` 发布流程）。
-3. 真机验收 GUI 体检页（§7）。
-4. 后续功能建议（按价值排序）：「一键优化组合包」「优化回滚向导」「计划任务定时体检」。
+2. 合并后清理远程残留分支：`feat/optimizations`、`fix/cli-error-isolation-version`、`perf/folder-size-and-logging`、`release/v3.1.0`（这些已合并分支的 `origin/*` 引用仍残留，可删）。
+3. 打 tag `v3.3.0` 触发 Actions 编译 Release（见 `docs/DEVELOPMENT.md` 发布流程）。
+4. 真机验收 GUI 体检页（§7）。
+5. 后续功能建议（按价值排序）：「一键优化组合包」「优化回滚向导」「计划任务定时体检」。
