@@ -659,7 +659,8 @@ function Disable-StartupItems {
     }
     if (-not $Items -or $Items.Count -eq 0) { return $result }
 
-    if (-not $SkipBackup) {
+    # -WhatIf 同样不落盘：预览必须零副作用（与 Invoke-NetworkOptimization 等保持一致）
+    if (-not $SkipBackup -and -not $WhatIf) {
         $result.backup = Backup-StartupItems -BackupDir $BackupDir -Items $Items
     }
 
@@ -681,7 +682,8 @@ function Disable-StartupItems {
                 # 移动到备份目录而非直接删除，保证可恢复
                 $dir = Get-OptBackupDir -BackupDir $BackupDir
                 $moveDir = Join-Path $dir 'startup_items'
-                if (-not (Test-Path $moveDir)) { New-Item -ItemType Directory -Path $moveDir -Force | Out-Null }
+                # -WhatIf 同样不落盘：预览不得创建备份目录
+                if (-not $WhatIf -and -not (Test-Path $moveDir)) { New-Item -ItemType Directory -Path $moveDir -Force | Out-Null }
                 $dest = Join-Path $moveDir (Split-Path $item.Value -Leaf)
                 if (-not $WhatIf) { Move-Item -Path $item.Value -Destination $dest -Force -ErrorAction Stop }
                 $result.disabled++

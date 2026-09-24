@@ -1491,7 +1491,10 @@ Describe 'Optimize.Core per-domain restore helpers (shared by CLI/GUI/WebUI)' {
             Mock Set-Service {}
             $r = Restore-Services -BackupDir $tmp -File $f
             $r.restored | Should -Be 1
-            $r.backup   | Should -Be $f
+            # GitHub Actions runner 的 $env:TEMP 是 8.3 短路径（如 RUNNER~1），
+            # 而 Get-Item 解析后返回的是长路径（runneradmin）；归一化后再比较，
+            # 避免同一文件的短/长两种路径形态造成误报
+            [IO.Path]::GetFullPath([string]$r.backup) | Should -Be ([IO.Path]::GetFullPath($f))
             $r.error    | Should -BeNullOrEmpty
         } finally {
             Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
@@ -1795,6 +1798,11 @@ Describe 'Optimize.Core profiles - optimization bundles (shared by CLI/GUI/WebUI
     It 'Invoke-Profile -WhatIf is side-effect free and reports dryRun' {
         $name = @(Get-Profiles | Where-Object { $_.services -eq 'safe' })[0].name
         $tmp = Join-Path $env:TEMP ('prof_wi_' + (New-Guid).ToString('N'))
+        # CI runner 无活动网卡（真实 Invoke-NetworkOptimization 会返回 ok=$false）；
+        # 注入一个伪网卡，让 -WhatIf 网络分支真实跑完（各子项 -WhatIf 均返回 ok=$true）
+        Mock Get-ActiveNetAdapters {
+            @([PSCustomObject]@{ Name = 'Ethernet'; IfIndex = 1; Description = 'unit-test'; MacAddress = '00-00-00-00-00-00'; LinkSpeed = '1 Gbps' })
+        }
         try {
             $r = Invoke-Profile -Name $name -BackupDir $tmp -WhatIf
             $r.ok     | Should -BeTrue
@@ -1812,6 +1820,11 @@ Describe 'Optimize.Core profiles - optimization bundles (shared by CLI/GUI/WebUI
 
     It 'Invoke-Profile skips high-risk and manual steps unless -Force is given' {
         $tmp = Join-Path $env:TEMP ('prof_g_' + (New-Guid).ToString('N'))
+        # CI runner 无活动网卡（真实 Invoke-NetworkOptimization 会返回 ok=$false）；
+        # 注入一个伪网卡，让 -WhatIf 网络分支真实跑完（各子项 -WhatIf 均返回 ok=$true）
+        Mock Get-ActiveNetAdapters {
+            @([PSCustomObject]@{ Name = 'Ethernet'; IfIndex = 1; Description = 'unit-test'; MacAddress = '00-00-00-00-00-00'; LinkSpeed = '1 Gbps' })
+        }
         try {
             $r = Invoke-Profile -Name 'gaming' -BackupDir $tmp -WhatIf
             $r.ok     | Should -BeTrue
@@ -1850,6 +1863,7 @@ Describe 'Optimize.Core profiles - optimization bundles (shared by CLI/GUI/WebUI
         Mock Set-PowerPlan           { @{ ok = $true; details = @('已切换'); backup = $null; fallback = $false } }
         Mock Disable-TelemetryTasks  { @{ disabled = 2; skipped = 0; details = @(); backup = $null } }
         Mock Get-StartupItems        { @() }
+        Mock Invoke-NetworkOptimization { @{ ok = $true; error = $null; backup = $null; details = @('模拟网络优化'); adapters = 1 } }
 
         $tmp = Join-Path $env:TEMP ('prof_run_' + (New-Guid).ToString('N'))
         try {
