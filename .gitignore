@@ -42,3 +42,6 @@ venv/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# 本地智能体工作/记忆目录
+.workbuddy/

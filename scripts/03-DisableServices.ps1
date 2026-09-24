@@ -113,25 +113,23 @@ foreach ($svc in $toProcess) {
     }
 }
 
-# 额外：禁用遥测相关计划任务（统一从 lib 读取，优先配置）
+# 额外：禁用遥测相关计划任务（统一走 lib：Win8+ 用 ScheduledTasks，Win7 回退 schtasks；执行前自动备份）
 Write-Host "`n[额外] 禁用遥测相关计划任务..." -ForegroundColor Yellow
-$telemetryTasks = Get-TelemetryTasks
-foreach ($task in $telemetryTasks) {
-    try {
-        $t = Get-ScheduledTask -TaskPath ($task | Split-Path) -TaskName ($task | Split-Path -Leaf) -ErrorAction SilentlyContinue
-        if ($t -and $t.State -ne "Disabled") {
-            Disable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction Stop | Out-Null
-            Write-Host "  [已禁用] 计划任务: $($t.TaskName)" -ForegroundColor Green
-        }
-    } catch {
-        Write-Host "  [跳过] 计划任务: $($task | Split-Path -Leaf)" -ForegroundColor Gray
-    }
+$telemetryResult = Disable-TelemetryTasks -BackupDir $backupDir
+foreach ($d in $telemetryResult.details) {
+    if ($d.result -like "已禁用") { Write-Host "  [已禁用] 计划任务: $($d.name)" -ForegroundColor Green }
+    elseif ($d.result -like "失败*") { Write-Host "  [失败] 计划任务: $($d.name)" -ForegroundColor Red }
+    else { Write-Host "  [跳过] 计划任务: $($d.name)" -ForegroundColor Gray }
+}
+if ($telemetryResult.backup) {
+    Write-Host "  遥测任务备份: $($telemetryResult.backup)" -ForegroundColor Gray
 }
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  服务优化完成！" -ForegroundColor Green
 Write-Host "  已禁用: $disabledCount 个服务" -ForegroundColor Green
+Write-Host "  已禁用遥测计划任务: $($telemetryResult.disabled) 个" -ForegroundColor Green
 Write-Host "  已跳过: $skippedCount 个服务" -ForegroundColor Gray
 Write-Host "  备份文件: $backupFile" -ForegroundColor Gray
 Write-Host "  如需恢复，请使用 [B] 备份恢复功能" -ForegroundColor Gray

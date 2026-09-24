@@ -21,10 +21,10 @@
     $script:cbDNS.ForeColor = $Theme.TextMain
     $script:cbDNS.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
     $script:cbDNS.Items.Add("保持当前 DNS") | Out-Null
-    $script:cbDNS.Items.Add("Cloudflare (1.1.1.1 / 1.0.0.1)") | Out-Null
-    $script:cbDNS.Items.Add("Google (8.8.8.8 / 8.8.4.4)") | Out-Null
-    $script:cbDNS.Items.Add("阿里 DNS (223.5.5.5 / 223.6.6.6)") | Out-Null
-    $script:cbDNS.Items.Add("114 DNS (114.114.114.114 / 114.114.115.115)") | Out-Null
+    # DNS 选项统一由共享库提供（编号与 CLI / WebUI 完全一致，config 只覆盖地址）
+    foreach ($o in (Get-DnsOptions)) {
+        $script:cbDNS.Items.Add("$($o.Label) ($($o.Primary) / $($o.Secondary))") | Out-Null
+    }
     $script:cbDNS.SelectedIndex = 0
     $page.Controls.Add($script:cbDNS)
 
@@ -80,8 +80,10 @@
 
     $lblCurDNS = New-Label "当前 DNS:" 20 $y 760 24 $Fonts.Small $Theme.TextDim
     try {
-        $adapters = Get-DnsClientServerAddressCompat
-        $dnsText = $adapters | ForEach-Object { "$($_.InterfaceAlias): $($_.ServerAddresses -join ', ')" }
+        $dnsText = @()
+        foreach ($a in (Get-ActiveNetAdapters)) {
+            $dnsText += "$($a.Name): $((@(Get-AdapterDns -IfIndex $a.IfIndex -Name $a.Name)) -join ', ')"
+        }
         $lblCurDNS.Text = "当前 DNS: $($dnsText -join ' | ')"
     } catch {}
     $page.Controls.Add($lblCurDNS)
@@ -97,49 +99,15 @@
 
         $dnsChoice = $script:cbDNS.SelectedIndex
 
-        if ($dnsChoice -gt 0) {
-            $dnsServers = switch ($dnsChoice) {
-                1 { @("1.1.1.1", "1.0.0.1") }
-                2 { @("8.8.8.8", "8.8.4.4") }
-                3 { @("223.5.5.5", "223.6.6.6") }
-                4 { @("114.114.114.114", "114.114.115.115") }
-            }
-
-            try {
-                $adapters = Get-NetAdapterCompat
-                foreach ($adapter in $adapters) {
-                    if ($adapter.Name) {
-                        Set-DnsCompat -InterfaceName $adapter.Name -DnsServers $dnsServers
-                        Write-Log "[DNS] $($adapter.Name) 已设置为 $($dnsServers -join ', ')" "SUCCESS"
-                    }
-                }
-            } catch {
-                Write-Log "[DNS] 设置失败: $_" "ERROR"
-            }
-        }
-
-        if ($script:chkTCP.Checked) {
-            try {
-                netsh int tcp set global autotuninglevel=normal 2>&1 | Out-Null
-                Write-Log "[TCP] 自动调优已启用" "SUCCESS"
-            } catch { Write-Log "[TCP] 设置失败" "WARN" }
-        }
-
-        if ($script:chkRSS.Checked) {
-            Enable-NetAdapterRssCompat
-            Write-Log "[RSS] 接收端缩放已启用" "SUCCESS"
-        }
-
-        if ($script:chkRSC.Checked) {
-            Enable-NetAdapterRscCompat
-            Write-Log "[RSC] 接收段合并已启用" "SUCCESS"
-        }
-
-        if ($script:chkDNSCache.Checked) {
-            Clear-DnsClientCacheCompat
-            Write-Log "[DNS] 缓存已刷新" "SUCCESS"
-        }
-
+        # 统一走共享库：先备份再应用。
+        # 此前 GUI 改 DNS 完全没有备份（改坏无法恢复），且 RSS/RSC 只用全局 netsh、
+        # 不区分适配器——一并修复。虚拟/隧道类网卡由共享库自动排除，避免误改 VPN。
+        $r = Invoke-NetworkOptimization -BackupDir $script:BackupDir -DnsOption $dnsChoice `
+                -Tcp $script:chkTCP.Checked -Rss $script:chkRSS.Checked `
+                -Rsc $script:chkRSC.Checked -DnsCache $script:chkDNSCache.Checked
+        foreach ($d in $r.details) { Write-Log "[网络] $d" }
+        if ($r.backup) { Write-Log "网络备份: $($r.backup)" }
+        if (-not $r.ok) { Write-Log "[网络] 部分设置失败（可能需要管理员权限）" "WARN" }
         Write-Log "网络优化完成！" "SUCCESS"
         $this.Enabled = $true
         $this.Text = "开始优化"

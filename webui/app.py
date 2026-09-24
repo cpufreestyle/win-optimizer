@@ -1,4 +1,4 @@
-"""
+﻿"""
 PC-Optimizer-7thGen WebUI 后端
 本地运行，不联网。通过 subprocess 调用 webui/ps/ 下的 PowerShell 脚本（管理员权限）。
 """
@@ -7,7 +7,7 @@ import sys
 import json
 import subprocess
 import webbrowser
-from flask import Flask, render_template, jsonify, request, send_from_directory
+from flask import Flask, render_template, jsonify, request, send_from_directory, Response, stream_with_context
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PS_DIR = os.path.join(BASE_DIR, "ps")
@@ -15,6 +15,17 @@ TEMPLATES = os.path.join(BASE_DIR, "templates")
 STATIC = os.path.join(BASE_DIR, "static")
 
 app = Flask(__name__, template_folder=TEMPLATES, static_folder=STATIC)
+
+# ---- 超时配置（秒）----
+# 清理临时文件 / 磁盘优化 / CompactOS / Windows 功能等可能远超 5 分钟，
+# 原先 run_ps 一律 hardcode 300s，长任务会被直接截断报「执行超时」。
+DEFAULT_TIMEOUT = 300
+LONG_TASK_TIMEOUT = 1800
+LONG_TASK_SCRIPTS = {
+    "02_clean.ps1", "07_disk.ps1",
+    "13_windows_features.ps1", "10_block_win11_24h2.ps1",
+    "15_health.ps1",
+}
 
 
 # ============================================================
@@ -115,10 +126,43 @@ def _register_mcp_tools(server):
 
     @server.tool()
     def network_apply(dns: int = 0, tcp: bool = True, rss: bool = True, rsc: bool = True, dnscache: bool = True) -> dict:
-        """网络优化。dns: 0=自动 / 1=阿里 / 2=DNSPod / 3=114 / 4=Google / 5=Cloudflare。"""
+        """网络优化。dns: 0=保持不动 / 1=Cloudflare / 2=Google / 3=阿里 / 4=114。
+
+        注意：编号含义以 webui/ps/08_network.ps1 实际实现为准（此前文档写成 1=阿里 等，与实际不符）。
+        """
         return run_ps("08_network.ps1", "-Action", "apply",
                       "-Dns", str(int(dns)), "-Tcp", str(tcp).lower(), "-Rss", str(rss).lower(),
                       "-Rsc", str(rsc).lower(), "-DnsCache", str(dnscache).lower())
+
+    @server.tool()
+    def health_scan() -> dict:
+        """系统体检（只读）：返回体检分、关键指标、问题清单，以及与上一次体检的对比。"""
+        return run_ps("15_health.ps1", "-Action", "scan")
+
+    @server.tool()
+    def health_plan() -> dict:
+        """体检修复预览（只读）：返回每个问题对应的具体动作、目标与预估影响，不执行任何修改。"""
+        return run_ps("15_health.ps1", "-Action", "plan")
+
+    @server.tool()
+    def health_remediate(issue_code: str = "", max_severity: str = "Medium",
+                        dns_option: int = 1, what_if: bool = False, force: bool = False) -> dict:
+        """按体检结果自动修复。issue_code: 只修指定 issue id（逗号分隔），留空为全部；
+        max_severity: 允许自动执行的最高严重级别 High/Medium/Low（High 级需 force=true）；
+        dns_option: 1=Cloudflare 2=Google 3=阿里 4=114 5=腾讯。每步执行前自动备份。"""
+        args = ["-Action", "remediate", "-MaxSeverity", str(max_severity),
+                "-DnsOption", str(int(dns_option))]
+        if issue_code:
+            args += ["-IssueCode"]
+            for c in str(issue_code).split(","):
+                c = c.strip()
+                if c:
+                    args.append(c)
+        if what_if:
+            args.append("-WhatIf")
+        if force:
+            args.append("-Force")
+        return run_ps("15_health.ps1", *args)
 
     @server.tool()
     def backup_list() -> dict:
@@ -126,16 +170,67 @@ def _register_mcp_tools(server):
         return run_ps("09_backup.ps1", "-Action", "list")
 
     @server.tool()
+    def backup_timeline() -> dict:
+        """优化时间线（只读）：按时间倒序聚合全部备份元数据（域/条目数/时间）。"""
+        return run_ps("09_backup.ps1", "-Action", "timeline")
+
+    @server.tool()
     def backup_create() -> dict:
-        """创建新的系统设置备份。"""
+        """创建新的系统设置备份（服务/启动项/视觉/电源/网络/遥测，均写 manifest）。"""
         return run_ps("09_backup.ps1", "-Action", "create")
 
     @server.tool()
     def backup_restore(file: str = "") -> dict:
-        """恢复备份。file: 备份文件名（留空恢复最新）。"""
+        """恢复单个域的备份。file: 时间线中的备份文件名。还原前会先备份当前状态。"""
         if file:
             return run_ps("09_backup.ps1", "-Action", "restore", "-File", str(file))
         return run_ps("09_backup.ps1", "-Action", "restore")
+
+    @server.tool()
+    def backup_rollback(since: str = "", last: int = 0, domain: str = "",
+                        dry_run: bool = False, skip_backup: bool = False) -> dict:
+        """一键回滚：回到某个时间点之前，或回退最近 N 条备份。
+        since: 时间点 yyyy-MM-dd HH:mm:ss；last: 回退几条（与 since 二选一）；
+        domain: 限定域（服务/启动项/视觉/电源/网络/遥测，多个用逗号分隔）；
+        dry_run: 只出计划不执行；skip_backup: 跳过回滚前的当前状态备份。"""
+        args = ["-Action", "rollback"]
+        if since:
+            args += ["-Since", str(since)]
+        if int(last) > 0:
+            args += ["-Last", str(int(last))]
+        if domain:
+            args += ["-Domain"]
+            for d in str(domain).split(","):
+                d = d.strip()
+                if d:
+                    args.append(d)
+        if dry_run:
+            args.append("-DryRun")
+        if skip_backup:
+            args.append("-SkipBackup")
+        return run_ps("09_backup.ps1", *args)
+
+    @server.tool()
+    def profile_list() -> dict:
+        """列出预设优化组合包（Profiles）：名称/标题/步骤数/是否含高风险步骤。"""
+        return run_ps("16_profiles.ps1", "-Action", "list")
+
+    @server.tool()
+    def profile_plan(name: str) -> dict:
+        """查看某个优化组合包的只读预览：每一步做什么、风险级别、影响范围，不执行任何修改。"""
+        return run_ps("16_profiles.ps1", "-Action", "plan", "-Name", str(name))
+
+    @server.tool()
+    def profile_apply(name: str, dry_run: bool = False, force: bool = False) -> dict:
+        """执行优化组合包（服务/启动项/视觉/电源/网络/遥测/磁盘）。
+        dry_run: 只出计划不修改；force: 放行高风险步骤（如禁用全部启动项、CompactOS）。
+        默认会跳过高风险/需人工确认的步骤。每个域执行前自动备份。"""
+        args = ["-Action", "apply", "-Name", str(name)]
+        if dry_run:
+            args.append("-DryRun")
+        if force:
+            args.append("-Force")
+        return run_ps("16_profiles.ps1", *args, timeout=1800)
 
     @server.tool()
     def update_block(action: str = "status") -> dict:
@@ -237,11 +332,16 @@ if MCP_AVAILABLE:
     _register_mcp_tools(mcp)
 
 
-def run_ps(script_name, *args):
-    """调用 PowerShell 脚本，返回解析后的 JSON dict。"""
+def run_ps(script_name, *args, timeout=None):
+    """调用 PowerShell 脚本，返回解析后的 JSON dict。
+
+    timeout: 超时秒数。未指定时，已知长任务脚本用 LONG_TASK_TIMEOUT，其余用 DEFAULT_TIMEOUT。
+    """
     script = os.path.join(PS_DIR, script_name)
     if not os.path.exists(script):
         return {"ok": False, "error": f"找不到脚本: {script_name}"}
+    if timeout is None:
+        timeout = LONG_TASK_TIMEOUT if script_name in LONG_TASK_SCRIPTS else DEFAULT_TIMEOUT
     cmd = [
         "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
         "-File", script
@@ -255,7 +355,7 @@ def run_ps(script_name, *args):
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=300,
+            timeout=timeout,
         )
         out = proc.stdout.strip()
         # 提取最后一行 JSON（PowerShell 可能在前输出其他文本）
@@ -264,9 +364,53 @@ def run_ps(script_name, *args):
             return {"ok": False, "error": "无 JSON 输出", "raw": out[-500:], "stderr": proc.stderr[-500:]}
         return json.loads(lines[-1])
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "执行超时（300s）"}
+        return {"ok": False, "error": f"执行超时（{timeout}s）", "script": script_name}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+@app.route("/api/stream/<path:script_name>", methods=["GET", "POST"])
+def api_stream(script_name):
+    """以 SSE 流式返回 PowerShell 脚本的实时输出，供长任务展示进度。
+
+    用途：清理 / 磁盘优化等耗时操作，前端可逐行显示 PowerShell 输出，
+    而不是在整个请求结束前完全没有反馈。参数通过 JSON body 传入，
+    键名即 PowerShell 参数名（如 {"Action": "list"} → -Action list）。
+    """
+    script = os.path.join(PS_DIR, script_name)
+    if not os.path.exists(script):
+        return jsonify({"ok": False, "error": f"找不到脚本: {script_name}"}), 404
+
+    args = []
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        for k, v in data.items():
+            args.append(f"-{k}")
+            args.append(str(v).lower() if isinstance(v, bool) else str(v))
+
+    cmd = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script] + args
+
+    def generate():
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+            )
+            for line in iter(proc.stdout.readline, ""):
+                if line:
+                    yield "data: " + json.dumps({"line": line.rstrip()}, ensure_ascii=False) + "\n\n"
+            proc.stdout.close()
+            code = proc.wait(timeout=LONG_TASK_TIMEOUT)
+            yield "data: " + json.dumps({"done": True, "code": code}, ensure_ascii=False) + "\n\n"
+        except Exception as e:
+            yield "data: " + json.dumps({"done": True, "error": str(e)}, ensure_ascii=False) + "\n\n"
+
+    return Response(stream_with_context(generate()), mimetype="text/event-stream")
 
 
 # ---------------- 页面 ----------------
@@ -304,7 +448,10 @@ def api_services():
 def api_services_apply():
     data = request.get_json(silent=True) or {}
     mode = data.get("mode", "safe")
-    return jsonify(run_ps("03_services.ps1", "-Action", "apply", "-Mode", mode))
+    args = ["-Action", "apply", "-Mode", mode]
+    if data.get("telemetry"):
+        args.append("-Telemetry")
+    return jsonify(run_ps("03_services.ps1", *args))
 
 
 @app.route("/api/services/restore", methods=["POST"])
@@ -440,6 +587,36 @@ def api_network():
     return jsonify(run_ps("08_network.ps1", "-Action", "list"))
 
 
+@app.route("/api/health")
+def api_health():
+    return jsonify(run_ps("15_health.ps1", "-Action", "scan"))
+
+
+@app.route("/api/health/plan")
+def api_health_plan():
+    return jsonify(run_ps("15_health.ps1", "-Action", "plan"))
+
+
+@app.route("/api/health/remediate", methods=["POST"])
+def api_health_remediate():
+    data = request.get_json(silent=True) or {}
+    args = ["-Action", "remediate",
+            "-MaxSeverity", str(data.get("max_severity", "Medium")),
+            "-DnsOption", str(int(data.get("dns_option", 1)))]
+    codes = data.get("issue_code") or data.get("issue_codes") or []
+    if isinstance(codes, str):
+        codes = [c.strip() for c in codes.split(",") if c.strip()]
+    for c in codes:
+        args.append(str(c))
+    if codes:
+        args.insert(3, "-IssueCode")
+    if data.get("what_if"):
+        args.append("-WhatIf")
+    if data.get("force"):
+        args.append("-Force")
+    return jsonify(run_ps("15_health.ps1", *args))
+
+
 @app.route("/api/network/apply", methods=["POST"])
 def api_network_apply():
     data = request.get_json(silent=True) or {}
@@ -471,6 +648,60 @@ def api_backup_restore():
     if f:
         return jsonify(run_ps("09_backup.ps1", "-Action", "restore", "-File", f))
     return jsonify(run_ps("09_backup.ps1", "-Action", "restore"))
+
+
+@app.route("/api/backup/timeline")
+def api_backup_timeline():
+    """优化时间线（只读）"""
+    return jsonify(run_ps("09_backup.ps1", "-Action", "timeline"))
+
+
+@app.route("/api/backup/rollback", methods=["POST"])
+def api_backup_rollback():
+    data = request.get_json(silent=True) or {}
+    args = ["-Action", "rollback"]
+    if data.get("since"):
+        args += ["-Since", str(data.get("since"))]
+    if data.get("last"):
+        args += ["-Last", str(int(data.get("last")))]
+    domains = data.get("domain") or data.get("domains") or []
+    if isinstance(domains, str):
+        domains = [d.strip() for d in domains.split(",") if d.strip()]
+    if domains:
+        args.append("-Domain")
+        args += [str(d) for d in domains]
+    if data.get("file"):
+        args += ["-File", str(data.get("file"))]
+    if data.get("dry_run"):
+        args.append("-DryRun")
+    if data.get("skip_backup"):
+        args.append("-SkipBackup")
+    return jsonify(run_ps("09_backup.ps1", *args))
+
+
+# ---------------- 优化组合包 Profiles ----------------
+@app.route("/api/profile/list")
+def api_profile_list():
+    """列出预设优化组合包"""
+    return jsonify(run_ps("16_profiles.ps1", "-Action", "list"))
+
+
+@app.route("/api/profile/plan")
+def api_profile_plan():
+    """组合包只读预览"""
+    name = request.args.get("name", "")
+    return jsonify(run_ps("16_profiles.ps1", "-Action", "plan", "-Name", str(name)))
+
+
+@app.route("/api/profile/apply", methods=["POST"])
+def api_profile_apply():
+    data = request.get_json(silent=True) or {}
+    args = ["-Action", "apply", "-Name", str(data.get("name", ""))]
+    if data.get("dry_run"):
+        args.append("-DryRun")
+    if data.get("force"):
+        args.append("-Force")
+    return jsonify(run_ps("16_profiles.ps1", *args, timeout=1800))
 
 
 def start_mcp_background(port: int = 5001):

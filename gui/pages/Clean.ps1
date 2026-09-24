@@ -80,30 +80,79 @@
 
     # 执行按钮
     $script:BtnClean = New-Button "开始清理" 20 386 200 44 $Theme.Success 11
+    # 取消按钮：仅在清理进行中可用，解决大目录清理时界面长时间无响应且无法中断的问题
+    $script:BtnCancelClean = New-Button "取消" 240 386 120 44 $Theme.Accent 11
+    $script:BtnCancelClean.Enabled = $false
+    $script:CleanCancel = $false
+    $script:BtnCancelClean.Add_Click({
+        $script:CleanCancel = $true
+        $script:LblCleanProgress.Text = "正在取消，等待当前项目收尾..."
+    })
+    # 进度提示：整体项目进度 [n/m] + 当前项目的百分比
+    $script:LblCleanProgress = New-Label "就绪" 20 438 760 24 $Fonts.Small $Theme.TextDim
+    $script:LblCleanProgress.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+
     $script:BtnClean.Add_Click({
         try {
         $this.Enabled = $false
         $this.Text = "正在清理..."
+        $script:CleanCancel = $false
+        $script:BtnCancelClean.Enabled = $true
+        $script:LblCleanProgress.Text = "准备中..."
         Invoke-UIRefresh
 
         $totalFreed = 0
         $filesDeleted = 0
+        $cancelled = $false
 
-        for ($i = 0; $i -lt $script:CleanItems.Count; $i++) {
-            if ($script:CleanListBox.GetItemChecked($i)) {
-                $item = $script:CleanItems[$i]
-                $before = Get-FolderSize $item.Path
-                if (Test-Path $item.Path) {
-                    Get-ChildItem -Path $item.Path -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                        try { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue; $filesDeleted++ } catch {}
+        # 先统计本次勾选的项目，用于整体进度 [n/m]
+        $checkedIdx = @()
+        for ($k = 0; $k -lt $script:CleanItems.Count; $k++) {
+            if ($script:CleanListBox.GetItemChecked($k)) { $checkedIdx += $k }
+        }
+        $totalItems = $checkedIdx.Count
+        $doneItems = 0
+
+        foreach ($i in $checkedIdx) {
+            if ($script:CleanCancel) { $cancelled = $true; break }
+            $doneItems++
+            $item = $script:CleanItems[$i]
+            $script:LblCleanProgress.Text = "[$doneItems/$totalItems] 正在统计 $($item.Name) ..."
+            Invoke-UIRefresh
+
+            $before = Get-FolderSize $item.Path
+            if (Test-Path $item.Path) {
+                # 先收集条目得到真实总数，才能给出百分比进度（保持原删除行为不变）
+                $entries = @(Get-ChildItem -Path $item.Path -Recurse -Force -ErrorAction SilentlyContinue)
+                $entryTotal = $entries.Count
+                $entryDone = 0
+                foreach ($e in $entries) {
+                    if ($script:CleanCancel) { $cancelled = $true; break }
+                    try { Remove-Item $e.FullName -Recurse -Force -ErrorAction SilentlyContinue; $filesDeleted++ } catch {}
+                    $entryDone++
+                    if ((($entryDone % 50) -eq 0) -or ($entryDone -eq $entryTotal)) {
+                        $pct = if ($entryTotal -gt 0) { [math]::Round(($entryDone / $entryTotal) * 100) } else { 100 }
+                        $script:LblCleanProgress.Text = "[$doneItems/$totalItems] $($item.Name)：$entryDone/$entryTotal（$pct%）"
+                        Invoke-UIRefresh
                     }
-                    $after = Get-FolderSize $item.Path
-                    $freed = $before - $after
-                    $totalFreed += $freed
-                    Write-Log "[清理] $($item.Name): 释放 $([math]::Round($freed/1MB,2)) MB" "SUCCESS"
                 }
+                if ($cancelled) { break }
+                $after = Get-FolderSize $item.Path
+                $freed = $before - $after
+                $totalFreed += $freed
+                Write-Log "[清理] $($item.Name): 释放 $([math]::Round($freed/1MB,2)) MB" "SUCCESS"
             }
             Invoke-UIRefresh
+        }
+
+        $script:BtnCancelClean.Enabled = $false
+
+        if ($cancelled) {
+            $script:LblCleanProgress.Text = "已取消（已删除 $filesDeleted 个文件）"
+            Write-Log "[清理] 用户取消，本次已删除 $filesDeleted 个文件" "WARN"
+            $this.Enabled = $true
+            $this.Text = "开始清理"
+            return
         }
 
         if ($script:ChkRecycle.Checked) {
@@ -129,6 +178,7 @@
         $totalGB = [math]::Round($totalFreed / 1GB, 2)
         $msg = if ($totalGB -ge 1) { "共释放 ${totalGB} GB 空间" } else { "共释放 ${totalMB} MB 空间" }
         Write-Log "清理完成！$msg，删除 $filesDeleted 个文件" "SUCCESS"
+        $script:LblCleanProgress.Text = "清理完成"
 
         $this.Enabled = $true
         $this.Text = "开始清理"
@@ -136,10 +186,13 @@
         [System.Windows.Forms.MessageBox]::Show("清理完成！`n$msg`n删除 $filesDeleted 个文件", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } catch {
             Write-Log "清理出错: $($_.Exception.Message)" "ERROR"
+            $script:BtnCancelClean.Enabled = $false
             $this.Enabled = $true
             $this.Text = "开始清理"
             [System.Windows.Forms.MessageBox]::Show("清理出错: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
     })
     $page.Controls.Add($script:BtnClean)
+    $page.Controls.Add($script:BtnCancelClean)
+    $page.Controls.Add($script:LblCleanProgress)
 }

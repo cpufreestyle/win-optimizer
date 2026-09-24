@@ -24,68 +24,35 @@ function Out-Json {
 
 $ErrorActionPreference = "Stop"
 
-$dnsServers = @{
-    1 = @("1.1.1.1", "1.0.0.1")
-    2 = @("8.8.8.8", "8.8.4.4")
-    3 = @("223.5.5.5", "223.6.6.6")
-    4 = @("114.114.114.114", "114.114.115.115")
-}
+# 复用共享核心库（网络统一实现，与 CLI / GUI 同源）
+$libPath = Join-Path $PSScriptRoot "..\..\lib\Optimize.Core.ps1"
+if (Test-Path $libPath) { . $libPath }
+$backupDir = Join-Path $PSScriptRoot "..\..\backups"
+$backupDir = [System.IO.Path]::GetFullPath($backupDir)
 
 try {
     if ($Action -eq "list") {
         $adapters = @()
-        try {
-            $nets = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Up" }
-            if ($nets) {
-                foreach ($n in $nets) {
-                    $addr = @()
-                    try {
-                        $addr = (Get-DnsClientServerAddress -InterfaceIndex $n.InterfaceIndex -ErrorAction SilentlyContinue | ForEach-Object { $_.ServerAddresses }) -join ', '
-                    } catch {}
-                    $adapters += [PSCustomObject]@{
-                        name = $n.Name
-                        dns = $addr
-                    }
-                }
+        foreach ($n in (Get-ActiveNetAdapters)) {
+            $addr = (@(Get-AdapterDns -IfIndex $n.IfIndex -Name $n.Name)) -join ', '
+            $adapters += [PSCustomObject]@{
+                name = $n.Name
+                dns  = $addr
             }
-        } catch {}
+        }
         Out-Json ([PSCustomObject]@{ ok = $true; adapters = $adapters })
     }
     elseif ($Action -eq "apply") {
-        $log = @()
-        if ($Dns -gt 0 -and $dnsServers.ContainsKey($Dns)) {
-            $servers = $dnsServers[$Dns]
-            try {
-                $nets = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Up" }
-                foreach ($n in $nets) {
-                    try {
-                        Set-DnsClientServerAddress -InterfaceIndex $n.InterfaceIndex -ServerAddresses $servers -ErrorAction Stop
-                        $log += "DNS [$n.Name] -> $($servers -join ', ')"
-                    } catch { $log += "DNS [$n.Name] 失败: $($_.Exception.Message)" }
-                }
-            } catch { $log += "设置 DNS 失败: $($_.Exception.Message)" }
-        } else {
-            $log += "DNS 保持当前设置"
-        }
-
-        if ($Tcp) {
-            try { netsh int tcp set global autotuninglevel=normal 2>&1 | Out-Null; $log += "TCP 自动调优已启用" }
-            catch { $log += "TCP 自动调优失败" }
-        }
-        if ($Rss) {
-            try { Enable-NetAdapterRss -Name (Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Up" }).Name -ErrorAction SilentlyContinue; $log += "RSS 接收端缩放已启用" }
-            catch { $log += "RSS 启用失败" }
-        }
-        if ($Rsc) {
-            try { Enable-NetAdapterRsc -Name (Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Up" }).Name -ErrorAction SilentlyContinue; $log += "RSC 接收段合并已启用" }
-            catch { $log += "RSC 启用失败" }
-        }
-        if ($DnsCache) {
-            try { Clear-DnsClientCache -ErrorAction SilentlyContinue; $log += "DNS 缓存已刷新" }
-            catch { $log += "DNS 缓存刷新失败" }
-        }
-
-        Out-Json ([PSCustomObject]@{ ok = $true; log = $log })
+        # 统一走共享库：先备份再应用。
+        # 此前 WebUI 改 DNS 完全没有备份（改坏无法恢复），且把活动适配器数组直接传给
+        # Enable-NetAdapterRss -Name（多网卡时行为不可预期）——一并修复。
+        $r = Invoke-NetworkOptimization -BackupDir $backupDir -DnsOption $Dns `
+                                        -Tcp $Tcp -Rss $Rss -Rsc $Rsc -DnsCache $DnsCache
+        $log = @($r.details)
+        # error 字段此前从未回传：无活动网卡时前端只会收到空日志
+        if ($r.error) { $log += $r.error }
+        if ($r.backup) { $log += "备份: $($r.backup)" }
+        Out-Json ([PSCustomObject]@{ ok = $r.ok; log = $log; backup = $r.backup })
     }
 } catch {
     Out-Json ([PSCustomObject]@{ ok = $false; error = $_.Exception.Message })

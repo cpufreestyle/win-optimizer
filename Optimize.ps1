@@ -1,4 +1,4 @@
-﻿﻿<#
+﻿<#
 .SYNOPSIS
     7代CPU老电脑 Windows 系统优化工具
 .DESCRIPTION
@@ -32,6 +32,12 @@ $script:Version     = Get-OptVersion
 
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
+    # 优先复用共享库实现（AppendAllText 单次写入，高频调用比 Add-Content 更省 IO）
+    if (Get-Command Write-OptLog -ErrorAction SilentlyContinue) {
+        Write-OptLog -Message $Message -Level $Level -Path $LogFile
+        return
+    }
+    # 共享库不可用时的等价兜底
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $line = "[$timestamp] [$Level] $Message"
     Add-Content -Path $LogFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
@@ -55,10 +61,17 @@ function Invoke-ScriptModule {
     $scriptPath = Join-Path $ScriptsDir $ScriptName
     if (Test-Path $scriptPath) {
         Write-Log "正在执行模块: $ScriptName ..."
-        & $scriptPath
-        Write-Log "模块 $ScriptName 执行完成。" "SUCCESS"
+        try {
+            & $scriptPath
+            Write-Log "模块 $ScriptName 执行完成。" "SUCCESS"
+            return $true
+        } catch {
+            Write-Log "模块 $ScriptName 执行失败: $($_.Exception.Message)" "ERROR"
+            return $false
+        }
     } else {
         Write-Log "找不到模块文件: $scriptPath" "ERROR"
+        return $false
     }
     Write-Host ""
     if (-not $NoPause) { Read-Host "按回车键返回主菜单" }
@@ -117,6 +130,8 @@ function Show-Menu {
         Write-Host "   [12] 隐藏指定更新         — 把指定升级藏起来不再出现"
         Write-Host "   [13] Windows 可选功能     — 列出并启用微软默认未开启的功能"
         Write-Host "   [14] 恢复自动更新         — 恢复 Windows Update 服务与计划任务"
+        Write-Host "   [15] 一键体检（只读）      — 体检分 + 问题清单，可优化前后对比"
+        Write-Host "   [16] 优化组合包          — 老机均衡/游戏/省电/最小干预，一键到位"
         Write-Host ""
         Write-Host " [工具]" -ForegroundColor Yellow
         Write-Host "   [B]  备份当前系统设置"
@@ -142,6 +157,8 @@ function Show-Menu {
             "12" { Invoke-ScriptModule "12-HideUpdates.ps1" }
             "13" { Invoke-ScriptModule "13-WindowsFeatures.ps1" }
             "14" { Invoke-ScriptModule "14-RestoreAutoUpdate.ps1" }
+            "15" { Invoke-ScriptModule "15-HealthCheck.ps1" }
+            "16" { Invoke-ScriptModule "16-Profiles.ps1" }
             { $_ -eq "B" -or $_ -eq "b" } { Invoke-ScriptModule "09-BackupRestore.ps1" }
             { $_ -eq "R" -or $_ -eq "r" } { Invoke-ScriptModule "09-BackupRestore.ps1" }
             { $_ -eq "Q" -or $_ -eq "q" } { Write-Host "感谢使用，再见！" -ForegroundColor Green; return }
@@ -175,15 +192,23 @@ function Invoke-FullOptimization {
 
     $total = $modules.Count
     $current = 0
+    $failed = @()
     foreach ($mod in $modules) {
         $current++
         Write-Host ""
         Write-Host "[$current/$total] " -NoNewline -ForegroundColor Yellow
-        Invoke-ScriptModule $mod -NoPause
+        $ok = Invoke-ScriptModule $mod -NoPause
+        if (-not $ok) { $failed += $mod }
     }
 
     Write-Host ""
-    Write-Log "一键全面优化完成！建议重启电脑使所有更改生效。" "SUCCESS"
+    if ($failed.Count -gt 0) {
+        Write-Log ("一键全面优化完成，但有 {0} 个模块执行失败: {1}" -f $failed.Count, ($failed -join ', ')) "WARN"
+        Write-Host ("以下模块执行失败: " + ($failed -join ', ')) -ForegroundColor Red
+        Write-Host "失败详情见 optimize.log" -ForegroundColor Yellow
+    } else {
+        Write-Log "一键全面优化完成！建议重启电脑使所有更改生效。" "SUCCESS"
+    }
     Read-Host "按回车键返回主菜单"
 }
 
@@ -199,7 +224,7 @@ if (-not (Test-Administrator)) {
     Write-Host "  然后执行: cd $ProjectRoot; .\Optimize.ps1" -ForegroundColor Red
     Write-Host "================================================" -ForegroundColor Red
     Write-Host ""
-    pause
+    Read-Host "按回车键退出"
     exit 1
 }
 
