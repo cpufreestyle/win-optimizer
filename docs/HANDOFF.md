@@ -206,6 +206,10 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 18. **每次 exec/命令行的 PowerShell 是全新会话**：上一条命令里的 `$py`、`$code` 等变量下一条命令里取不到
     （取到的是 `$null`）。写临时脚本再执行时，「定义变量 + 使用变量」必须在同一条命令里完成，
     否则会写出 0 字节文件，然后静默跑出一个空脚本。
+19. **调用 lib 函数前必须先 dot-source lib**：`webui/ps/02_clean.ps1` 曾把 `Get-CleanTargets -Web` 写在 `if (Test-Path $libPath) { . $libPath }` 之前，
+    运行时 `Get-CleanTargets` 未定义、`$ErrorActionPreference='Stop'` 把它变成终止错误，
+    而 `run_ps` 只会把 stdout/stderr 拼成 JSON，最终表现为 `/api/clean/scan` 返回 `ok:false` + “无效的 JSON”。
+    固化顺序：dot-source → `Get-Command` 存在性校验（不足则输出 JSON 锟底）→ 再调用 lib 函数。
 
 ---
 
@@ -228,7 +232,9 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 - ~~**CLI 的 CompactOS 默认无条件执行**~~ → **已于 2026-09-18 收口**（见 §3.3）：三端统一为「显式开关、默认关闭」，默认来源 `config` 的 `disk.compact_os_default`。
 - **GUI 体检页 `gui/pages/Health.ps1` 仅做了静态校验（语法 + BOM + 接入一致性），未真机点验**，上线前需在真机确认渲染。
 - **GUI 首页 `gui/pages/Dashboard.ps1` 的「优化组合包」卡片同理仅做了静态校验**（语法 / BOM / CRLF / 引用完整性），InputBox 与 MessageBox 的交互路径需真机点验。
-- 既有缺陷（非本轮引入，待独立修）：`webui/ps/02_clean.ps1` 在第 25 行调用 `Get-CleanTargets -Web`，但第 29 行才 dot-source lib，导致 `/api/clean/scan` 报 `Get-CleanTargets` 未找到。
+- ~~既有缺陷：`webui/ps/02_clean.ps1` 在 dot-source lib 之前就调用 `Get-CleanTargets -Web`，导致 `/api/clean/scan` 报命令未找到~~ → **已修复**（2026-09-24）：
+  lib dot-source 提前到 `Get-CleanTargets` 之前，并按 `16_profiles.ps1` 的模式补了一个“未找到共享核心库”的 JSON 兜底（而不是把 PowerShell 报错当成 JSON）。
+  回归：`/api/clean/scan` 返回 `ok:true` + 6 个清理项（含预估大小）。
 - ~~PR #5 / #6 合并顺序与潜在冲突~~ → 已在本集成分支按 `#5 → #6` 顺序合并，**零冲突**；剩最后一步是你在 GitHub 点 Merge（见 §2）。
 
 ---

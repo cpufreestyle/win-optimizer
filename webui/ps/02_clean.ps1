@@ -10,7 +10,6 @@ param(
     [string]$Items = "all"   # 逗号分隔索引，或 "all"
 )
 
-
 # 统一 stdout 为 UTF-8（让 Python subprocess.run 按 utf-8 解码时不乱码；与 OptimizeGUI 同款）
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 function Out-Json {
@@ -20,13 +19,18 @@ function Out-Json {
 
 $ErrorActionPreference = "Stop"
 
+# 复用共享核心库（Get-CleanTargets / Get-FolderSize / Remove-FolderContent）。
+# 必须先 dot-source：下面第 26 行就要调用 lib 里的 Get-CleanTargets。
+$libPath = Join-Path $PSScriptRoot "..\..\lib\Optimize.Core.ps1"
+if (Test-Path $libPath) { . $libPath }
+if (-not (Get-Command Get-CleanTargets -ErrorAction SilentlyContinue)) {
+    Out-Json ([PSCustomObject]@{ ok = $false; error = "未找到共享核心库 lib\Optimize.Core.ps1" })
+    exit
+}
+
 # 清理目标清单统一来自 config/optimization.json（经核心库 Get-CleanTargets 解析），
 # 与 CLI(scripts/02-CleanTemp.ps1) 共用同一份数据源，避免两端重复维护。
 $cleanDefs = Get-CleanTargets -Web
-
-# 复用共享核心库（Get-FolderSize 返回字节；Remove-FolderContent 返回删除条目数）
-$libPath = Join-Path $PSScriptRoot "..\..\lib\Optimize.Core.ps1"
-if (Test-Path $libPath) { . $libPath }
 
 # MB 版本，基于共享库的 Get-FolderSize 换算
 function Get-FolderSizeMB {
