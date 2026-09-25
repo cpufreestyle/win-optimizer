@@ -25,7 +25,8 @@
 > 开机性能基线 bench（§3.12，PR #18）。Roadmap 的 P0 / P1 / P2 全部收口。
 > 当前 `main` = v3.8.0 发布态；本地 `main` 与远端一致（`git ls-remote` 核对）。
 
-> ✅ **2026-09-26**：P3-1 智能建议一键应用闭环已合并（PR #21）并随 v3.9.0 发布（见 §3.13）。> 2026-09-18 更新：本轮已按 §8 的建议收口，详见文末 §9。
+> ✅ **2026-09-26**：P3-1 智能建议一键应用闭环已合并（PR #21）并随 v3.9.0 发布（见 §3.13）。
+> ✅ **2026-09-26**：P4-1 启动项建议签名厂商否决已落地（见 §3.14），当前 `main` 工作区为 v3.10.0 发布态。
 
 > ✅ **2026-09-23 复核（实测，已推翻「main 严重落后」的旧结论）**：
 > - `git ls-remote origin refs/heads/main` 返回 `7cb9d17`，与本地 `main` **完全一致**——本地 `main` 并不落后，无需先同步。
@@ -275,6 +276,32 @@ WebUI 折线只在采样点 ≥2 且 >0 时渲染，老用户升级后第一篇�
 测试：新增 16 个用例（应用闭环 / WhatIf 零副作用 / 还原点懒创建 / 建议消失安全失败 /
 部分失败上报 / 依赖护栏默认跳过与 -Force 覆盖 / 开机耗时结构与趋势兼容），全量 **216/216** 通过。
 CLI 03/15、WebUI `tips`、`apply-tips -WhatIf` 与首页渲染均实测通过。
+---
+
+### 3.14 P4-1 启动项建议「签名厂商否决」（2026-09-26）
+
+P3-1 把「智能建议」变成一键可执行后，误关代价从「读一遍」变成「点一下」；而名字黑名单
+（`Get-StartupRiskScore` 的关键词匹配）管不住改名 / 换目录 / 伪装名的系统组件与驱动。本节补上
+最后一道准确性护栏：**数字签名**。
+
+| 层 | 落点 | 说明 |
+|----|------|------|
+| lib | `Get-FilePublisher` | 取目标文件数字签名证书的 CN（`Get-AuthenticodeSignature`，PS2 可用）；任何失败返回空串（按未知处理），绝不抛异常 |
+| lib | `Get-TrustedPublisherPatterns` / `Test-TrustedPublisher` | 受保护厂商特征列表，唯一真源 = `config/optimization.json` 的 `smart.trusted_publishers`（子串匹配、大小写不敏感），缺失回退内置默认（Microsoft/Intel/NVIDIA/AMD/Realtek/Synaptics/Dell/HP/Lenovo） |
+| lib | `Get-SmartRecommendations` | 启动项打分前加否决：目标存在且签名命中受保护厂商 → 不进推荐，记入返回值新增的 `vetoed`（name/command/path/publisher/reason）；推荐项新增 `publisher` 字段 |
+| lib | `Format-SmartRecommendations` | 统一渲染「签名:」行与「已保护」清单；CLI / GUI 零改动即得 |
+| WebUI | `15_health.ps1 -Action tips` 带出 `vetoed`；`templates/index.html` 建议表下方展示被保护项与原因；`scan` 内嵌 `tips` 同步生效 | `app.py` 透传无需改动 |
+
+**边界**：
+- 「未知」不等于「信任」：未签名 / 取不到签名的启动项**不**否决，仍按既有打分规则参与推荐（不提高虚警）。
+- 只影响「智能建议」链路（含 P3-1 一键应用 `Invoke-SmartRecommendations`，天然继承）；
+  菜单 [4] 手动禁用启动项不受影响，高级用户仍可自行决定。
+- 取签名为本地只读操作，无网络；每个候选启动项最多调用一次，失败静默降级为空串。
+
+测试：新增 10 个用例（CN 解析与 `CN=` 前缀剥离 / 空路径与未签名 / 异常吞噬 / 厂商匹配大小写 /
+config 回退 / 厂商签名项被否决并带原因 / 第三方签名项照常推荐且带 publisher / 未签名不否决 /
+一键应用不碰签名项 / 「已保护」文案渲染），全量 **226/226** 通过。
+
 ---
 
 ## 4. 三端文件地图（按域）
