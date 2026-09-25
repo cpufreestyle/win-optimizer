@@ -68,6 +68,24 @@
     $script:TxtHealthRemediation.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
     $page.Controls.Add($script:TxtHealthRemediation)
 
+    # 智能降级建议（P2）：体检只说「哪里有问题」，这里指出「先动哪个最划算」
+    $lblTips = New-Label "智能建议（先动哪个最划算）" 20 772 400 24 $Fonts.Sub $Theme.Accent
+    $page.Controls.Add($lblTips)
+
+    $script:TxtHealthTips = New-Object System.Windows.Forms.TextBox
+    $script:TxtHealthTips.Location = New-Object System.Drawing.Point(20, 802)
+    $script:TxtHealthTips.Size = New-Object System.Drawing.Size(760, 150)
+    $script:TxtHealthTips.Font = $Fonts.Body
+    $script:TxtHealthTips.ForeColor = $Theme.TextMain
+    $script:TxtHealthTips.BackColor = $Theme.BgCard
+    $script:TxtHealthTips.Multiline = $true
+    $script:TxtHealthTips.ReadOnly = $true
+    $script:TxtHealthTips.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
+    $script:TxtHealthTips.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+    $script:TxtHealthTips.Text = "体检后这里会列出最值得禁用的启动项、最值得清理的目录。"
+    $script:TxtHealthTips.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+    $page.Controls.Add($script:TxtHealthTips)
+
     # 执行按钮
     $script:BtnHealthScan = New-Button "开始体检" 20 716 150 40 $Theme.Success 11
     $script:BtnHealthScan.Add_Click({
@@ -79,6 +97,7 @@
             $script:TxtHealthMetrics.Text = ""
             $script:TxtHealthIssues.Text = ""
             $script:TxtHealthRemediation.Text = ""
+            $script:TxtHealthTips.Text = ""
             Invoke-UIRefresh
 
             # 先取上一次报告（在保存本次之前），用于对比
@@ -150,6 +169,14 @@
                 $pl += "说明: 每步执行前会自动备份；High 级高危项不会自动执行。"
             }
             $script:TxtHealthRemediation.Lines = $pl
+
+            # --- 智能降级建议（只读；复用本次报告，不重复扫盘）---
+            $tipLines = @(Format-SmartRecommendations (Get-SmartRecommendations -Report $r -Top 3))
+            if ($tipLines.Count -eq 0) {
+                $script:TxtHealthTips.Lines = @("当前体检未命中需要优先处理的项目。")
+            } else {
+                $script:TxtHealthTips.Lines = $tipLines
+            }
 
             # --- 与上次对比 ---
             $script:LblHealthCompare.Text = if ($prev) {

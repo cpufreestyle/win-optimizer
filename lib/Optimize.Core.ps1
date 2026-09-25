@@ -3630,3 +3630,230 @@ function New-SystemRestorePoint {
     if ($cpError) { $res.error = ($res.error + '；Checkpoint-Computer: ' + $cpError) }
     return $res
 }
+
+# ============================================================
+#  智能降级建议（P2）
+#  体检回答「哪里有问题」，这里进一步回答「先动哪个最划算」：
+#    - 启动项  ：按「值不值得关」打分取前 N（僵尸项 / 更新程序 / 云同步 / 后台助手优先）
+#    - 清理目标：按可释放体积排序取前 N
+#  全程只读。打分规则集中在 Get-StartupRiskScore 一个纯函数里，
+#  三端只负责渲染 reason / hint，文案不会各写一套。
+# ============================================================
+
+# 从启动项的 Value 里取出目标可执行 / 快捷方式路径。
+# 只用于「目标还在不在」判断与展示，不做任何写操作。
+function Get-StartupTargetPath {
+    param([object]$Item)
+    if (-not $Item) { return '' }
+    $v = [string]$Item.Value
+    if ([string]::IsNullOrWhiteSpace($v)) { return '' }
+    $v = $v.Trim()
+    # 先展开环境变量，否则 %SystemRoot%\system32\xxx.exe 会被误判成不存在
+    try { $v = [Environment]::ExpandEnvironmentVariables($v) } catch { }
+    if ($v.StartsWith('"')) {
+        $end = $v.IndexOf('"', 1)
+        if ($end -gt 1) { return $v.Substring(1, $end - 1) }
+        return $v.Substring(1)
+    }
+    $m = [regex]::Match($v, '^.*?\.(exe|lnk|bat|cmd|vbs|com)', 'IgnoreCase')
+    if ($m.Success) { return $m.Value }
+    return ($v -split '\s+')[0]
+}
+
+# 单个启动项「值不值得禁用」打分。
+#   Item          至少含 Name / Value；Scope 可选（RunOnce 会降权）
+#   TargetExists  目标文件是否还存在；僵尸启动项额外加分
+# 返回 @{ score; reason; tags }；score 为负代表「不建议动」。
+# 纯函数：不碰注册表与文件系统，便于单测，也保证三端结论一致。
+function Get-StartupRiskScore {
+    param([object]$Item, [bool]$TargetExists = $true)
+    if (-not $Item) { return @{ score = -1000; reason = '无效启动项'; tags = @('none') } }
+
+    $name  = [string]$Item.Name
+    $value = [string]$Item.Value
+    $text  = ($name + ' ' + $value).ToLowerInvariant()
+    $scope = ''
+    if ($Item.PSObject.Properties.Name -contains 'Scope') { $scope = [string]$Item.Scope }
+
+    # 1) 系统组件 / 硬件驱动 / 安全软件：一律不碰（宁可漏推荐，不可错关）
+    $essential = 'windows|microsoft|defender|securityhealth|securitycenter|ctfmon|sihclient|rundll32|igfx|igfxem|intel|nvidia|amd|radeon|realtek|synaptics|touchpad|elan|audio|sound|bluetooth|wlan|wifi|wireless|ethernet|driver|font'
+    if ($text -match $essential) {
+        return @{ score = -1000; reason = '系统或硬件相关，不建议禁用'; tags = @('essential') }
+    }
+
+    $score = 0
+    $tags  = @()
+
+    # 2) 僵尸启动项：目标文件已经没了，禁用零风险还省一次开机解析
+    if (-not $TargetExists) { $score += 40; $tags += 'dead' }
+
+    # 3) 按「开机自启的收益」排序：越不需要常驻的排越前
+    if ($text -match 'update|updater|autoupdate') { $score += 30; $tags += 'update'    }
+    if ($text -match 'sync|onedrive|dropbox|clouddrive|baidupan|nas') { $score += 25; $tags += 'sync' }
+    if ($text -match 'helper|agent|assistant|tray|report|crash|feedback|stat|telemetr|monitor|guard') { $score += 20; $tags += 'background' }
+    if ($text -match 'launcher|preload|faststart|quickstart|accelerat') { $score += 15; $tags += 'launcher' }
+    if ($text -match 'installer|setup|uninstall') { $score += 10; $tags += 'installer' }
+
+    # 4) 装在用户目录（AppData 等）的程序与系统无关，禁用更安全
+    if ($text -match 'appdata|\\users\\') { $score += 10; $tags += 'userdir' }
+
+    # 5) RunOnce 是一次性任务，本就该跑完即退，禁用它没意义
+    if ($scope -match 'RunOnce') { $score -= 20; $tags += 'once' }
+
+    if ($tags.Count -eq 0) {
+        return @{ score = 5; reason = '第三方程序自启，收益一般'; tags = @('thirdparty') }
+    }
+
+    $label = @{
+        dead       = '目标文件已不存在，禁用零风险'
+        update     = '更新程序，只在需要时才该运行'
+        sync       = '云同步客户端，可改为用时手动启动'
+        background = '常驻后台助手，白占内存与 CPU'
+        launcher   = '开机预加载/加速器，多数反而拖慢开机'
+        installer  = '安装卸载组件，无需开机自启'
+        userdir    = '装在用户目录，与系统组件无关'
+        once       = '一次性任务，本就该跑完即退'
+    }
+    $reasons = @()
+    foreach ($t in $tags) { if ($label.ContainsKey($t)) { $reasons += $label[$t] } }
+    return @{ score = $score; reason = ($reasons -join '；'); tags = $tags }
+}
+
+# 生成智能降级建议（只读）。三端共用同一份结论与文案。
+#   Report          体检报告；省略时只按 -IncludeStartup / -IncludeClean 决定给哪类建议
+#                   默认只有报告里出现 memory.low / startup.many 才推荐启动项，
+#                   出现 disk.space / disk.cleanable 才推荐清理目标——没病不瞎建议。
+#   StartupItems    外部注入启动项（测试用；省略时自动读取）
+#   Top             每类最多返回几条，默认 3
+#   SkipCleanMeasure 不复用/不重新统计可清理体积（调用方已measure时提速）
+# 返回 @{ ok; startup; clean }，两类元素都带 rank / reason / hint。
+function Get-SmartRecommendations {
+    param(
+        [object]$Report,
+        [array]$StartupItems,
+        [int]$Top = 3,
+        [switch]$IncludeStartup,
+        [switch]$IncludeClean,
+        [switch]$SkipCleanMeasure
+    )
+    if ($Top -lt 1) { $Top = 1 }
+
+    $ids = @()
+    if ($Report) { foreach ($i in @($Report.issues)) { $ids += [string]$i.id } }
+    $wantStartup = ($IncludeStartup -or ($ids -contains 'memory.low') -or ($ids -contains 'startup.many'))
+    $wantClean   = ($IncludeClean   -or ($ids -contains 'disk.space')   -or ($ids -contains 'disk.cleanable'))
+
+    # --- 启动项建议 ---
+    $recStartup = @()
+    if ($wantStartup) {
+        $items = @()
+        # 注意不能写成 if ($StartupItems)：空数组在 PowerShell 里求值为 $false，
+        # 会把显式传入的空清单误判成「没传」而去读真实注册表。
+        if ($null -ne $StartupItems) { $items = @($StartupItems) } else { $items = @(Get-StartupItems) }
+        $scored = @()
+        foreach ($it in $items) {
+            $target = Get-StartupTargetPath -Item $it
+            $exists = $false
+            if ($target) { try { $exists = Test-Path -LiteralPath $target -ErrorAction Stop } catch { $exists = $false } }
+            $sc = Get-StartupRiskScore -Item $it -TargetExists:$exists
+            if ($sc.score -le 0) { continue }
+            $itemIndex = 0
+            if ($it.PSObject.Properties.Name -contains 'Index') { $itemIndex = [int]$it.Index }
+            $scored += [PSCustomObject]@{
+                kind    = 'startup'
+                name    = [string]$it.Name
+                command = [string]$it.Value
+                scope   = $(if ($it.PSObject.Properties.Name -contains 'Scope')  { [string]$it.Scope }  else { '' })
+                source  = $(if ($it.PSObject.Properties.Name -contains 'Source') { [string]$it.Source } else { '' })
+                index   = $itemIndex
+                path    = $target
+                exists  = $exists
+                score   = [int]$sc.score
+                reason  = [string]$sc.reason
+                hint    = '菜单 [4] 启动项优化：按编号单独禁用，改前会自动备份'
+            }
+        }
+        $n = 0
+        foreach ($s in ($scored | Sort-Object `
+            @{Expression = { $_.score }; Descending = $true}, `
+            @{Expression = { $_.index }; Descending = $false})) {
+            $n++
+            $s | Add-Member -NotePropertyName rank -NotePropertyValue $n -Force
+            $recStartup += $s
+            if ($n -ge $Top) { break }
+        }
+    }
+
+    # --- 清理目标建议 ---
+    $recClean = @()
+    if ($wantClean) {
+        $measured = @()
+        # 优先复用体检已经量好的体积：同一轮里不再扫一遍盘
+        $reused = $false
+        if ($Report -and ($Report.PSObject.Properties.Name -contains 'metrics')) {
+            $mc = @()
+            if ($Report.metrics.PSObject.Properties.Name -contains 'cleanTargets') {
+                $mc = @($Report.metrics.cleanTargets)
+            }
+            if ($mc.Count -gt 0) {
+                $reused = $true
+                foreach ($t in @(Get-CleanTargets)) {
+                    $hit = @($mc | Where-Object { $_.name -eq $t.name })[0]
+                    if ($hit) {
+                        $measured += [PSCustomObject]@{ key = $t.key; name = $t.name; path = $t.path; mb = [double]$hit.mb }
+                    }
+                }
+            }
+        }
+        if (-not $reused -and -not $SkipCleanMeasure) {
+            foreach ($t in @(Get-CleanTargets)) {
+                $b = Get-FolderSize $t.path
+                if ($b -gt 0) { $measured += [PSCustomObject]@{ key = $t.key; name = $t.name; path = $t.path; mb = [math]::Round($b / 1MB, 1) } }
+            }
+        }
+        $totalMB = 0.0
+        foreach ($m in $measured) { $totalMB += [double]$m.mb }
+        $n = 0
+        foreach ($m in ($measured | Sort-Object @{Expression = { [double]$_.mb }; Descending = $true})) {
+            $n++
+            $pct = if ($totalMB -gt 0) { [math]::Round([double]$m.mb / $totalMB * 100, 0) } else { 0 }
+            $recClean += [PSCustomObject]@{
+                kind   = 'clean'
+                rank   = $n
+                key    = [string]$m.key
+                name   = [string]$m.name
+                path   = [string]$m.path
+                mb     = [double]$m.mb
+                pct    = [int]$pct
+                reason = ("可释放 {0} MB，约占当前可清理总量的 {1}%" -f $m.mb, $pct)
+                hint   = '菜单 [2] 临时文件清理：勾选对应目标后清理'
+            }
+            if ($n -ge $Top) { break }
+        }
+    }
+
+    return [PSCustomObject]@{
+        ok      = $true
+        startup = @($recStartup)
+        clean   = @($recClean)
+    }
+}
+
+# 把智能建议渲染成纯文本行（CLI / GUI 托盘提示共用，避免两边文案不一致）
+function Format-SmartRecommendations {
+    param([object]$Tips)
+    $lines = @()
+    if (-not $Tips) { return $lines }
+    foreach ($s in @($Tips.startup)) {
+        $lines += ("  {0}. [启动项] {1}" -f $s.rank, $s.name)
+        $lines += ("        {0}" -f $s.reason)
+        $lines += ("        命令: {0}（{1}）" -f $s.command, $s.scope)
+        $lines += ("        {0}" -f $s.hint)
+    }
+    foreach ($c in @($Tips.clean)) {
+        $lines += ("  {0}. [清理] {1} —— {2}" -f $c.rank, $c.name, $c.reason)
+        $lines += ("        路径: {0}" -f $c.path)
+        $lines += ("        {0}" -f $c.hint)
+    }
+    return $lines
+}

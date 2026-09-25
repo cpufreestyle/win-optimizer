@@ -2312,3 +2312,167 @@ Describe 'PowerShell source hygiene - string delimiters and returned object type
         $badTime.error | Should -Match 'HH:mm'
     }
 }
+
+# ============================================================
+#  P2 智能降级建议：启动项打分 / 清理目标排序 / 报告门控
+# ============================================================
+Describe 'Optimize.Core smart recommendations (P2, shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+
+    It 'Get-StartupTargetPath handles quoted, argumented and env-var commands' {
+        (Get-StartupTargetPath -Item ([PSCustomObject]@{ Name='a'; Value='"C:\Program Files\A B\app.exe" --flag' })) | Should -Be 'C:\Program Files\A B\app.exe'
+        (Get-StartupTargetPath -Item ([PSCustomObject]@{ Name='a'; Value='C:\Windows\System32\notepad.exe foo' }))       | Should -Be 'C:\Windows\System32\notepad.exe'
+        (Get-StartupTargetPath -Item ([PSCustomObject]@{ Name='a'; Value='%SystemRoot%\system32\wbem\wmiprvse.exe' }))     | Should -Match 'wbem\\wmiprvse\.exe$'
+        (Get-StartupTargetPath -Item ([PSCustomObject]@{ Name='a'; Value='C:\tools\run.cmd /x' }))                        | Should -Be 'C:\tools\run.cmd'
+        (Get-StartupTargetPath -Item ([PSCustomObject]@{ Name='a'; Value='' }))                                            | Should -Be ''
+    }
+
+    It 'Get-StartupRiskScore never recommends system / hardware essentials' {
+        foreach ($pair in @(
+            @{ N='SecurityHealth'; V='C:\Windows\System32\SecurityHealthSystray.exe' },
+            @{ N='RealtekAudio';  V='C:\Windows\System32\RtkAudUService.exe' },
+            @{ N='IgfxTray';      V='C:\Windows\System32\igfxEM.exe' },
+            @{ N='IntelTBT';      V='C:\Program Files\Intel\Thunderbolt\ThunderboltControlCenter.exe' }
+        )) {
+            $r = Get-StartupRiskScore -Item ([PSCustomObject]@{ Name=$pair.N; Value=$pair.V })
+            $r.score | Should -BeLessThan 0
+            $r.reason | Should -Match '不建议禁用'
+            $r.tags | Should -Contain 'essential'
+        }
+    }
+
+    It 'Get-StartupRiskScore ranks updaters above plain third-party entries' {
+        $updater = Get-StartupRiskScore -Item ([PSCustomObject]@{ Name='GhostUpdater'; Value='"C:\Program Files\Ghost\GhostUpdater.exe" /silent' })
+        $plain   = Get-StartupRiskScore -Item ([PSCustomObject]@{ Name='SomeApp';      Value='C:\Program Files\SomeApp\SomeApp.exe' })
+        $plain.score   | Should -Be 5
+        $updater.score | Should -BeGreaterThan $plain.score
+        $updater.tags  | Should -Contain 'update'
+    }
+
+    It 'Get-StartupRiskScore flags missing targets as zero-risk to disable' {
+        $dead = Get-StartupRiskScore -Item ([PSCustomObject]@{ Name='SunloginClient'; Value='"d:\gone\SunloginClient.exe"' }) -TargetExists:$false
+        $live = Get-StartupRiskScore -Item ([PSCustomObject]@{ Name='SunloginClient'; Value='"d:\gone\SunloginClient.exe"' }) -TargetExists:$true
+        $dead.tags  | Should -Contain 'dead'
+        $dead.reason | Should -Match '目标文件已不存在'
+        $dead.score | Should -BeGreaterThan $live.score
+    }
+
+    It 'Get-StartupRiskScore pushes sync / background / userdir entries up' {
+        $sync = Get-StartupRiskScore -Item ([PSCustomObject]@{ Name='OneDriveSync'; Value='C:\Users\me\AppData\Local\SomeVendor\sync\SyncAgent.exe' })
+        $sync.tags  | Should -Contain 'sync'
+        $sync.tags  | Should -Contain 'background'
+        $sync.tags  | Should -Contain 'userdir'
+        $sync.score | Should -BeGreaterThan 30
+    }
+
+    It 'Get-StartupRiskScore demotes one-shot RunOnce entries' {
+        $base  = [PSCustomObject]@{ Name='ChromeUpdate'; Value='C:\Users\me\AppData\Local\Chrome\updater.exe' }
+        $once  = Get-StartupRiskScore -Item ([PSCustomObject]@{ Name=$base.Name; Value=$base.Value; Scope='RunOnce 当前用户' }) -TargetExists:$false
+        $plain = Get-StartupRiskScore -Item $base -TargetExists:$false
+        $once.tags | Should -Contain 'once'
+        # 同一个僵尸更新项：RunOnce 应比普通 Run 低 20 分
+        ($once.score - $plain.score) | Should -Be -20
+    }
+
+    It 'Get-SmartRecommendations honours Top and ranks by score' {
+        $items = @(
+            [PSCustomObject]@{ Name='ZedUpdater';    Value='C:\Users\me\AppData\Local\Zed\ZedUpdater.exe'; Scope='当前用户'; Source='注册表'; Index=1 }
+            [PSCustomObject]@{ Name='GhostSync';     Value='"C:\gone\GhostSync.exe"';                       Scope='所有用户'; Source='注册表'; Index=2 }
+            [PSCustomObject]@{ Name='PlainApp';      Value='C:\Program Files\Plain\PlainApp.exe';           Scope='当前用户'; Source='注册表'; Index=3 }
+            [PSCustomObject]@{ Name='DefenderTray';  Value='C:\Windows\System32\SecurityHealthSystray.exe'; Scope='所有用户'; Source='注册表'; Index=4 }
+        )
+        $tips = Get-SmartRecommendations -StartupItems $items -Top 2 -IncludeStartup
+        $tips.ok | Should -BeTrue
+        @($tips.startup).Count | Should -Be 2
+        @($tips.clean).Count   | Should -Be 0
+        $tips.startup[0].rank  | Should -Be 1
+        $tips.startup[1].rank  | Should -Be 2
+        $tips.startup[0].score | Should -BeGreaterThan $tips.startup[1].score
+        # 两条目标都不存在：ZedUpdater=僵尸+更新+用户目录(80) > GhostSync=僵尸+云同步(65)
+        $tips.startup[0].name  | Should -Be 'ZedUpdater'
+        $tips.startup[0].score | Should -Be 80
+        $tips.startup[1].score | Should -Be 65
+        foreach ($s in @($tips.startup)) {
+            @($s.PSObject.Properties.Name) | Should -Contain 'kind'
+            @($s.PSObject.Properties.Name) | Should -Contain 'reason'
+            @($s.PSObject.Properties.Name) | Should -Contain 'hint'
+            $s.kind | Should -Be 'startup'
+            $s.reason | Should -Not -BeNullOrEmpty
+            $s.hint   | Should -Not -BeNullOrEmpty
+        }
+        # Defender 绝不出现在建议里
+        @($tips.startup | Where-Object { $_.name -eq 'DefenderTray' }).Count | Should -Be 0
+    }
+
+    It 'Get-SmartRecommendations stays quiet when the report has no trigger issue' {
+        $report = [PSCustomObject]@{
+            issues = @([PSCustomObject]@{ id='network.dns.Wi-Fi'; severity='Low'; title='x' })
+        }
+        $tips = Get-SmartRecommendations -Report $report -StartupItems @()
+        @($tips.startup).Count | Should -Be 0
+        @($tips.clean).Count   | Should -Be 0
+    }
+
+    It 'memory.low only suggests startup items, disk.space only suggests clean targets' {
+        $mem = [PSCustomObject]@{ issues = @([PSCustomObject]@{ id='memory.low'; severity='High' }) }
+        $memTips = Get-SmartRecommendations -Report $mem -StartupItems @()
+        @($memTips.startup).Count | Should -Be 0      # 显式传入空清单：不得回退去读真实注册表
+        @($memTips.clean).Count   | Should -Be 0      # memory.low 不触发清理建议
+
+        $dsk = [PSCustomObject]@{
+            issues  = @([PSCustomObject]@{ id='disk.space'; severity='High' })
+            metrics = [PSCustomObject]@{ cleanTargets = @([PSCustomObject]@{ name='用户临时文件'; mb = 12.0 }) }
+        }
+        $dskTips = Get-SmartRecommendations -Report $dsk
+        @($dskTips.startup).Count | Should -Be 0      # disk.space 不触发启动项建议
+        @($dskTips.clean).Count   | Should -Be 1
+    }
+
+    It 'clean recommendations reuse the report measurements and rank by size' {
+        $report = [PSCustomObject]@{
+            issues  = @([PSCustomObject]@{ id='disk.cleanable'; severity='Medium' })
+            metrics = [PSCustomObject]@{
+                cleanTargets = @(
+                    [PSCustomObject]@{ name='用户临时文件';            mb = 100.0 }
+                    [PSCustomObject]@{ name='Windows Update 下载缓存'; mb = 900.5 }
+                    [PSCustomObject]@{ name='缩略图缓存';              mb = 5.0 }
+                )
+            }
+        }
+        $tips = Get-SmartRecommendations -Report $report -Top 3
+        @($tips.clean).Count | Should -Be 3
+        $tips.clean[0].name | Should -Be 'Windows Update 下载缓存'
+        $tips.clean[0].rank | Should -Be 1
+        $tips.clean[0].mb   | Should -Be 900.5
+        $tips.clean[0].reason | Should -Match '可释放 900.5 MB'
+        $tips.clean[0].reason | Should -Match '%'
+        $tips.clean[1].rank | Should -Be 2
+        $tips.clean[2].rank | Should -Be 3
+        foreach ($c in @($tips.clean)) {
+            @($c.PSObject.Properties.Name) | Should -Contain 'kind'
+            @($c.PSObject.Properties.Name) | Should -Contain 'key'
+            @($c.PSObject.Properties.Name) | Should -Contain 'path'
+            @($c.PSObject.Properties.Name) | Should -Contain 'hint'
+            $c.kind | Should -Be 'clean'
+            $c.path | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    It 'Format-SmartRecommendations renders one block per recommendation' {
+        $items = @([PSCustomObject]@{ Name='ZedUpdater'; Value='C:\Users\me\AppData\Local\Zed\ZedUpdater.exe'; Scope='当前用户'; Source='注册表'; Index=1 })
+        $tips  = Get-SmartRecommendations -StartupItems $items -Top 3 -IncludeStartup
+        $lines = @(Format-SmartRecommendations $tips)
+        $lines.Count | Should -BeGreaterThan 3
+        ($lines -join "`n") | Should -Match 'ZedUpdater'
+        ($lines -join "`n") | Should -Match '菜单 \[4\] 启动项优化'
+    }
+
+    It 'Get-SmartRecommendations measures clean targets on its own when no report given' {
+        $tips = Get-SmartRecommendations -IncludeClean -Top 2
+        @($tips.clean).Count | Should -BeGreaterThan 0
+        @($tips.clean).Count | Should -BeLessOrEqual 2
+        $tips.clean[0].mb | Should -BeGreaterThan 0
+    }
+}

@@ -11,13 +11,14 @@
         -PowerPlanGuid 电源计划目标 GUID，默认高性能
         -WhatIf       只预览
         -Force        允许自动执行 High 级问题（需配合 -MaxSeverity High）
+    -Action tips     : 只返回智能降级建议（最值得禁用的启动项 / 最值得清理的目录），不改动任何设置
     -Action export   : 将前后两次体检导出为自包含单文件（Html / Markdown）
         -Format       导出格式 html / md（Markdown），默认 html
         -From / -To  对比两端：体检报告 JSON 路径，省略时自动取历史最新两份
     逻辑复用共享库 lib/Optimize.Core.ps1，与 CLI / GUI 行为一致。
 #>
 param(
-    [ValidateSet("scan", "plan", "remediate", "trend", "export")]$Action = "scan",
+    [ValidateSet("scan", "plan", "remediate", "trend", "export", "tips")]$Action = "scan",
     [string[]]$IssueCode = @(),
     [ValidateSet("High", "Medium", "Low")]$MaxSeverity = "Medium",
     [int]$DnsOption = 1,
@@ -69,6 +70,7 @@ try {
             comparison = $cmp
             file       = $file
             plan       = $plan
+            tips       = (Get-SmartRecommendations -Report $report -Top 3)
             trend      = @(Get-HealthTrend -BackupDir $backupDir)
         })
     }
@@ -106,6 +108,18 @@ try {
             results      = $r.results
             restorePoint = $r.restorePoint
             error        = $r.error
+        })
+    }
+    elseif ($Action -eq "tips") {
+        # 智能降级建议（P2）：优先复用最近一次体检报告判断该不该给建议，
+        # 没有历史报告时才临时扫一次（跳过慢的可清理空间统计）。
+        $tipsReport = Get-PreviousHealthReport -BackupDir $backupDir
+        if (-not $tipsReport) { $tipsReport = Get-SystemHealthReport -SkipCleanScan }
+        $tips = Get-SmartRecommendations -Report $tipsReport -Top 3
+        Out-Json ([PSCustomObject]@{
+            ok      = $true
+            startup = @($tips.startup)
+            clean   = @($tips.clean)
         })
     }
     elseif ($Action -eq "export") {

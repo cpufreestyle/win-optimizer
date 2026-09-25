@@ -218,8 +218,20 @@ config 新增 `safety.create_restore_point`（默认 `false`，与 `disk.compact
   CLI/GUI/WebUI 的预览层统一调用 lib 的 plan 对象，三端预览文案零漂移。
 - **开机耗时基线**：体检报告加 `bench` 段（磁盘顺序读探测、启动项数、服务自动数），
   配合 P1-1 趋势图让「优化有没有变快」可量化。探测必须 <10s 且纯只读。
-- **智能降级建议**：`memory.low` / `disk.space` 命中时，自动指出「最值得关的 3 个启动项 /
-  最值得清的 3 个目录」（按体积/影响排序），而不是只给菜单编号。
+- ~~**智能降级建议**~~：**已实现（2026-09-26）**。`memory.low` / `startup.many` 命中时给出
+  「最值得关的 3 个启动项」（僵尸项 > 更新程序 > 云同步 > 后台助手，系统/硬件组件一律不推荐），
+  `disk.space` / `disk.cleanable` 命中时给出「最值得清的 3 个目录」并按可释放体积排序，
+  不再只给菜单编号。落点：
+  - lib：`Get-StartupRiskScore`（纯函数打分，含 essential 黑名单与 RunOnce 降权）、
+    `Get-StartupTargetPath`（解析引号/参数/环境变量，判僵尸项）、
+    `Get-SmartRecommendations`（报告门控 + 复用已量好的体积，不重复扫盘）、
+    `Format-SmartRecommendations`（三端共用渲染）。
+  - CLI：`scripts/15-HealthCheck.ps1` 体检结果后新增「智能建议」段。
+  - GUI：`gui/pages/Health.ps1` 新增「智能建议」面板（自动滚动区内）。
+  - WebUI：`webui/ps/15_health.ps1 -Action tips` + `GET /api/health/tips` +
+    MCP `health_tips`，体检页「智能建议」表格。
+  - 测试：`tests/Optimize.Core.Tests.ps1` 新增 12 个用例（打分 / 门控 / Top / 排序 / 复用测量 / 渲染），
+    全量 **188/188** 通过。
 
 ---
 
@@ -230,7 +242,7 @@ config 新增 `safety.create_restore_point`（默认 `false`，与 `disk.compact
 3. P0-4（时间线/回滚，依赖 P0-1 引入的备份 manifest 规范）
 4. P0-3（组合包，编排面最大）
 5. P1-1、P1-2、P1-3（已实现）
-6. P2 按社区反馈取舍
+6. P2 按社区反馈取舍（智能降级建议已落地；MCP `optimize_plan`、开机耗时基线 bench 待排）
 
 每步都走「集成分支 + PR」流程（见 HANDOFF §2），PR 前确认：Pester 151+ 全绿、
 `*.ps1` 全 BOM、`config/optimization.schema.json` 同步更新、GUI 改动真机点验。
