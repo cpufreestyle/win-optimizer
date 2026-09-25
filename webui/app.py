@@ -145,6 +145,17 @@ def _register_mcp_tools(server):
         return run_ps("15_health.ps1", "-Action", "trend", "-Days", str(int(days)))
 
     @server.tool()
+    def health_export(fmt: str = "html", frm: str = "", to: str = "") -> dict:
+        """导出前后体棃对比报告（自包含 HTML / Markdown单文件）。
+        fmt: html（默认）或 md；frm/to: 可选体棃报告 JSON 路径，省略时自动取历史最新两份。"""
+        args = ["-Action", "export", "-Format", str(fmt)]
+        if frm:
+            args += ["-From", str(frm)]
+        if to:
+            args += ["-To", str(to)]
+        return run_ps("15_health.ps1", *args)
+
+    @server.tool()
     def health_plan() -> dict:
         """体检修复预览（只读）：返回每个问题对应的具体动作、目标与预估影响，不执行任何修改。"""
         return run_ps("15_health.ps1", "-Action", "plan")
@@ -600,6 +611,19 @@ def api_health():
 @app.route("/api/health/plan")
 def api_health_plan():
     return jsonify(run_ps("15_health.ps1", "-Action", "plan"))
+
+
+@app.route("/api/health/export", methods=["POST"])
+def api_health_export():
+    data = request.get_json(silent=True) or {}
+    args = ["-Action", "export", "-Format", str(data.get("format", "html"))]
+    frm = str(data.get("from", "") or "")
+    to = str(data.get("to", "") or "")
+    if frm:
+        args += ["-From", frm]
+    if to:
+        args += ["-To", to]
+    return jsonify(run_ps("15_health.ps1", *args))
 
 
 @app.route("/api/health/trend")

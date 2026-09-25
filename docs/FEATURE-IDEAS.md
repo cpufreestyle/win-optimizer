@@ -173,11 +173,21 @@ lib 新增 `Get-Profiles` / `Get-ProfilePlan <name>` / `Invoke-Profile <name> [-
 - WebUI：`-Action trend`（scan 响应附带 trend）、`/api/health/trend` 路由 + MCP `health_trend`；前端「体检趋势」卡片 = 内联 SVG 折线 + 面积 + 逐点 tooltip + 最近 10 次表格，**零外链依赖，离线可用**。
 - 测试：`tests/Optimize.Core.Tests.ps1` 新增 5 个用例（sparkline 映射 / 趋势序列与 `-Days`、`-MaxPoints` 抽样 / 空历史 / 计划任务参数校验 / `Test-IsAdmin`），156/156 通过。
 
-## P1-2 前后对比报告导出（一键分享）
+## P1-2 前后对比报告导出（一键分享） — 已实现
 
 `Compare-HealthReports` 已存在但只能屏幕看。新增 `Export-HealthReport -From -To -Format Html|Markdown`：
 输出**自包含单文件**（内联 CSS，无外部依赖）到桌面，含总分变化、逐指标对比表、新增/消失的 issue 清单。
 用于求助发帖、优化前后效果证明。
+
+**落点（P1-2，2026-09-25 实现）**
+- lib：`lib/Optimize.Core.ps1` 新增 `Export-HealthReport -From -To -Format Html|Markdown [-BackupDir] [-OutDir] [-FileName]`。
+  `-From/-To` 接受报告对象或 health JSON 路径，省略时自动取历史最新两份；输出默认落桌面（失败回退 `%USERPROFILE%`）。
+  输出内部调用 `Compare-HealthReports`，由 `ConvertTo-HealthCompareHtml` / `ConvertTo-HealthCompareMarkdown` 渲染。
+- **自包含**：HTML 全内联 CSS（含暗色模式）、零外部请求，所有文本经 `HtmlEncode` 转义；Markdown 为纯文本表格，可直接粘贴到求助帖。
+- CLI：`scripts/15-HealthCheck.ps1 -Export [-Format Html|Markdown] [-From 路径] [-To 路径]`；交互环境下对比区后会询问是否导出。
+- WebUI：`-Action export` + `POST /api/health/export` + MCP `health_export` + 健康页“导出对比报告”按钮和格式下拉。
+- GUI：`gui/pages/Health.ps1` 新增“导出对比报告”按钮（HTML / Markdown 二选一，弹窗提示文件路径）。
+- 测试：`tests/Optimize.Core.Tests.ps1` 新增 6 个用例（HTML 自包含断言 / Markdown 表格 / JSON 路径传参 / 自动取最新两份 / 缺报告安全失败 / HTML 转义），全量 162/162 通过。
 
 ## P1-3 优化前自动创建系统还原点
 
@@ -204,7 +214,7 @@ config 新增 `safety.create_restore_point`（默认 `false`，与 `disk.compact
 2. P0-2（体检修复，lib 单点映射，测试友好）
 3. P0-4（时间线/回滚，依赖 P0-1 引入的备份 manifest 规范）
 4. P0-3（组合包，编排面最大）
-5. P1-1（已实现）→ P1-2 → P1-3
+5. P1-1、P1-2（已实现）→ P1-3
 6. P2 按社区反馈取舍
 
 每步都走「集成分支 + PR」流程（见 HANDOFF §2），PR 前确认：Pester 151+ 全绿、

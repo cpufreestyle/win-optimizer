@@ -18,6 +18,10 @@ param(
     [switch]$UninstallSchedule,  # 删除计划任务后退出
     [switch]$Trend,              # 只打印体检趋势（字符 sparkline），不执行体检
     [string]$Time = '09:00',     # -InstallSchedule 的每日触发时间（HH:mm）
+    [switch]$Export,            # 体检后导出前后对比报告（默认输出到桌面）
+    [ValidateSet('Html', 'Markdown')][string]$Format = 'Html',  # 导出格式
+    [string]$From,             # 对比起点：体检报告 JSON 路径（默认取上一次体检）
+    [string]$To,               # 对比终点：体检报告 JSON 路径（默认取本次体检）
     [int]$TrendDays = 30         # -Trend 回溯天数
 )
 
@@ -177,6 +181,28 @@ if (-not $prev) {
         }
     }
 }
+
+# 导出报告（P1-2）：自包含单文件，方便发帖求助、留存优化前后证据
+$wantExport = $Export
+if (-not $wantExport -and $prev -and [Environment]::UserInteractive) {
+    $ans = Read-Host '  是否导出前后对比报告到桌面? (Y/N)'
+    $wantExport = ($ans -match '^[Yy]')
+}
+if ($wantExport) {
+    $expArgs = @{ Format = $Format }
+    if ($From) { $expArgs['From'] = $From } elseif ($prev)   { $expArgs['From'] = $prev }
+    if ($To)   { $expArgs['To']   = $To }   elseif ($report) { $expArgs['To']   = $report }
+    if ((-not $expArgs.ContainsKey('From')) -or (-not $expArgs.ContainsKey('To'))) {
+        $expArgs['BackupDir'] = $backupDir
+    }
+    $exp = Export-HealthReport @expArgs
+    if ($exp.ok) {
+        Write-Host ('  对比报告已导出: ' + $exp.file) -ForegroundColor Green
+    } else {
+        Write-Host ('  导出失败: ' + $exp.error) -ForegroundColor Yellow
+    }
+}
+
 
 # --- 体检趋势（字符 sparkline，与 GUI/WebUI 同源）---
 $trendPoints = @(Get-HealthTrend -BackupDir $backupDir)
