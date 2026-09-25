@@ -930,7 +930,11 @@ async function renderHealth(){
         <td>${esc(x.reason)}</td><td class="muted">${esc(x.hint)}</td>
       </tr>`).join('')}
       </tbody></table></div>
-      <p class="muted" style="margin-top:6px">仅列最值得动的几项；启动项禁用与文件清理前都会自动备份。</p>`;
+      <p class="muted" style="margin-top:6px">仅列最值得动的几项；启动项禁用与文件清理前都会自动备份。</p>
+      <div class="row" style="margin-top:10px">
+        <label><input type="checkbox" id="cbTipsRp"> 执行前创建系统还原点</label>
+        ${btn('一键应用建议（禁用上方启动项）','green',applySmartTips, tStart.length===0)}</div>
+      <p class="muted" style="margin-top:6px">只禁用「启动项」类建议（执行前自动备份，可恢复）；清理类建议请到「垃圾清理」页手动操作。</p>`;
   }
   const c = d.comparison;
   h += `<h3 style="margin:16px 0 8px">与上次体检对比</h3>`;
@@ -984,6 +988,22 @@ async function runRemediate(maxSeverity, force){
   });
   (d.skipped||[]).forEach(s=>log('[跳过] '+s.id+' —— '+s.reason));
   log(d.ok?'修复完成，建议重新体检对比':'部分项目失败，详见日志', d.ok?'':'err');
+  renderHealth();
+}
+async function applySmartTips(){
+  if(!confirm('即将按智能建议禁用上方列出的启动项（执行前自动备份，可恢复）。确认继续？')) return;
+  log('开始应用智能建议…');
+  const rp = !!($('#cbTipsRp') && $('#cbTipsRp').checked);
+  const d = await api('/api/health/apply-tips',{method:'POST',body:{create_restore_point:rp}});
+  if(d.restorePoint){
+    if(d.restorePoint.ok) log('[还原点] 已创建：'+d.restorePoint.name+' ('+d.restorePoint.method+')','ok');
+    else log('[还原点] 创建失败，继续：'+d.restorePoint.error,'err');
+  }
+  (d.applied||[]).forEach(n=>log('[已禁用] '+n,'ok'));
+  (d.failed||[]).forEach(f=>log('[失败] '+f.name+' —— '+f.reason,'err'));
+  if(d.backup) log('备份：'+d.backup);
+  if(d.error) log(d.error,'err');
+  log(d.ok?'建议已应用，重启后生效；可在备份页回滚':'部分条目未处理，详见日志', d.ok?'':'err');
   renderHealth();
 }
 async function renderProfiles(){

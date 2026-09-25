@@ -145,6 +145,9 @@ if ($report.bench) {
         Write-Host "    磁盘读写     : 探测失败（$($report.bench.error)）" -ForegroundColor DarkGray
     }
     Write-Host ("    开机加载负担 : 启动项 {0} 项 + 自动服务 {1} 个" -f $report.bench.startupCount, $report.bench.autoServices)
+    if ($null -ne $report.bench.bootSeconds) {
+        Write-Host ("    上次开机耗时 : {0} 秒（{1:yyyy-MM-dd HH:mm}，来源: {2}）" -f $report.bench.bootSeconds, $report.bench.bootAt, $report.bench.bootSource)
+    }
     Write-Host ("    探测耗时     : {0} ms" -f $report.bench.elapsedMs)
 }
 
@@ -168,6 +171,39 @@ $tipLines = @(Format-SmartRecommendations (Get-SmartRecommendations -Report $rep
 if ($tipLines.Count -gt 0) {
     Write-Host "`n  [智能建议]" -ForegroundColor Cyan
     foreach ($tipLine in $tipLines) { Write-Host $tipLine -ForegroundColor DarkGray }
+
+# --- 一键应用智能建议（P3-1）：按上面的清单直接禁用启动项，每步自动备份 ---
+$tipStartups = @((Get-SmartRecommendations -Report $report -Top 3).startup)
+if ([Environment]::UserInteractive -and $tipStartups.Count -gt 0) {
+    $ansApply = Read-Host "`n  是否按上述建议一键禁用这 $($tipStartups.Count) 个启动项？输入 Y 确认（自动备份），其它键跳过"
+    if ($ansApply -eq 'Y' -or $ansApply -eq 'y') {
+        $rpOn = if ($RestorePoint) { $true } else { Get-RestorePointDefault }
+        if ($rpOn -and -not (Test-IsAdmin)) {
+            Write-Host "  [提示] 创建系统还原点需要管理员权限，本次将跳过。" -ForegroundColor Yellow
+        } elseif ($rpOn -and -not (Test-SystemRestoreEnabled)) {
+            Write-Host "  [提示] 系统还原已关闭，跳过还原点。" -ForegroundColor Yellow
+        }
+        $ar = Invoke-SmartRecommendations -Report $report -BackupDir $backupDir -CreateRestorePoint:$rpOn
+        if ($ar.restorePoint) {
+            if ($ar.restorePoint.ok) {
+                Write-Host "  [还原点] 已创建: $($ar.restorePoint.name)" -ForegroundColor Green
+            } else {
+                Write-Host "  [还原点] 创建失败，继续: $($ar.restorePoint.error)" -ForegroundColor Yellow
+            }
+        }
+        foreach ($n in @($ar.applied)) {
+            Write-Host "    [已禁用] $n" -ForegroundColor Green
+        }
+        foreach ($f in @($ar.failed)) {
+            Write-Host "    [失败] $($f.name) —— $($f.reason)" -ForegroundColor Red
+        }
+        if ($ar.backup) { Write-Host "    备份: $($ar.backup)" -ForegroundColor DarkGray }
+        if ($ar.error)  { Write-Host "    $($ar.error)" -ForegroundColor Yellow }
+        if ($ar.ok)     { Write-Host "  建议已应用。重启后生效；可到 [R] 恢复系统设置回滚。" -ForegroundColor Green }
+    } else {
+        Write-Host "  已跳过一键应用。" -ForegroundColor Gray
+    }
+}
 }
 
 # --- 保存本次报告 ---

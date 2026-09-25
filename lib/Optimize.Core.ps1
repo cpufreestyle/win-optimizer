@@ -314,13 +314,22 @@ function Backup-ServiceStates {
 # 参数: Services(过滤后的列表), Mode("all"|"safe")
 # 返回: @{ disabled; skipped; details: @(@{name; result}) }
 function Disable-Services {
-    param([array]$Services, [string]$Mode = "all", [switch]$WhatIf)
+    param([array]$Services, [string]$Mode = "all", [switch]$WhatIf, [switch]$Force)
     $toProcess = if ($Mode -eq "all") { $Services }
                  else { $Services | Where-Object { $_.Level -eq "安全禁用" } }
     $disabled = 0; $skipped = 0; $details = @()
     foreach ($svc in $toProcess) {
         $service = Get-Service -Name $svc.Name -ErrorAction SilentlyContinue
         if (-not $service) { $skipped++; continue }
+        # 安全护栏：正被运行中服务依赖的服务默认跳过，避免连带故障
+        if (-not $Force) {
+            $deps = @(Get-ServiceDependents -Name $svc.Name)
+            if ($deps.Count -gt 0) {
+                $skipped++
+                $details += @{name = $svc.Name; result = "跳过: 正被 $($deps -join ', ') 依赖"}
+                continue
+            }
+        }
         if ($WhatIf) {
             $disabled++
             $details += @{name = $svc.Name; result = "将禁用(预览)"}
@@ -345,6 +354,26 @@ function Disable-Services {
 # 从备份 CSV 恢复服务状态。省略 File 时取最近一份 services_backup_*.csv
 # 参数: BackupDir, File(可选，指定备份文件全路径)
 # 返回: @{ restored; backup; details: @(@{name; result}) }
+# 查询「正在运行且依赖指定服务」的服务名（准确性/安全护栏）。
+# Win7 兼容：WMI Win32_DependentService（Get-CimInstance 需要 PS3+，红线不破）。
+# 查询不到（服务不存在 / WMI 不可用）返回空数组——不阻碍原有禁用流程。
+function Get-ServiceDependents {
+    param([string]$Name)
+    $running = @()
+    if ([string]::IsNullOrWhiteSpace($Name)) { return $running }
+    try {
+        $q = "ASSOCIATORS OF {Win32_Service.Name='$Name'} WHERE AssocClass=Win32_DependentService Role=Antecedent"
+        $deps = @(Get-WmiObject -Query $q -ErrorAction Stop)
+        foreach ($d in $deps) {
+            try {
+                $svc = Get-Service -Name $d.Name -ErrorAction SilentlyContinue
+                if ($svc -and $svc.Status -eq 'Running') { $running += $d.Name }
+            } catch { }
+        }
+    } catch { }
+    return $running
+}
+
 function Restore-Services {
     param([string]$BackupDir, [string]$File)
     $csv = $null
@@ -1637,6 +1666,49 @@ function Get-AutoOptimizableServices {
 #   -AutoServices   体检已量好的「仍自动启动的可优化服务」数；同上
 # 返回 @{ ok; diskReadMBps; diskWriteMBps; startupCount; autoServices; totalRamMB; elapsedMs; error }
 # 磁盘探测失败不视为整体失败（error 记录原因，磁盘两项为 0），启动项/服务数仍可用。
+# 最近一次真实开机耗时（秒）。数据源：
+#   1) Win8+：Microsoft-Windows-Diagnostics-Performance/Operational 的 Event 100
+#      （消息形如「...启动时间为 12345 毫秒...」）
+#   2) Win7：经典日志 Diagnostics-Performance 的 Event 100
+# 都拿不到（日志被禁用 / 已清理 / 事件不存在）时返回 ok=$false、seconds=$null，
+# 调用方按「无数据」处理即可——这是尽力而为的增强指标，不能影响体检主流程。
+function Get-BootPerformanceSample {
+    param([int]$MaxEvents = 30)
+    $res = [PSCustomObject]@{
+        ok      = $false
+        seconds = $null
+        bootAt  = $null
+        source  = ''
+        error   = $null
+    }
+    if (-not (Get-Command Get-WinEvent -ErrorAction SilentlyContinue)) {
+        $res.error = 'Get-WinEvent 不可用（PowerShell 版本过老）'
+        return $res
+    }
+    $candidates = @(
+        @{ Log = 'Microsoft-Windows-Diagnostics-Performance/Operational'; Src = 'Diagnostics-Performance/Operational' }
+        @{ Log = 'Diagnostics-Performance'; Src = 'Diagnostics-Performance' }
+    )
+    foreach ($cand in $candidates) {
+        try {
+            $events = @(Get-WinEvent -FilterHashtable @{ LogName = $cand.Log; ID = 100 } `
+                        -MaxEvents $MaxEvents -ErrorAction Stop)
+            foreach ($e in $events) {
+                $m = [regex]::Match([string]$e.Message, '(\d{1,7})\s*(?:毫秒|ms)')
+                if (-not $m.Success) { continue }
+                $ms = [int]$m.Groups[1].Value
+                if ($ms -le 0 -or $ms -gt 3600000) { continue }
+                $res.ok      = $true
+                $res.seconds = [math]::Round($ms / 1000.0, 1)
+                $res.bootAt  = $e.TimeCreated
+                $res.source  = $cand.Src
+                return $res
+            }
+        } catch { }
+    }
+    if (-not $res.ok) { $res.error = '未找到开机耗时事件（日志被禁用、已清理或系统过老）' }
+    return $res
+}
 function Get-SystemBench {
     param(
         [int]$SizeMB = 64,
@@ -1647,6 +1719,9 @@ function Get-SystemBench {
     $readMBps  = 0.0
     $writeMBps = 0.0
     $diskError = $null
+    # 真实开机耗时（尽力而为的增强指标：事件日志里没有就留空，绝不拖垮体检）
+    $boot = $null
+    try { $boot = Get-BootPerformanceSample } catch { $boot = $null }
     $file = Join-Path $env:TEMP ("PCOptBench_{0}.tmp" -f [Guid]::NewGuid().ToString('N'))
     $blockBytes = 4MB
     try {
@@ -1691,6 +1766,11 @@ function Get-SystemBench {
         startupCount  = [int]$StartupCount
         autoServices  = [int]$AutoServices
         totalRamMB    = $totalRamMB
+        # 上次真实开机耗时（秒）；无事件数据时为 $null，三端按「无数据」渲染
+        bootSeconds   = $(if ($boot -and $boot.ok) { $boot.seconds } else { $null })
+        bootAt        = $(if ($boot -and $boot.ok) { $boot.bootAt } else { $null })
+        bootSource    = $(if ($boot -and $boot.ok) { $boot.source } else { '' })
+        bootError     = $(if ($boot -and -not $boot.ok) { $boot.error } else { $null })
         elapsedMs     = $sw.ElapsedMilliseconds
         error         = $diskError
     }
@@ -3341,6 +3421,7 @@ function Get-HealthTrend {
                 startupCount = [int]$r.metrics.startupCount
                 issueCount   = @($r.issues).Count
                 diskReadMBps = $diskRead
+                bootSeconds  = $(if ($r.PSObject.Properties.Name -contains 'bench' -and $null -ne $r.bench -and $null -ne $r.bench.bootSeconds) { [double]$r.bench.bootSeconds } else { $null })
             }
         } catch { }
     }
@@ -3868,7 +3949,7 @@ function Get-SmartRecommendations {
                 exists  = $exists
                 score   = [int]$sc.score
                 reason  = [string]$sc.reason
-                hint    = '菜单 [4] 启动项优化：按编号单独禁用，改前会自动备份'
+                hint    = '体检结果里可一键应用本条建议（自动备份）；或到菜单 [4] 手动禁用'
             }
         }
         $n = 0
@@ -3957,7 +4038,80 @@ function Format-SmartRecommendations {
 }
 
 # ============================================================
-#  统一优化预览（P2）
+# ============================================================
+#  智能建议一键应用（P3-1）
+#  把「智能建议」从只读清单补成闭环：按体检建议直接禁用最值得处理的
+#  启动项。清理类建议不在本函数执行——删文件不可逆性强，保留菜单 [2] 手动确认。
+#  安全约束与 Invoke-HealthRemediation 对齐：
+#    - 执行前一次备份覆盖全部选中项；备份失败即中止，不动系统
+#    - -CreateRestorePoint 懒创建（真要动系统的第一步前才建）
+#    - -WhatIf 零副作用（不备份、不建还原点、不改系统）
+#  返回 @{ ok; whatIf; applied; failed; backup; restorePoint; error }
+# ============================================================
+function Invoke-SmartRecommendations {
+    param(
+        [object]$Report,
+        [int]$Top = 3,
+        [string]$BackupDir,
+        [switch]$SkipBackup,
+        [switch]$WhatIf,
+        [bool]$CreateRestorePoint = (Get-RestorePointDefault)
+    )
+    $res = [PSCustomObject]@{
+        ok           = $false
+        whatIf       = [bool]$WhatIf
+        applied      = @()
+        failed       = @()
+        backup       = $null
+        restorePoint = $null
+        error        = $null
+    }
+
+    $tips = Get-SmartRecommendations -Report $Report -Top $Top -SkipCleanMeasure
+    $recs = @($tips.startup)
+    if ($recs.Count -eq 0) {
+        $res.error = '当前没有可自动应用的启动项建议（未命中触发条件或无可禁用项）'
+        return $res
+    }
+
+    # 建议基于报告生成，执行前按 Name+Value 重新匹配实时启动项；
+    # 匹配不到就跳过该项——宁可不做，也不误删。
+    $live = @(Get-StartupItems)
+    $picked = @()
+    foreach ($r in $recs) {
+        $hit = @($live | Where-Object { $_.Name -eq $r.name -and $_.Value -eq $r.command })[0]
+        if ($hit) { $picked += $hit }
+    }
+    if ($picked.Count -eq 0) {
+        $res.error = '建议对应的启动项已不存在（可能已被其他流程处理），未做任何改动'
+        return $res
+    }
+
+    # 懒创建还原点：真要动系统的第一步之前才建；失败只记录、不阻塞
+    if (-not $WhatIf -and $CreateRestorePoint) {
+        $res.restorePoint = New-SystemRestorePoint -Description ("PC-Optimizer 智能建议应用前 {0:yyyy-MM-dd HH:mm}" -f (Get-Date))
+    }
+
+    $bdir = Get-OptBackupDir -BackupDir $BackupDir
+    if (-not $SkipBackup -and -not $WhatIf) {
+        try {
+            $res.backup = Backup-StartupItems -BackupDir $bdir -Items $picked
+        } catch {
+            $res.error = "备份失败，已中止: $($_.Exception.Message)"
+            return $res
+        }
+    }
+
+    # 一次禁用全部选中项（备份已在上面统一做过，这里 SkipBackup）
+    $r = Disable-StartupItems -Items $picked -BackupDir $bdir -SkipBackup -WhatIf:$WhatIf
+    $res.applied = @($r.details | Where-Object { [string]$_.Result -like '已禁用*' } |
+                      ForEach-Object { [string]$_.Name })
+    $res.failed = @($r.details | Where-Object { [string]$_.Result -notlike '已禁用*' } |
+                     ForEach-Object { [PSCustomObject]@{ name = [string]$_.Name; reason = [string]$_.Result } })
+    $res.ok = ($res.applied.Count -gt 0 -and $res.failed.Count -eq 0)
+    return $res
+}
+
 #  与 health 的修复预览并列，但覆盖「一键全面优化」的完整流程：
 #  清理 / 服务 / 启动项 / 视觉 / 电源 / 磁盘 / 网络 / 遥测 / 组合包。
 #  只读：任何一步都不会改系统，只回答「点下去会发生什么」。

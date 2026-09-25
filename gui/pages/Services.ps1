@@ -104,42 +104,40 @@
         $this.Text = "处理中..."
         Invoke-UIRefresh
 
-        # 备份
-        if (-not (Test-Path $script:BackupDir)) { New-Item -ItemType Directory -Path $script:BackupDir -Force | Out-Null }
-        $backupFile = Join-Path $script:BackupDir "services_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
-        $backupData = @()
+        # 备份与禁用统一走 lib（P3-1）：获得服务依赖护栏——被运行中服务依赖的服务
+        # 默认跳过（details 里说明原因），避免连带故障；同时备份带 manifest，可回滚
+        $picked = @()
         for ($i = 0; $i -lt $script:SvcDataTable.Rows.Count; $i++) {
-            $svcName = $script:SvcDataTable.Rows[$i]["服务名称"]
-            $service = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-            if ($service) {
-                $svcWmi = @(Get-CimData Win32_Service -Filter "Name='$svcName'")[0]
-                $startMode = if ($svcWmi) { $svcWmi.StartMode } else { "Unknown" }
-                $backupData += [PSCustomObject]@{ Name=$svcName; Status=$service.Status; StartType=$startMode; Date=(Get-Date -Format "yyyy-MM-dd HH:mm:ss") }
+            if ($script:SvcDataTable.Rows[$i]["选择"] -eq $true) {
+                $picked += [PSCustomObject]@{
+                    Name = [string]$script:SvcDataTable.Rows[$i]["服务名称"]
+                    Level = "安全禁用"   # Mode=all，级别仅作展示语义保留
+                    Desc  = [string]$script:SvcDataTable.Rows[$i]["描述"]
+                }
             }
             Invoke-UIRefresh
         }
-        $backupData | Export-Csv -Path $backupFile -NoTypeInformation -Encoding UTF8
+        $backupFile = Backup-ServiceStates -BackupDir $script:BackupDir -Services @(Get-ServiceList)
         Write-Log "服务备份已保存: $backupFile"
 
         $disabledCount = 0
-        for ($i = 0; $i -lt $script:SvcDataTable.Rows.Count; $i++) {
-            if ($script:SvcDataTable.Rows[$i]["选择"] -eq $true) {
-                $svcName = $script:SvcDataTable.Rows[$i]["服务名称"]
-                $service = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-                if ($service) {
-                    try {
-                        if ($service.Status -eq "Running") {
-                            Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue
-                            Start-Sleep -Milliseconds 300
-                        }
-                        Set-Service -Name $svcName -StartupType Disabled -ErrorAction Stop
-                        Write-Log "[禁用] $svcName" "SUCCESS"
-                        $disabledCount++
+        $r = Disable-Services -Services $picked -Mode "all"
+        foreach ($d in $r.details) {
+            $res = [string]$d.result
+            if ($res -like "已禁用") {
+                Write-Log "[禁用] $($d.name)" "SUCCESS"
+                $disabledCount++
+                for ($i = 0; $i -lt $script:SvcDataTable.Rows.Count; $i++) {
+                    if ($script:SvcDataTable.Rows[$i]["服务名称"] -eq $d.name) {
                         $script:SvcDataTable.Rows[$i]["状态"] = "Stopped"
-                    } catch {
-                        Write-Log "[失败] $svcName — $($_.Exception.Message)" "ERROR"
                     }
                 }
+            }
+            elseif ($res -like "失败*") {
+                Write-Log "[失败] $($d.name) —— $res" "ERROR"
+            }
+            else {
+                Write-Log "[跳过] $($d.name) —— $res" "WARNING"
             }
             Invoke-UIRefresh
         }
