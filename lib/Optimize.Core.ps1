@@ -3821,6 +3821,61 @@ function New-SystemRestorePoint {
 
 # 从启动项的 Value 里取出目标可执行 / 快捷方式路径。
 # 只用于「目标还在不在」判断与展示，不做任何写操作。
+# 取文件数字签名发行者（PowerShell 3.0 以下/PS2 也可用 Get-AuthenticodeSignature）。
+# 仅用于「智能建议」的额外否决：签名属于系统/硬件厂商的程序一律不推荐禁用，
+# 防止黑名单漏掉改名/换目录的系统组件。任何失败都返回空串（按未知处理）。
+function Get-FilePublisher {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) { return '' }
+        $sig = Get-AuthenticodeSignature -LiteralPath $Path -ErrorAction Stop
+        if ($null -eq $sig -or -not $sig.SignerCertificate) { return '' }
+        $subj = [string]$sig.SignerCertificate.Subject
+        if ([string]::IsNullOrWhiteSpace($subj)) { return '' }
+        # Subject 形如 CN=Microsoft Corporation, O=Microsoft Corporation, ...
+        $cn = ($subj -split ',')[0].Trim()
+        if ($cn -like 'CN=*') { $cn = $cn.Substring(3).Trim() }
+        return $cn
+    } catch { return '' }
+}
+
+# 受保护厂商签名模式：命中这些发行者的启动项一律不推荐禁用。
+# 唯一真源 = config/optimization.json 的 smart.trusted_publishers，缺失时回退 lib 内置默认。
+# 为什么需要它：名字黑名单管不住改名 / 换目录 / 伪装名的系统与驱动组件，
+# 而这些组件几乎都带有效数字签名——签名比文件名更难伪造，正好补上这道缺口。
+function Get-TrustedPublisherPatterns {
+    $cfg = Get-OptConfig
+    if ($cfg -and $cfg.smart -and ($cfg.smart.PSObject.Properties.Name -contains 'trusted_publishers')) {
+        $list = @($cfg.smart.trusted_publishers | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        if ($list.Count -gt 0) { return @($list | ForEach-Object { [string]$_ }) }
+    }
+    return @(
+        'Microsoft Corporation'
+        'Microsoft Windows'
+        'Intel Corporation'
+        'NVIDIA Corporation'
+        'Advanced Micro Devices'
+        'Realtek Semiconductor'
+        'Synaptics'
+        'Dell Inc'
+        'HP Inc'
+        'Lenovo'
+    )
+}
+
+# 判断发行者是否属于受保护厂商。空发行者（未签名 / 取不到签名）一律返回 $false：
+# 「未知」不等于「信任」，仍按普通第三方程序参与打分，由名字黑名单兜底。
+function Test-TrustedPublisher {
+    param([string]$Publisher)
+    if ([string]::IsNullOrWhiteSpace($Publisher)) { return $false }
+    $p = $Publisher.Trim()
+    foreach ($pat in @(Get-TrustedPublisherPatterns)) {
+        if ($p -like "*$pat*") { return $true }
+    }
+    return $false
+}
+
 function Get-StartupTargetPath {
     param([object]$Item)
     if (-not $Item) { return '' }
@@ -3924,6 +3979,7 @@ function Get-SmartRecommendations {
 
     # --- 启动项建议 ---
     $recStartup = @()
+    $recVetoed  = @()
     if ($wantStartup) {
         $items = @()
         # 注意不能写成 if ($StartupItems)：空数组在 PowerShell 里求值为 $false，
@@ -3934,6 +3990,21 @@ function Get-SmartRecommendations {
             $target = Get-StartupTargetPath -Item $it
             $exists = $false
             if ($target) { try { $exists = Test-Path -LiteralPath $target -ErrorAction Stop } catch { $exists = $false } }
+            # 签名厂商否决（P4-1）：目标还在且带受保护厂商签名时，名字黑名单可能
+            # 漏掉改名 / 换目录的系统组件，签名这一关直接劝退，并把原因回显给用户。
+            $publisher = ''
+            if ($exists) { $publisher = Get-FilePublisher -Path $target }
+            if (Test-TrustedPublisher -Publisher $publisher) {
+                $recVetoed += [PSCustomObject]@{
+                    kind      = 'startup'
+                    name      = [string]$it.Name
+                    command   = [string]$it.Value
+                    path      = $target
+                    publisher = $publisher
+                    reason    = ("带 {0} 数字签名，属系统/硬件厂商组件，不建议禁用" -f $publisher)
+                }
+                continue
+            }
             $sc = Get-StartupRiskScore -Item $it -TargetExists:$exists
             if ($sc.score -le 0) { continue }
             $itemIndex = 0
@@ -3945,9 +4016,10 @@ function Get-SmartRecommendations {
                 scope   = $(if ($it.PSObject.Properties.Name -contains 'Scope')  { [string]$it.Scope }  else { '' })
                 source  = $(if ($it.PSObject.Properties.Name -contains 'Source') { [string]$it.Source } else { '' })
                 index   = $itemIndex
-                path    = $target
-                exists  = $exists
-                score   = [int]$sc.score
+                path      = $target
+                exists    = $exists
+                publisher = $publisher
+                score     = [int]$sc.score
                 reason  = [string]$sc.reason
                 hint    = '体检结果里可一键应用本条建议（自动备份）；或到菜单 [4] 手动禁用'
             }
@@ -4015,6 +4087,7 @@ function Get-SmartRecommendations {
         ok      = $true
         startup = @($recStartup)
         clean   = @($recClean)
+        vetoed  = @($recVetoed)
     }
 }
 
@@ -4027,12 +4100,20 @@ function Format-SmartRecommendations {
         $lines += ("  {0}. [启动项] {1}" -f $s.rank, $s.name)
         $lines += ("        {0}" -f $s.reason)
         $lines += ("        命令: {0}（{1}）" -f $s.command, $s.scope)
+        if ($s.PSObject.Properties.Name -contains 'publisher' -and $s.publisher) {
+            $lines += ("        签名: {0}" -f $s.publisher)
+        }
         $lines += ("        {0}" -f $s.hint)
     }
     foreach ($c in @($Tips.clean)) {
         $lines += ("  {0}. [清理] {1} —— {2}" -f $c.rank, $c.name, $c.reason)
         $lines += ("        路径: {0}" -f $c.path)
         $lines += ("        {0}" -f $c.hint)
+    }
+    if ($Tips.PSObject.Properties.Name -contains 'vetoed') {
+        foreach ($v in @($Tips.vetoed)) {
+            $lines += ("  已保护: [启动项] {0} —— {1}" -f $v.name, $v.reason)
+        }
     }
     return $lines
 }

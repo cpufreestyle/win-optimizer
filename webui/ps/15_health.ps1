@@ -15,6 +15,7 @@
         -Top             应用前 N 条建议，默认 3
         -WhatIf          只预览不执行
     -Action tips     : 只返回智能降级建议（最值得禁用的启动项 / 最值得清理的目录），不改动任何设置
+                     附带 vetoed：被签名厂商护栏拦下的启动项及原因（准确性：不误伤系统/驱动组件）
     -Action export   : 将前后两次体检导出为自包含单文件（Html / Markdown）
         -Format       导出格式 html / md（Markdown），默认 html
         -From / -To  对比两端：体检报告 JSON 路径，省略时自动取历史最新两份
@@ -125,6 +126,7 @@ try {
             ok      = $true
             startup = @($tips.startup)
             clean   = @($tips.clean)
+            vetoed  = @($tips.vetoed)
         })
     }
     elseif ($Action -eq "apply-tips") {

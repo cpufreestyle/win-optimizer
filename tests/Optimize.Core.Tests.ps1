@@ -2899,3 +2899,151 @@ Describe 'Optimize.Core real boot time sample (P3-1, accuracy)' {
         }
     }
 }
+
+
+Describe 'Optimize.Core publisher signature guard (P4-1, shared by CLI/GUI/WebUI)' {
+    BeforeAll { . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1') }
+
+    It 'Get-FilePublisher returns empty for blank / missing paths' {
+        Get-FilePublisher -Path '' | Should -BeNullOrEmpty
+        Get-FilePublisher -Path (Join-Path $env:TEMP 'definitely_not_here_12345.exe') | Should -BeNullOrEmpty
+    }
+
+    It 'Get-FilePublisher returns empty for unsigned files and never throws' {
+        $tmp = Join-Path $env:TEMP ('p4_unsigned_{0}.exe' -f [Guid]::NewGuid().ToString('N'))
+        try {
+            Set-Content -Path $tmp -Value 'not a real PE file'
+            Get-FilePublisher -Path $tmp | Should -BeNullOrEmpty
+            Mock Get-AuthenticodeSignature { throw 'signature scan exploded' }
+            Get-FilePublisher -Path $tmp | Should -BeNullOrEmpty
+        } finally {
+            Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Get-FilePublisher extracts the CN part of the signer subject' {
+        Mock Get-AuthenticodeSignature {
+            [PSCustomObject]@{
+                SignerCertificate = [PSCustomObject]@{
+                    Subject = 'CN=Microsoft Corporation, O=Microsoft Corporation, C=US'
+                }
+            }
+        }
+        $tmp = Join-Path $env:TEMP ('p4_cn_{0}.exe' -f [Guid]::NewGuid().ToString('N'))
+        Set-Content -Path $tmp -Value 'fake'
+        try {
+            Get-FilePublisher -Path $tmp | Should -Be 'Microsoft Corporation'
+        } finally {
+            Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Test-TrustedPublisher matches known vendors case-insensitively, rejects the unknown' {
+        Test-TrustedPublisher -Publisher 'Microsoft Corporation'  | Should -BeTrue
+        Test-TrustedPublisher -Publisher 'MICROSOFT WINDOWS'       | Should -BeTrue
+        Test-TrustedPublisher -Publisher 'NVIDIA Corporation'      | Should -BeTrue
+        Test-TrustedPublisher -Publisher 'Google LLC'              | Should -BeFalse
+        Test-TrustedPublisher -Publisher 'CN=Somebody, O=Somebody' | Should -BeFalse
+        Test-TrustedPublisher -Publisher ''                        | Should -BeFalse
+    }
+
+    It 'Get-TrustedPublisherPatterns falls back to the built-in vendor list' {
+        $pats = @(Get-TrustedPublisherPatterns)
+        $pats.Count | Should -BeGreaterThan 0
+        $pats | Should -Contain 'Microsoft Corporation'
+    }
+
+    It 'a renamed system component signed by a vendor is vetoed and explained' {
+        $tmp = Join-Path $env:TEMP ('p4_signed_{0}.exe' -f [Guid]::NewGuid().ToString('N'))
+        Set-Content -Path $tmp -Value 'fake'
+        try {
+            Mock Get-AuthenticodeSignature {
+                [PSCustomObject]@{
+                    SignerCertificate = [PSCustomObject]@{ Subject = 'CN=Microsoft Corporation, O=Microsoft Corporation' }
+                }
+            }
+            $items = @([PSCustomObject]@{
+                Name = 'RenamedSysTray'; Value = $tmp; Scope = '所有用户'; Source = '注册表'; Index = 1
+            })
+            $tips = Get-SmartRecommendations -StartupItems $items -Top 3 -IncludeStartup
+            @($tips.startup).Count | Should -Be 0
+            @($tips.vetoed).Count   | Should -Be 1
+            $tips.vetoed[0].name      | Should -Be 'RenamedSysTray'
+            $tips.vetoed[0].publisher | Should -Be 'Microsoft Corporation'
+            $tips.vetoed[0].reason    | Should -Match '数字签名'
+        } finally {
+            Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'a third-party signed startup item stays recommended and carries its publisher' {
+        $tmp = Join-Path $env:TEMP ('p4_third_{0}.exe' -f [Guid]::NewGuid().ToString('N'))
+        Set-Content -Path $tmp -Value 'fake'
+        try {
+            Mock Get-AuthenticodeSignature {
+                [PSCustomObject]@{
+                    SignerCertificate = [PSCustomObject]@{ Subject = 'CN=Google LLC, O=Google LLC' }
+                }
+            }
+            $items = @([PSCustomObject]@{
+                Name = 'GhostUpdater'; Value = $tmp; Scope = '当前用户'; Source = '注册表'; Index = 1
+            })
+            $tips = Get-SmartRecommendations -StartupItems $items -Top 3 -IncludeStartup
+            @($tips.startup).Count | Should -Be 1
+            $tips.startup[0].name      | Should -Be 'GhostUpdater'
+            $tips.startup[0].publisher | Should -Be 'Google LLC'
+            @($tips.vetoed).Count | Should -Be 0
+        } finally {
+            Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'unsigned items are never vetoed: unknown is not trust' {
+        $items = @([PSCustomObject]@{
+            Name = 'GhostUpdater'; Value = 'C:\gone\GhostUpdater.exe'; Scope = '当前用户'; Source = '注册表'; Index = 1
+        })
+        $tips = Get-SmartRecommendations -StartupItems $items -Top 3 -IncludeStartup
+        @($tips.startup).Count | Should -Be 1
+        $tips.startup[0].publisher | Should -BeNullOrEmpty
+        @($tips.vetoed).Count | Should -Be 0
+    }
+
+    It 'Invoke-SmartRecommendations never applies a vendor-signed item' {
+        $tmp = Join-Path $env:TEMP ('p4_apply_{0}.exe' -f [Guid]::NewGuid().ToString('N'))
+        Set-Content -Path $tmp -Value 'fake'
+        try {
+            Mock Get-AuthenticodeSignature {
+                [PSCustomObject]@{
+                    SignerCertificate = [PSCustomObject]@{ Subject = 'CN=Intel Corporation, O=Intel Corporation' }
+                }
+            }
+            $script:VetoItems = @([PSCustomObject]@{
+                Name = 'RenamedHidTray'; Value = $tmp; Scope = '所有用户'; Source = '注册表'; Path = 'HKLM:\Run'; Index = 1
+            })
+            Mock Get-StartupItems { $script:VetoItems }
+            Mock Disable-StartupItems { [PSCustomObject]@{ disabled = 0; failed = 0; backup = $null; details = @() } }
+            $rep = [PSCustomObject]@{
+                issues = @([PSCustomObject]@{ id = 'startup.many'; severity = 'Medium'; title = 'x' })
+            }
+            $r = Invoke-SmartRecommendations -Report $rep -BackupDir (Join-Path $env:TEMP 'p4_none') -WhatIf
+            @($r.applied).Count | Should -Be 0
+            Assert-MockCalled -CommandName 'Disable-StartupItems' -Times 0 -Scope It
+        } finally {
+            Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Format-SmartRecommendations lists vetoed items as protected' {
+        $tips = [PSCustomObject]@{
+            startup = @()
+            clean   = @()
+            vetoed  = @([PSCustomObject]@{
+                name = 'RenamedSysTray'; publisher = 'Microsoft Corporation'
+                reason = '带 Microsoft Corporation 数字签名，属系统/硬件厂商组件，不建议禁用'
+            })
+        }
+        $lines = @(Format-SmartRecommendations $tips)
+        ($lines -join "`n") | Should -Match '已保护'
+        ($lines -join "`n") | Should -Match 'RenamedSysTray'
+    }
+}
