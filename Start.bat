@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 chcp 65001 >nul 2>&1
 title PC-Optimizer-7thGen - 7代CPU老电脑优化工具
 
@@ -25,7 +25,7 @@ REM ============================================================
 REM  选择启动模式
 REM ============================================================
 cd /d "%~dp0"
-set "APP_VER=3.3.0"
+set "APP_VER=3.4.0"
 for /f "tokens=2 delims=:," %%v in ('findstr /i "version" "%~dp0config\optimization.json"') do set "APP_VER=%%v"
 set "APP_VER=%APP_VER:"=%"
 set "APP_VER=%APP_VER: =%"
