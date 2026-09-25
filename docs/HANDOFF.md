@@ -20,7 +20,9 @@
 > ✅ **2026-09-25**：P1-2（前后对比报告导出）已合并并随 v3.5.0 发布（见 §3.7）。
 > ✅ **2026-09-26**：P1-3（优化前自动创建系统还原点）已合并（PR #12），并随 v3.6.0 发布（见 §3.8）。
 > ✅ **2026-09-26**：PR #14 修复两类静默故障（弯引号误作字符串定界符 / `[PSCustomObject]` 漏写 `@`），并补源码静态检查（见 §3.10）。
-> 当前 `main` = v3.6.0 发布态；P2 智能降级建议已实现待发布（见 §3.9）。
+> ✅ **2026-09-26**：P2 智能降级建议已合并（PR #15，见 §3.9）。
+> ✅ **2026-09-26**：P2-1 统一优化预览已实现待发布（见 §3.11）。
+> 当前 `main` = v3.6.0 发布态 + PR #14/#15 合并提交；本地 `main` 与远端一致（`git ls-remote` 核对）。
 
 > 2026-09-18 更新：本轮已按 §8 的建议收口，详见文末 §9。
 
@@ -221,6 +223,22 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 
 防回归：新增 `Describe 'PowerShell source hygiene'`，静态检查所有 `.ps1` 语法零错误、无弯引号定界符、无漏 `@` 的 `[PSCustomObject]{`。
 
+### 3.11 P2-1 统一优化预览（2026-09-26，待发布）
+
+「一键全面优化」到底会动什么？新增只读 dry-run：**不碰系统**，只回答「点下去会发生什么」。
+
+| 层 | 落点 | 说明 |
+| --- | --- | --- |
+| lib | `New-OptimizePlanStep` / `Get-OptimizePlan` / `Format-OptimizePlan` | plan 覆盖 [2]清理/[3]服务/[4]启动项/[5]视觉/[6]电源/[7]磁盘/[8]网络/[10]遥测/[16]组合包 9 类步骤；每步带 domain/title/menu/action/target/detail/impact/risk；返回 `@{ ok; version; generatedAt; powerPlan; dns; steps; summary }`，summary 按 low/medium/high 计数。 |
+| CLI | `Optimize.ps1 -Plan [-Profile <name>] [-SkipCleanScan]`；菜单新增 `[P] 优化预览（只读）` | 分支放在管理员检查**之前**：只读预览不需要提权。默认带清理体积统计（扫盘约十几秒），`-SkipCleanScan` 可跳过。 |
+| WebUI | `webui/ps/optimize_plan.ps1 -Action plan` + MCP `optimize_plan(profile, skip_clean_scan)` | 已登记 `LONG_TASK_SCRIPTS`，与 `health_scan` 并列。 |
+
+**坑（本次新踩，见 §5）**：`param([switch]$Plan)` 会让脚本内所有 `$plan` 变量变成强类型 `SwitchParameter`，
+`$plan = Get-OptimizePlan ...` 直接抛「Cannot convert PSCustomObject to SwitchParameter」，且错误栈只指向调用行，极难定位。
+**给脚本加 `-Xxx` switch 参数前，先全文搜一遍 `$xxx` 小写同名变量**。本次已改名 `$planPreview` 并加注释。
+
+测试：新增 6 个用例（步骤结构 / summary 与实际一致 / 电源与 DNS 标签解析 / 组合包与未知组合包 / 清理步可选 / 渲染契约），全量 **194/194** 通过。
+
 ---
 
 ## 4. 三端文件地图（按域）
@@ -280,6 +298,7 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 15. **Python 改文件别踩通用换行陷阱**：`io.open(path,'r',encoding='utf-8-sig')` 默认 universal newlines 会把 `\r\n` 归一成 `\n`，
     写回时若 `newline=""` 又不再加回 `\r\n`，整份 CRLF 文件会变 LF。务必读完 `split`、写前 `replace("\n","\r\n")`。
     另外 `git show x | Set-Content y -NoNewline` 会把全文件拼成一行——取单行内容用 `Where-Object` 过滤后再写。
+
 16. **`Invoke-Profile` 必须带 `[CmdletBinding()]`**：无 `CmdletBinding` 的简单函数会把**未匹配的命名参数静默吞进 `$args`**——
     既不报错也不生效。本次就因 `webui/ps/16_profiles.ps1` 把 `-DryRun:$DryRun` 传给参数名为 `-WhatIf` 的
     `Invoke-Profile`，导致预演静默变成真跑。排查方法：写个最小复现（`function F { param([string]$Name,[switch]$WhatIf) ... }`
@@ -293,6 +312,10 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
     运行时 `Get-CleanTargets` 未定义、`$ErrorActionPreference='Stop'` 把它变成终止错误，
     而 `run_ps` 只会把 stdout/stderr 拼成 JSON，最终表现为 `/api/clean/scan` 返回 `ok:false` + “无效的 JSON”。
     固化顺序：dot-source → `Get-Command` 存在性校验（不足则输出 JSON 兜底）→ 再调用 lib 函数。
+
+20. **switch 参数名会遮蔽同名小写变量**：`param([switch]$Plan)` 一进脚本，所有 `$plan` 都变成强类型 `SwitchParameter`，
+    `$plan = Get-OptimizePlan ...` 直接抛「Cannot convert PSCustomObject to SwitchParameter」，而错误栈只指向调用行，极难定位。
+    **加 `-Xxx` switch 前先全文搜一遍 `$xxx`**；已中招的就地改名（本次 `Optimize.ps1` 的 `$plan` → `$planPreview`）。
 
 ---
 
@@ -334,7 +357,7 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
    （WebUI SVG 趋势卡片 / 智能建议表格 / GUI 迷你图与建议面板 / CLI `-Trend`）。
 5. ✅ P1 系列全部发布（P1-1 见 §3.6，P1-2→v3.5.0，P1-3→v3.6.0）；
    ✅ P2 智能降级建议已实现（§3.9），待随 v3.7.0 发布。
-6. 后续功能建议：P2 剩余两项——MCP `optimize_plan` dry-run（与 `health_plan` 并列，统一三端预览层）、
-   开机耗时基线 bench（`memory.low`/`disk.space` 之外补一条可量化的「有没有变快」曲线）。
-   细则见 `docs/FEATURE-IDEAS.md` §P2。
+6. 后续功能建议：P2 仅剩开机耗时基线 bench——体检报告加 `bench` 段（磁盘顺序读探测、启动项数、服务自动数，
+   纯只读且 <10s），配合 P1-1 趋势图让「优化有没有变快」可量化。细则见 `docs/FEATURE-IDEAS.md` §P2。
+   （MCP `optimize_plan` dry-run 已实现，见 §3.11。）
    「一键优化组合包」（P0-3）、「优化回滚向导」（P0-4）、「定时体检 + 趋势报告」（P1-1）均已落地（见 §3.4、§3.5、§3.6）。

@@ -321,6 +321,12 @@ Compact.exe /CompactOS:never
   - 复用本次体检已量好的体积，不重复扫盘；全程只读。
   - 三端入口：CLI 体检输出「智能建议」段 / GUI 健康页「智能建议」面板 / WebUI 体检页「智能建议」表格，
     WebUI 另有 `GET /api/health/tips` 与 MCP `health_tips`。
+- **统一优化预览（P2：一键优化前先看「会发生什么」，完全只读）**
+  - `lib` 新增 `Get-OptimizePlan`：把 [2]清理/[3]服务/[4]启动项/[5]视觉/[6]电源/[7]磁盘/[8]网络/[10]遥测/[16]组合包
+    的完整流程汇总成一份计划，每步带目标、影响与 low/medium/high 风险标记，附汇总计数。
+  - CLI：菜单新增 `[P] 优化预览（只读）`，或 `powershell -File Optimize.ps1 -Plan [-Profile <name>] [-SkipCleanScan]`；
+    只读模式不需要管理员权限。
+  - WebUI / MCP：`optimize_plan` 工具（`profile`、`skip_clean_scan` 参数），与 `health_scan` 并列。
 - 顺手修掉两类「语法检查通过、运行才炸」的静默故障：弯引号误作字符串定界符、
   `[PSCustomObject]{ }` 漏写 `@` 导致返回 ScriptBlock（见 v3.6.0 之后的安全修复）。
 

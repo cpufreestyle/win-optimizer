@@ -25,6 +25,8 @@ LONG_TASK_SCRIPTS = {
     "02_clean.ps1", "07_disk.ps1",
     "13_windows_features.ps1", "10_block_win11_24h2.ps1",
     "15_health.ps1",
+    # optimize_plan 会统计可清理体积，耗时与体检同级
+    "optimize_plan.ps1",
 }
 
 
@@ -133,6 +135,17 @@ def _register_mcp_tools(server):
         return run_ps("08_network.ps1", "-Action", "apply",
                       "-Dns", str(int(dns)), "-Tcp", str(tcp).lower(), "-Rss", str(rss).lower(),
                       "-Rsc", str(rsc).lower(), "-DnsCache", str(dnscache).lower())
+
+    @server.tool()
+    def optimize_plan(profile: str = "", skip_clean_scan: bool = False) -> dict:
+        """完整优化预览（只读 dry-run）：列出「一键全面优化」每一步将做什么、目标、预估影响与风险等级，
+        不执行任何修改。profile: 可选组合包名（old_balanced/gaming/quiet_saver/minimal），会附上该组合包步骤预览。"""
+        args = ["-Action", "plan"]
+        if profile:
+            args += ["-Profile", str(profile)]
+        if skip_clean_scan:
+            args += ["-SkipCleanScan"]
+        return run_ps("optimize_plan.ps1", *args)
 
     @server.tool()
     def health_scan() -> dict:

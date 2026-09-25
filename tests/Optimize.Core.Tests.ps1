@@ -2476,3 +2476,103 @@ Describe 'Optimize.Core smart recommendations (P2, shared by CLI/GUI/WebUI)' {
         $tips.clean[0].mb | Should -BeGreaterThan 0
     }
 }
+
+Describe 'Optimize.Core unified optimize plan - read-only dry-run (P2, shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+
+    It 'Get-OptimizePlan returns a well-formed plan with risks and a consistent summary' {
+        $plan = Get-OptimizePlan -SkipCleanScan
+        $plan.ok | Should -BeTrue
+        $plan.version | Should -Not -BeNullOrEmpty
+        $plan.generatedAt | Should -Match '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
+        @($plan.steps).Count | Should -BeGreaterThan 0
+        foreach ($s in @($plan.steps)) {
+            foreach ($f in @('domain','title','menu','action','target','impact','risk')) {
+                @($s.PSObject.Properties.Name) | Should -Contain $f
+            }
+            $s.domain | Should -Not -BeNullOrEmpty
+            $s.menu   | Should -Not -BeNullOrEmpty
+            $s.title  | Should -Not -BeNullOrEmpty
+            $s.action | Should -Not -BeNullOrEmpty
+            $s.impact | Should -Not -BeNullOrEmpty
+            $s.risk   | Should -BeIn @('low','medium','high')
+        }
+        # SkipCleanScan：不得出现 clean 步骤
+        @($plan.steps | Where-Object { $_.domain -eq 'clean' }).Count | Should -Be 0
+        # summary 与实际步骤一一对应
+        $plan.summary.total | Should -Be @($plan.steps).Count
+        ($plan.summary.low + $plan.summary.medium + $plan.summary.high) | Should -Be @($plan.steps).Count
+        $plan.summary.low    | Should -Be @($plan.steps | Where-Object { $_.risk -eq 'low' }).Count
+        $plan.summary.medium | Should -Be @($plan.steps | Where-Object { $_.risk -eq 'medium' }).Count
+        $plan.summary.high   | Should -Be @($plan.steps | Where-Object { $_.risk -eq 'high' }).Count
+    }
+
+    It 'plan always covers services/startup/power/disk and resolves power-plan labels' {
+        $plan = Get-OptimizePlan -SkipCleanScan
+        foreach ($d in @('services','startup','power','disk')) {
+            @($plan.steps | Where-Object { $_.domain -eq $d }).Count | Should -Be 1
+        }
+        $plan.powerPlan | Should -Not -BeNullOrEmpty
+        $plan.dns       | Should -Not -BeNullOrEmpty
+
+        $bal = Get-OptimizePlan -SkipCleanScan -PowerPlanGuid '381b4222-f694-41f0-9685-ff5bb260df2e'
+        $powerStep = @($bal.steps | Where-Object { $_.domain -eq 'power' })[0]
+        $powerStep.target | Should -Match '平衡优化模式'
+        $powerStep.action | Should -Be 'Set-PowerPlan'
+        $powerStep.risk   | Should -Be 'low'
+    }
+
+    It 'network step reflects the chosen DNS option when adapters are present' {
+        $plan = Get-OptimizePlan -SkipCleanScan -DnsOption 3
+        $plan.dns | Should -Be '阿里 DNS'
+        # 无活动网卡时跳过该步骤是合法行为；有网卡时必须带上所选 DNS
+        if (@(Get-ActiveNetAdapters).Count -gt 0) {
+            $net = @($plan.steps | Where-Object { $_.domain -eq 'network' })[0]
+            $net | Should -Not -BeNullOrEmpty
+            $net.action | Should -Be 'Invoke-NetworkOptimization'
+            $net.risk   | Should -Be 'medium'
+            $net.target | Should -Match '阿里 DNS'
+        }
+    }
+
+    It 'profile steps are appended for known bundles and surface unknown ones as errors' {
+        $plan = Get-OptimizePlan -SkipCleanScan -ProfileName 'old_balanced'
+        $p = @($plan.steps | Where-Object { $_.domain -eq 'profile' })[0]
+        $p | Should -Not -BeNullOrEmpty
+        $p.target | Should -Match 'old_balanced'
+        $p.title  | Should -Match '老机均衡'
+        $p.action | Should -Be 'Invoke-Profile'
+
+        $bad = Get-OptimizePlan -SkipCleanScan -ProfileName 'no_such_profile'
+        $bad.ok | Should -BeTrue
+        $bp = @($bad.steps | Where-Object { $_.domain -eq 'profile' })[0]
+        $bp.target | Should -Be 'no_such_profile'
+        $bp.impact | Should -Match '未找到组合包'
+    }
+
+    It 'clean step appears with size data when the scan is not skipped' {
+        $plan  = Get-OptimizePlan
+        $clean = @($plan.steps | Where-Object { $_.domain -eq 'clean' })
+        $clean.Count | Should -BeLessOrEqual 1
+        if ($clean.Count -eq 1) {
+            $clean[0].menu   | Should -Be '[2]'
+            $clean[0].action | Should -Be 'Remove-FolderContent'
+            $clean[0].risk   | Should -Be 'low'
+            $clean[0].target | Should -Match 'MB'
+        }
+    }
+
+    It 'Format-OptimizePlan renders menu/title per step and stays empty for null or failed plans' {
+        $plan  = Get-OptimizePlan -SkipCleanScan -ProfileName 'old_balanced'
+        $lines = @(Format-OptimizePlan $plan)
+        $text  = $lines -join "`n"
+        foreach ($s in @($plan.steps)) {
+            $text | Should -Match ([regex]::Escape($s.menu))
+            $text | Should -Match ([regex]::Escape($s.title))
+        }
+        @(Format-OptimizePlan $null).Count | Should -Be 0
+        @(Format-OptimizePlan ([PSCustomObject]@{ ok = $false })).Count | Should -Be 0
+    }
+}
