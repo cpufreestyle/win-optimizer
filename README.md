@@ -314,17 +314,17 @@ Compact.exe /CompactOS:never
 
 ### v3.6.0 (2026-09-26)
 - **优化前自动创建系统还原点（P1-3）**
-  - `config/optimization.json` 新墟 `safety.create_restore_point`（**默认关闭**，与 `disk.compact_os_default` 同一套默认值模式）。
+  - `config/optimization.json` 新增 `safety.create_restore_point`（**默认关闭**，与 `disk.compact_os_default` 同一套默认值模式）。
   - 新增 `New-SystemRestorePoint`：先 `Checkpoint-Computer`（Win8+），失败自动退 WMI `SystemRestore`（Win7 可用）。
   - 非管理员、System Restore 被关闭、或 24 小时内已建过还原点时，**只提示不阻塞**，优化照常执行。
   - 三端入口：CLI `-RestorePoint` / GUI “执行前先建系统还原点”复选框 / WebUI 同名复选框。
   - 只在真要改动系统的第一步前创建；预演（WhatIf）与全部跳过时不创建。
-- 测试：Pester 171 / 171 通过（新墟 9 个还原点相关用例）
+- 测试：Pester 171 / 171 通过（新增 9 个还原点相关用例）
 
 ### v3.5.0 (2026-09-25)
-- **?????????P1-2?**
+- **前后对比报告导出（P1-2）**
   - `lib/Optimize.Core.ps1` 新增 `Export-HealthReport -From -To -Format Html|Markdown [-BackupDir] [-OutDir] [-FileName]`；
-    省略 `-From/-To` 时自动取历史最新两份体棃报告做对比，默认输出到桌面。
+    省略 `-From/-To` 时自动取历史最新两份体检报告做对比，默认输出到桌面。
   - HTML 为**自包含单文件**（全内联 CSS、暗色模式、零外部请求），含总分变化、逐指标对比、已解决 / 新增 issue 清单。
   - Markdown 为纯文本表格，可直接粘贴到求助帖。
   - 三端入口：CLI `-Export`、GUI “导出对比报告”按钮、WebUI `/api/health/export` + MCP `health_export` + 前端导出按钮。
@@ -335,7 +335,7 @@ Compact.exe /CompactOS:never
 - **定时体检 + 趋势报告（P1-1）**
   - `scripts/15-HealthCheck.ps1 -InstallSchedule [-Time 09:00]` 注册每日自动体检计划任务（非管理员自动降级为登录时触发），`-UninstallSchedule` 卸载
   - `Get-HealthTrend` 读取 `backups/health/` 历史报告，输出分数 / 内存可用% / 可清理 MB / 启动项数趋势序列
-  - WebUI 体检页新墟「体检趋势」卡片（内联 SVG 折线，无外链依赖）、CLI `-Trend` 字符 sparkline、GUI 迷你趋势行
+  - WebUI 体检页新增「体检趋势」卡片（内联 SVG 折线，无外链依赖）、CLI `-Trend` 字符 sparkline、GUI 迷你趋势行
   - 体检后自动附带近期分数趋势；计划任务自动运行时跳过交互提问
 - 修复：`Invoke-Profile -WhatIf` 预演现在真零副作用（不再落盘备份与 `startup_items` 目录）
 - 修复：GitHub Actions 上 4 个环境相关测试失败（7 代 runner 无活动网卡 / 短路径 TEMP）

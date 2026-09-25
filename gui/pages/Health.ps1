@@ -278,7 +278,7 @@
             } else {
                 Write-Log "对比报告导出失败: $($exp.error)" "ERROR"
                 [System.Windows.Forms.MessageBox]::Show(
-                    "导出失败：$($exp.error)`n`n需要至少两次体棃历史记录才能对比。",
+                    "导出失败：$($exp.error)`n`n需要至少两次体检历史记录才能对比。",
                     "导出失败",
                     [System.Windows.Forms.MessageBoxButtons]::OK,
                     [System.Windows.Forms.MessageBoxIcon]::Warning)
