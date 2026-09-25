@@ -140,6 +140,11 @@ def _register_mcp_tools(server):
         return run_ps("15_health.ps1", "-Action", "scan")
 
     @server.tool()
+    def health_trend(days: int = 30) -> dict:
+        """体检趋势（只读）：返回近 N 天每次体检的分数/内存可用%/可清理MB/启动项时间序列。"""
+        return run_ps("15_health.ps1", "-Action", "trend", "-Days", str(int(days)))
+
+    @server.tool()
     def health_plan() -> dict:
         """体检修复预览（只读）：返回每个问题对应的具体动作、目标与预估影响，不执行任何修改。"""
         return run_ps("15_health.ps1", "-Action", "plan")
@@ -595,6 +600,12 @@ def api_health():
 @app.route("/api/health/plan")
 def api_health_plan():
     return jsonify(run_ps("15_health.ps1", "-Action", "plan"))
+
+
+@app.route("/api/health/trend")
+def api_health_trend():
+    days = int(request.args.get("days", 30))
+    return jsonify(run_ps("15_health.ps1", "-Action", "trend", "-Days", str(days)))
 
 
 @app.route("/api/health/remediate", methods=["POST"])

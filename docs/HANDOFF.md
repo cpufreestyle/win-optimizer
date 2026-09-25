@@ -16,6 +16,9 @@
 
 ## 2. 当前分支与待合并 PR（最关键）
 
+> ✅ **2026-09-25**：PR #7 已合并入 `main`（merge commit `bfc7b54`），残留分支已清理，已打 tag `v3.3.0` 并发布 Release。
+> 当前 `main` = v3.3.0 发布态；P1-1（定时体检 + 趋势报告）已在 `feat/p1-1-health-trend` 分支实现（见 §3.6）。
+
 > 2026-09-18 更新：本轮已按 §8 的建议收口，详见文末 §9。
 
 > ✅ **2026-09-23 复核（实测，已推翻「main 严重落后」的旧结论）**：
@@ -121,6 +124,19 @@ WMI「系统启动命令」行与它们重复，仅登记不动作。
 `services → startup → visual → power → network → telemetry → disk`，单步失败续跑不中断，结果汇总 `results`/`skipped`/`ok`/`dryRun`/`forced`。
 
 已知取舍：`startup` 只有 `list`（只读列出）与 `all`（全禁）两档，没有逐项交互；`disk`/`compact_os` 未在任何内置包里启用（磁盘优化仍走 07 页按需触发）；未知的 `dns`/`visual`/`power` 值只跳过对应步骤，不整包报错。
+### 3.6 定时体检 + 趋势报告（P1-1，2026-09-25）
+
+`Save-HealthReport` 早已把每次体检落盘 `backups/health/*.json`，但从未被自动执行、也没人看趋势。本轮把「无人看的数据」变成「每日自动沉淀 + 一眼可读的趋势」。
+
+| 层 | 内容 |
+|----|------|
+| lib | `Get-HealthTrend [-BackupDir] [-Days 30] [-MaxPoints 60]`（读 `backups/health/*.json`，输出 time/score/freeRamPct/cleanableMB/startupCount/issueCount 升序序列；超过 MaxPoints 均匀抽样且保留最新点）、`Format-Sparkline`（纯 ASCII 字符 sparkline，Win7 控制台等宽字体稳定显示）、`Test-IsAdmin`、`Install-HealthSchedule [-Time] [-HealthScript]`（schtasks 注册每日任务；非管理员降级 ONLOGON 并 warning 说明；校验/注册失败只返回 error，绝不抛异常）、`Remove-HealthSchedule`（幂等删除） |
+| CLI | `scripts/15-HealthCheck.ps1` 新增 `-InstallSchedule` / `-UninstallSchedule` / `-Trend [-TrendDays] [-Time]`；每次体检后附带一行分数 sparkline；交互结尾提示一键注册；非交互环境（计划任务自动运行）自动跳过修复提问与注册提示（`[Environment]::UserInteractive`） |
+| GUI | `gui/pages/Health.ps1` 关键指标区追加一行迷你 sparkline（数据源与 CLI/WebUI 完全一致） |
+| WebUI | `webui/ps/15_health.ps1` 新增 `-Action trend`（scan 响应附带 `trend`）；`/api/health/trend` 路由 + MCP 工具 `health_trend`；前端「体检趋势」卡片 = 内联 SVG 折线 + 面积 + 逐点 tooltip + 最近 10 次表格，**零外链依赖，离线可用** |
+
+测试：`tests/Optimize.Core.Tests.ps1` 新增 5 个用例（sparkline 映射 / 趋势序列与 `-Days`、`-MaxPoints` 抽样 / 空历史 / 计划任务参数校验 / `Test-IsAdmin`），**156/156 通过**；另做 CLI `-Trend`、WebUI `trend` action、GUI 无头构建+点击冒烟验证。
+
 ### 3.3 CompactOS：显式开关、默认关闭（2026-09-18 收口，原 §7.1）
 
 此前 CLI 的 `scripts/07-DiskOptimize.ps1` **无条件**执行 `Compact.exe /CompactOS:always`，
@@ -241,11 +257,12 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 
 ## 8. 建议的下一步
 
-0. 合并前核对远端真实 HEAD：`git ls-remote origin refs/heads/main`（复核时应为 `7cb9d17` 或更高），并确认 PR #7 的 Actions 为绿。
-1. 在 GitHub 合并 **PR [#7](https://github.com/cpufreestyle/win-optimizer/pull/7)**（本集成分支，`sync/v3.3.0-main` → `main`）。
-   （备选：按 #5 → #6 逐个在 GitHub 点合并，然后丢弃本分支。）
-2. 合并后清理远程残留分支：`feat/optimizations`、`fix/cli-error-isolation-version`、`perf/folder-size-and-logging`、`release/v3.1.0`（这些已合并分支的 `origin/*` 引用仍残留，可删）。
-3. 打 tag `v3.3.0` 触发 Actions 编译 Release（见 `docs/DEVELOPMENT.md` 发布流程）。
-4. 真机验收 GUI 体检页（§7）。
-5. 后续功能建议（按价值排序）：「计划任务定时体检」→「前后对比报告导出」→「优化前自动创建系统还原点」。
-   「一键优化组合包」（P0-3）与「优化回滚向导」（P0-4）均已落地（见 §3.4、§3.5）。
+> ✅ **2026-09-25 收口**：PR #7 已合并（merge commit `bfc7b54`），远端残留分支已清理，`v3.3.0` 已发布 Release。
+
+0. ✅ 合并前核对远端真实 HEAD：`git ls-remote origin refs/heads/main` 为 `bfc7b54`（PR #7 merge commit），Actions `validate` 为绿。
+1. ✅ 合并 **PR [#7](https://github.com/cpufreestyle/win-optimizer/pull/7)**（`sync/v3.3.0-main` → `main`）；PR #5/#6 由 GitHub 自动关闭。
+2. ✅ 清理远端残留分支：`feat/optimizations`、`fix/cli-error-isolation-version`、`perf/folder-size-and-logging`、`release/v3.1.0` 与集成分支均已删除，远端只剩 `main`。
+3. ✅ 打 tag `v3.3.0`：Release workflow 成功，GitHub Release `v3.3.0` 已发布。
+4. 真机验收 GUI 体检页（§7）与新增的「体检趋势」显示（WebUI SVG 趋势卡片 / GUI 迷你图 / CLI `-Trend`）。
+5. 后续功能建议（按价值排序）：「前后对比报告导出」（P1-2）→「优化前自动创建系统还原点」（P1-3）→ P2 探索项。
+   「一键优化组合包」（P0-3）、「优化回滚向导」（P0-4）、「定时体检 + 趋势报告」（P1-1）均已落地（见 §3.4、§3.5、§3.6）。

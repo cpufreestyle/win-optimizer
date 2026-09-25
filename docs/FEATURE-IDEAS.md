@@ -155,7 +155,7 @@ lib 新增 `Get-Profiles` / `Get-ProfilePlan <name>` / `Invoke-Profile <name> [-
 
 ---
 
-## P1-1 定时体检 + 趋势报告
+## P1-1 定时体检 + 趋势报告 —— 已实现
 
 `Save-HealthReport` / `Get-HealthHistory` 已落库历史 JSON，但从未被自动执行、也无人看趋势。
 
@@ -164,6 +164,14 @@ lib 新增 `Get-Profiles` / `Get-ProfilePlan <name>` / `Invoke-Profile <name> [-
 - WebUI 趋势卡片用**内联 SVG 折线**（禁外链 CDN，目标机器可能离线）；CLI `-Trend` 用字符 sparkline；GUI 健康页加迷你趋势。
 
 **风险**：低。只读 + 纯本地文件；定时任务注册失败必须静默容错（虚拟机/域控环境常见）。
+
+**落点（三端均已落地，2026-09-25）**：
+- lib：`Get-HealthTrend [-BackupDir] [-Days 30] [-MaxPoints 60]`（读 `backups/health/*.json`，输出 time/score/freeRamPct/cleanableMB/startupCount/issueCount 升序序列；超过 MaxPoints 均匀抽样且保留最新点）、`Format-Sparkline`（纯 ASCII 字符 sparkline，Win7 控制台等宽字体稳定显示）。
+- 定时任务：`Test-IsAdmin` / `Install-HealthSchedule [-Time] [-HealthScript]` / `Remove-HealthSchedule`（schtasks，Win7~Win11 通用；非管理员降级 ONLOGON 并 warning 说明；校验/注册失败只返回 error 不抛异常）。
+- CLI：`scripts/15-HealthCheck.ps1 -InstallSchedule [-Time 09:00]` / `-UninstallSchedule` / `-Trend [-TrendDays]`；每次体检后附带一行分数 sparkline；非交互环境（计划任务自动运行）自动跳过修复提问与注册提示。
+- GUI：`gui/pages/Health.ps1` 关键指标区追加一行迷你 sparkline（数据源与 CLI/WebUI 完全一致）。
+- WebUI：`-Action trend`（scan 响应附带 trend）、`/api/health/trend` 路由 + MCP `health_trend`；前端「体检趋势」卡片 = 内联 SVG 折线 + 面积 + 逐点 tooltip + 最近 10 次表格，**零外链依赖，离线可用**。
+- 测试：`tests/Optimize.Core.Tests.ps1` 新增 5 个用例（sparkline 映射 / 趋势序列与 `-Days`、`-MaxPoints` 抽样 / 空历史 / 计划任务参数校验 / `Test-IsAdmin`），156/156 通过。
 
 ## P1-2 前后对比报告导出（一键分享）
 
@@ -196,7 +204,7 @@ config 新增 `safety.create_restore_point`（默认 `false`，与 `disk.compact
 2. P0-2（体检修复，lib 单点映射，测试友好）
 3. P0-4（时间线/回滚，依赖 P0-1 引入的备份 manifest 规范）
 4. P0-3（组合包，编排面最大）
-5. P1-1 → P1-2 → P1-3
+5. P1-1（已实现）→ P1-2 → P1-3
 6. P2 按社区反馈取舍
 
 每步都走「集成分支 + PR」流程（见 HANDOFF §2），PR 前确认：Pester 151+ 全绿、

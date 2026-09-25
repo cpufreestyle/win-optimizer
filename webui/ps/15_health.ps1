@@ -14,11 +14,12 @@
     逻辑复用共享库 lib/Optimize.Core.ps1，与 CLI / GUI 行为一致。
 #>
 param(
-    [ValidateSet("scan", "plan", "remediate")]$Action = "scan",
+    [ValidateSet("scan", "plan", "remediate", "trend")]$Action = "scan",
     [string[]]$IssueCode = @(),
     [ValidateSet("High", "Medium", "Low")]$MaxSeverity = "Medium",
     [int]$DnsOption = 1,
     [string]$PowerPlanGuid = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c",
+    [int]$Days = 30,
     [switch]$WhatIf,
     [switch]$Force
 )
@@ -59,6 +60,7 @@ try {
             comparison = $cmp
             file       = $file
             plan       = $plan
+            trend      = @(Get-HealthTrend -BackupDir $backupDir)
         })
     }
     elseif ($Action -eq "plan") {
@@ -81,6 +83,13 @@ try {
                                           -SkipCleanScan -WhatIf:$WhatIf -Force:$Force
         }
         Out-Json $r
+    }
+    elseif ($Action -eq "trend") {
+        Out-Json ([PSCustomObject]@{
+            ok    = $true
+            days  = $Days
+            trend = @(Get-HealthTrend -BackupDir $backupDir -Days $Days)
+        })
     }
 } catch {
     Out-Json ([PSCustomObject]{ ok = $false; error = $_.Exception.Message })

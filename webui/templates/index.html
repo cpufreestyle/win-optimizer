@@ -834,6 +834,28 @@ async function renderHealth(){
     ${m.cleanableMB!=null?`<tr><td>可清理空间</td><td>${m.cleanableMB} MB</td></tr>`:''}
     <tr><td>活动网卡</td><td>${m.activeAdapters} 个</td></tr>
   </tbody></table></div>`;
+  // --- 体检趋势（内联 SVG 折线，无外链依赖，离线可用）---
+  const trend = d.trend || [];
+  h += `<h3 style="margin:16px 0 8px">体检趋势</h3>`;
+  if(trend.length < 2){
+    h += `<p class="muted">历史报告不足，暂无趋势图。多跑几次体检后即可看到分数变化曲线。</p>`;
+  } else {
+    const W=520,H=100,P=8;
+    const sv = trend.map(p=>p.score);
+    const mn = Math.min(...sv), mx = Math.max(...sv);
+    const span = (mx-mn)||1;
+    const stp = (W-2*P)/(trend.length-1);
+    const pts = sv.map((s,i)=>[P+i*stp, H-P-((s-mn)/span)*(H-2*P)]);
+    const poly = pts.map(q=>q[0].toFixed(1)+','+q[1].toFixed(1)).join(' ');
+    const area = P+','+(H-P)+' '+poly+' '+(W-P)+','+(H-P);
+    const grid = [0,0.5,1].map(r=>{const y=(P+(H-2*P)*r).toFixed(1);return '<line x1="'+P+'" y1="'+y+'" x2="'+(W-P)+'" y2="'+y+'" stroke="currentColor" stroke-opacity="0.12"/>';}).join('');
+    const dots = pts.map((q,i)=>'<circle cx="'+q[0].toFixed(1)+'" cy="'+q[1].toFixed(1)+'" r="2.5" fill="currentColor"><title>'+esc(String(trend[i].time).replace('T',' ').slice(0,16))+' '+sv[i]+' 分</title></circle>').join('');
+    h += `<div class="card"><svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="color:var(--accent,#4ade80);display:block">${grid}<polygon points="${area}" fill="currentColor" fill-opacity="0.12"/><polyline points="${poly}" fill="none" stroke="currentColor" stroke-width="2"/>${dots}</svg>
+      <div class="muted" style="margin-top:6px">${esc(String(trend[0].time).replace('T',' ').slice(0,16))} → ${esc(String(trend[trend.length-1].time).replace('T',' ').slice(0,16))}｜最低 ${mn} 分，最高 ${mx} 分，共 ${trend.length} 次</div></div>`;
+    h += `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>时间</th><th>分数</th><th>内存可用</th><th>可清理</th><th>启动项</th><th>问题数</th></tr></thead><tbody>
+      ${trend.slice(-10).reverse().map(p=>`<tr><td>${esc(String(p.time).replace('T',' ').slice(0,16))}</td><td>${p.score}</td><td>${p.freeRamPct}%</td><td>${p.cleanableMB} MB</td><td>${p.startupCount}</td><td>${p.issueCount}</td></tr>`).join('')}
+    </tbody></table></div>`;
+  }
   if(m.volumes && m.volumes.length){
     h += `<h3 style="margin:16px 0 8px">分区</h3><div class="table-wrap"><table>
       <thead><tr><th>盘符</th><th>介质</th><th>可用</th><th>共</th><th>已用</th></tr></thead><tbody>
