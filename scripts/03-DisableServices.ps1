@@ -13,6 +13,8 @@
     - OneDrive 同步服务
     所有更改会记录到备份文件，可随时恢复。
 #>
+param([switch]$Force)   # 强制禁用被运行中服务依赖的服务（默认跳过并说明原因）
+
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
@@ -34,20 +36,8 @@ $backupDir = Split-Path $backupFile -Parent
 if (-not (Test-Path $backupDir)) { New-Item -ItemType Directory -Path $backupDir -Force | Out-Null }
 
 Write-Host "`n[1/3] 备份当前服务状态..." -ForegroundColor Yellow
-$backupData = @()
-foreach ($svc in $servicesToDisable) {
-    $service = Get-Service -Name $svc.Name -ErrorAction SilentlyContinue
-    if ($service) {
-        $startMode = (Get-CimInstance Win32_Service -Filter "Name='$($svc.Name)'").StartMode
-        $backupData += [PSCustomObject]@{
-            Name      = $svc.Name
-            Status    = $service.Status
-            StartType = $startMode
-            Date      = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-        }
-    }
-}
-$backupData | Export-Csv -Path $backupFile -NoTypeInformation -Encoding UTF8
+$backupData = Get-ServiceList
+$backupFile = Backup-ServiceStates -BackupDir $backupDir -Services $backupData
 Write-Host "  备份已保存: $backupFile" -ForegroundColor Green
 
 # 显示服务列表并让用户确认
@@ -88,29 +78,24 @@ if ($toProcess.Count -eq 0) {
 Write-Host "`n[3/3] 正在禁用服务..." -ForegroundColor Yellow
 $disabledCount = 0
 $skippedCount = 0
-
-foreach ($svc in $toProcess) {
-    $service = Get-Service -Name $svc.Name -ErrorAction SilentlyContinue
-    if (-not $service) {
-        Write-Host "  [跳过] $($svc.Name) — 服务不存在" -ForegroundColor Gray
-        $skippedCount++
-        continue
-    }
-
-    try {
-        # 先停止服务
-        if ($service.Status -eq "Running") {
-            Stop-Service -Name $svc.Name -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Milliseconds 500
-        }
-        # 设置为禁用
-        Set-Service -Name $svc.Name -StartupType Disabled -ErrorAction Stop
-        Write-Host "  [已禁用] $($svc.Name) — $($svc.Desc)" -ForegroundColor Green
+$r = Disable-Services -Services $toProcess -Mode "all" -Force:$Force
+foreach ($d in $r.details) {
+    $res = [string]$d.result
+    if ($res -like "已禁用") {
+        Write-Host "  [已禁用] $($d.name)" -ForegroundColor Green
         $disabledCount++
-    } catch {
-        Write-Host "  [失败] $($svc.Name) — $($_.Exception.Message)" -ForegroundColor Red
+    }
+    elseif ($res -like "失败*") {
+        Write-Host "  [失败] $($d.name) —— $res" -ForegroundColor Red
         $skippedCount++
     }
+    else {
+        Write-Host "  [跳过] $($d.name) —— $res" -ForegroundColor Gray
+        $skippedCount++
+    }
+}
+if (-not $Force) {
+    Write-Host "  提示: 被运行中服务依赖的服务已自动跳过；确认无影响可加 -Force 重新执行。" -ForegroundColor DarkGray
 }
 
 # 额外：禁用遥测相关计划任务（统一走 lib：Win8+ 用 ScheduledTasks，Win7 回退 schtasks；执行前自动备份）

@@ -134,6 +134,9 @@
                     $lines += ("磁盘顺序读   : 探测失败（{0}）" -f $r.bench.error)
                 }
                 $lines += ("开机加载负担 : 启动项 {0} 项 + 自动服务 {1} 个" -f $r.bench.startupCount, $r.bench.autoServices)
+            if ($null -ne $r.bench.bootSeconds) {
+                $lines += ("上次开机耗时   : {0} 秒（{1:yyyy-MM-dd HH:mm}）" -f $r.bench.bootSeconds, $r.bench.bootAt)
+            }
                 $lines += ("基线探测耗时 : {0} ms" -f $r.bench.elapsedMs)
             }
             # --- 体检趋势（迷你 sparkline，与 CLI/WebUI 同源数据）---
@@ -180,7 +183,9 @@
             $script:TxtHealthRemediation.Lines = $pl
 
             # --- 智能降级建议（只读；复用本次报告，不重复扫盘）---
-            $tipLines = @(Format-SmartRecommendations (Get-SmartRecommendations -Report $r -Top 3))
+            $script:HealthTips = Get-SmartRecommendations -Report $r -Top 3
+            $script:BtnHealthApplyTips.Enabled = (@($script:HealthTips.startup).Count -gt 0)
+            $tipLines = @(Format-SmartRecommendations $script:HealthTips)
             if ($tipLines.Count -eq 0) {
                 $script:TxtHealthTips.Lines = @("当前体检未命中需要优先处理的项目。")
             } else {
@@ -324,6 +329,71 @@
         }
     })
     $page.Controls.Add($script:BtnHealthExport)
+
+    # 一键应用智能建议（P3-1）：按体检建议直接禁用启动项，执行前自动备份
+    $script:BtnHealthApplyTips = New-Button "应用智能建议" 20 960 150 40 $Theme.Accent 11
+    $script:BtnHealthApplyTips.Enabled = $false
+    $script:BtnHealthApplyTips.Add_Click({
+        try {
+            if (-not $script:HealthReport -or -not $script:HealthTips) {
+                [System.Windows.Forms.MessageBox]::Show("请先点击「开始体检」。", "提示", `
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+                return
+            }
+            if (@($script:HealthTips.startup).Count -eq 0) {
+                [System.Windows.Forms.MessageBox]::Show("当前没有可应用的启动项建议。", "提示", `
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+                return
+            }
+            $preview = ""
+            foreach ($s in @($script:HealthTips.startup)) {
+                $preview += ("{0}. {1}`n    {2}`n" -f $s.rank, $s.name, $s.reason)
+            }
+            $ans = [System.Windows.Forms.MessageBox]::Show(
+                "将按体检建议禁用以下启动项（执行前自动备份，可恢复）:`n`n$preview`n是否继续？",
+                "确认应用智能建议",
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Warning)
+            if ($ans -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+
+            $this.Enabled = $false
+            $this.Text = "应用中..."
+            Invoke-UIRefresh
+
+            $ar = Invoke-SmartRecommendations -Report $script:HealthReport -BackupDir $script:BackupDir `
+                                            -CreateRestorePoint $script:chkHealthRp.Checked
+            if ($ar.restorePoint) {
+                if ($ar.restorePoint.ok) {
+                    Write-Log "系统还原点已创建: $($ar.restorePoint.name)" "SUCCESS"
+                } else {
+                    Write-Log "系统还原点创建失败: $($ar.restorePoint.error)" "WARNING"
+                }
+            }
+            foreach ($n in @($ar.applied)) { Write-Log "[已禁用启动项] $n" "SUCCESS" }
+            foreach ($f in @($ar.failed))  { Write-Log "[失败] $($f.name) —— $($f.reason)" "ERROR" }
+            if ($ar.backup) { Write-Log "备份: $($ar.backup)" "INFO" }
+
+            $rpTxt = ''
+            if ($ar.restorePoint) {
+                if ($ar.restorePoint.ok) { $rpTxt = "`n`n[系统还原点已创建] $($ar.restorePoint.name)" }
+                else { $rpTxt = "`n`n[还原点创建失败] $($ar.restorePoint.error)（已继续执行）" }
+            }
+            $doneTxt = if ($ar.ok) { "建议已应用，重启后生效。可到「备份恢复」回滚。" }
+                       elseif ($ar.error) { $ar.error }
+                       else { "部分启动项处理失败，详情见日志。" }
+            [System.Windows.Forms.MessageBox]::Show(($doneTxt + $rpTxt), "应用智能建议", `
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+
+            $this.Enabled = $true
+            $this.Text = "应用智能建议"
+            $script:BtnHealthScan.PerformClick()
+        } catch {
+            Write-Log "应用智能建议出错: $($_.Exception.Message)" "ERROR"
+            $this.Enabled = $true
+            $this.Text = "应用智能建议"
+        }
+    })
+    $page.Controls.Add($script:BtnHealthApplyTips)
 
     # 对比结果提示
     $script:LblHealthCompare = New-Label "点击「开始体检」后，这里会显示与上一次体检的对比。" 340 726 440 24 $Fonts.Small $Theme.TextDim

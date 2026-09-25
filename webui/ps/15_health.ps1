@@ -11,6 +11,9 @@
         -PowerPlanGuid 电源计划目标 GUID，默认高性能
         -WhatIf       只预览
         -Force        允许自动执行 High 级问题（需配合 -MaxSeverity High）
+    -Action apply-tips: 按智能建议一键禁用启动项（每步前自动备份；清理类不自动执行）
+        -Top             应用前 N 条建议，默认 3
+        -WhatIf          只预览不执行
     -Action tips     : 只返回智能降级建议（最值得禁用的启动项 / 最值得清理的目录），不改动任何设置
     -Action export   : 将前后两次体检导出为自包含单文件（Html / Markdown）
         -Format       导出格式 html / md（Markdown），默认 html
@@ -18,12 +21,13 @@
     逻辑复用共享库 lib/Optimize.Core.ps1，与 CLI / GUI 行为一致。
 #>
 param(
-    [ValidateSet("scan", "plan", "remediate", "trend", "export", "tips")]$Action = "scan",
+    [ValidateSet("scan", "plan", "remediate", "trend", "export", "tips", "apply-tips")]$Action = "scan",
     [string[]]$IssueCode = @(),
     [ValidateSet("High", "Medium", "Low")]$MaxSeverity = "Medium",
     [switch]$SkipBench,
     [int]$DnsOption = 1,
     [string]$PowerPlanGuid = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c",
+    [int]$Top = 3,
     [int]$Days = 30,
     [ValidateSet("html", "md", "Html", "Markdown")][string]$Format = "html",
     [string]$From = "",
@@ -121,6 +125,28 @@ try {
             ok      = $true
             startup = @($tips.startup)
             clean   = @($tips.clean)
+        })
+    }
+    elseif ($Action -eq "apply-tips") {
+        # 智能建议一键应用（P3-1）：只应用启动项类建议，清理类保持只读手动
+        $rpOn = switch ("$CreateRestorePoint".Trim().ToLower()) {
+            'true'  { $true }
+            'false' { $false }
+            default { Get-RestorePointDefault }
+        }
+        # 与 -Action tips 同源：优先用最近一次体检报告判断该不该给建议
+        $tipsReport = Get-PreviousHealthReport -BackupDir $backupDir
+        if (-not $tipsReport) { $tipsReport = Get-SystemHealthReport -SkipCleanScan }
+        $r = Invoke-SmartRecommendations -Report $tipsReport -Top $Top -BackupDir $backupDir `
+                                          -WhatIf:$WhatIf -CreateRestorePoint:$rpOn
+        Out-Json ([PSCustomObject]@{
+            ok           = $r.ok
+            whatIf       = $r.whatIf
+            applied      = @($r.applied)
+            failed       = @($r.failed | ForEach-Object { [PSCustomObject]@{ name = $_.name; reason = $_.reason } })
+            backup       = $r.backup
+            restorePoint = $r.restorePoint
+            error        = $r.error
         })
     }
     elseif ($Action -eq "export") {

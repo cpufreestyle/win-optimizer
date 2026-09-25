@@ -1,4 +1,4 @@
-﻿"""
+"""
 PC-Optimizer-7thGen WebUI 后端
 本地运行，不联网。通过 subprocess 调用 webui/ps/ 下的 PowerShell 脚本（管理员权限）。
 """
@@ -197,6 +197,17 @@ def _register_mcp_tools(server):
             args.append("-WhatIf")
         if force:
             args.append("-Force")
+        args += ["-CreateRestorePoint", str(bool(create_restore_point)).lower()]
+        return run_ps("15_health.ps1", *args)
+
+    @server.tool()
+    def health_apply_tips(top: int = 3, what_if: bool = False,
+                         create_restore_point: bool = False) -> dict:
+        """一键应用智能降级建议（P3-1）：按体检结果禁用最值得处理的启动项，
+        执行前自动备份；清理类建议不自动执行。what_if=true 只预览不改系统。"""
+        args = ["-Action", "apply-tips", "-Top", str(int(top))]
+        if what_if:
+            args.append("-WhatIf")
         args += ["-CreateRestorePoint", str(bool(create_restore_point)).lower()]
         return run_ps("15_health.ps1", *args)
 
@@ -657,6 +668,16 @@ def api_health_tips():
 def api_health_trend():
     days = int(request.args.get("days", 30))
     return jsonify(run_ps("15_health.ps1", "-Action", "trend", "-Days", str(days)))
+
+
+@app.route("/api/health/apply-tips", methods=["POST"])
+def api_health_apply_tips():
+    data = request.get_json(silent=True) or {}
+    args = ["-Action", "apply-tips", "-Top", str(int(data.get("top", 3)))]
+    if data.get("what_if"):
+        args.append("-WhatIf")
+    args += ["-CreateRestorePoint", str(bool(data.get("create_restore_point", False))).lower()]
+    return jsonify(run_ps("15_health.ps1", *args))
 
 
 @app.route("/api/health/remediate", methods=["POST"])

@@ -2466,7 +2466,7 @@ Describe 'Optimize.Core smart recommendations (P2, shared by CLI/GUI/WebUI)' {
         $lines = @(Format-SmartRecommendations $tips)
         $lines.Count | Should -BeGreaterThan 3
         ($lines -join "`n") | Should -Match 'ZedUpdater'
-        ($lines -join "`n") | Should -Match '菜单 \[4\] 启动项优化'
+        ($lines -join "`n") | Should -Match '一键应用本条建议'
     }
 
     It 'Get-SmartRecommendations measures clean targets on its own when no report given' {
@@ -2668,6 +2668,232 @@ Describe 'Optimize.Core boot-time performance baseline bench (P2-2, shared by CL
             $t[1].diskReadMBps | Should -Be 0
             # 新点位读到 bench.diskReadMBps
             $t[-1].diskReadMBps | Should -Be 1234.5
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# ============================================================
+#  P3-1 智能建议一键应用 / 服务依赖护栏 / 真实开机耗时
+#  （三端共享：CLI / GUI / WebUI 均调用 lib 同一实现）
+# ============================================================
+Describe 'Optimize.Core smart recommendation apply loop (P3-1, shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+        $script:LiveItems = @(
+            [PSCustomObject]@{ Name='ZedUpdater';  Value='C:\Users\me\AppData\Local\Zed\ZedUpdater.exe'; Scope='当前用户'; Source='注册表'; Path='HKCU:\Run'; Index=1 }
+            [PSCustomObject]@{ Name='CloudSync';   Value='C:\Users\me\AppData\Local\Cloud\sync.exe';    Scope='当前用户'; Source='注册表'; Path='HKCU:\Run'; Index=2 }
+            [PSCustomObject]@{ Name='RealtekHd';   Value='C:\Windows\System32\RtkAudUService.dll';      Scope='所有用户'; Source='注册表'; Path='HKLM:\Run'; Index=3 }
+        )
+        Mock Get-StartupItems { $script:LiveItems }
+        Mock Disable-StartupItems {
+            [PSCustomObject]@{
+                disabled = @($Items).Count
+                failed   = 0
+                backup   = $null
+                details  = @(@($Items) | ForEach-Object {
+                    [PSCustomObject]@{ Name = $_.Name; Source = $_.Source; Result = '已禁用' }
+                })
+            }
+        }
+        Mock Backup-StartupItems { 'FAKE_BACKUP_CSV' }
+        Mock New-SystemRestorePoint { [PSCustomObject]@{ ok = $true; name = 'FakeRP'; method = 'Checkpoint-Computer' } }
+    }
+
+    It 'applies startup recommendations end to end (backup first, then disable)' {
+        $rep = [PSCustomObject]@{
+            issues = @([PSCustomObject]@{ id = 'startup.many'; severity = 'Medium'; title = '开机启动项偏多' })
+        }
+        $r = Invoke-SmartRecommendations -Report $rep -Top 3 -BackupDir (Join-Path $env:TEMP 'p3_none')
+        $r.ok | Should -BeTrue
+        @($r.applied).Count | Should -Be 2
+        @($r.applied) | Should -Contain 'ZedUpdater'
+        @($r.applied) | Should -Contain 'CloudSync'
+        $r.backup | Should -Be 'FAKE_BACKUP_CSV'
+        Assert-MockCalled -CommandName 'Backup-StartupItems' -Times 1 -Scope It
+        Assert-MockCalled -CommandName 'Disable-StartupItems' -ParameterFilter { @($Items).Count -eq 2 -and $SkipBackup } -Scope It
+        # 默认不建还原点（config safety.create_restore_point 默认 false）
+        $r.restorePoint | Should -BeNullOrEmpty
+    }
+
+    It 'never leaves essential items out of the blacklist: Realtek entry is not applied' {
+        $rep = [PSCustomObject]@{
+            issues = @([PSCustomObject]@{ id = 'startup.many'; severity = 'Medium'; title = 'x' })
+        }
+        $r = Invoke-SmartRecommendations -Report $rep -Top 5 -BackupDir (Join-Path $env:TEMP 'p3_none')
+        @($r.applied) | Should -Not -Contain 'RealtekHd'
+    }
+
+    It '-WhatIf is side-effect free: no backup, no restore point, still reports would-be changes' {
+        $rep = [PSCustomObject]@{
+            issues = @([PSCustomObject]@{ id = 'startup.many'; severity = 'Medium'; title = 'x' })
+        }
+        $r = Invoke-SmartRecommendations -Report $rep -BackupDir (Join-Path $env:TEMP 'p3_none') -WhatIf -CreateRestorePoint:$true
+        $r.whatIf | Should -BeTrue
+        $r.ok     | Should -BeTrue
+        @($r.applied).Count | Should -Be 2
+        $r.backup       | Should -BeNullOrEmpty
+        $r.restorePoint | Should -BeNullOrEmpty
+        Assert-MockCalled -CommandName 'Backup-StartupItems'   -Times 0 -Scope It
+        Assert-MockCalled -CommandName 'New-SystemRestorePoint' -Times 0 -Scope It
+    }
+
+    It 'creates a restore point lazily only when asked' {
+        $rep = [PSCustomObject]@{
+            issues = @([PSCustomObject]@{ id = 'startup.many'; severity = 'Medium'; title = 'x' })
+        }
+        $r = Invoke-SmartRecommendations -Report $rep -BackupDir (Join-Path $env:TEMP 'p3_none') -CreateRestorePoint:$true
+        $r.restorePoint.ok   | Should -BeTrue
+        $r.restorePoint.name | Should -Be 'FakeRP'
+        Assert-MockCalled -CommandName 'New-SystemRestorePoint' -Times 1 -Scope It
+    }
+
+    It 'fails safely when the report gives no trigger issue' {
+        $rep = [PSCustomObject]@{ issues = @([PSCustomObject]@{ id = 'disk.space'; severity = 'High'; title = 'x' }) }
+        $r = Invoke-SmartRecommendations -Report $rep -BackupDir (Join-Path $env:TEMP 'p3_none')
+        $r.ok    | Should -BeFalse
+        $r.error | Should -Not -BeNullOrEmpty
+        Assert-MockCalled -CommandName 'Backup-StartupItems'  -Times 0 -Scope It
+        Assert-MockCalled -CommandName 'Disable-StartupItems' -Times 0 -Scope It
+    }
+
+    It 'fails safely when the recommended items vanished from the live system' {
+        Mock Get-SmartRecommendations { [PSCustomObject]@{ ok = $true; startup = @([PSCustomObject]@{ kind='startup'; name='GhostApp'; command='C:\ghost\ghost.exe'; rank=1 }); clean = @() } }
+        $rep = [PSCustomObject]@{
+            issues = @([PSCustomObject]@{ id = 'startup.many'; severity = 'Medium'; title = 'x' })
+        }
+        $r = Invoke-SmartRecommendations -Report $rep -BackupDir (Join-Path $env:TEMP 'p3_none')
+        $r.ok    | Should -BeFalse
+        $r.error | Should -Match '已不存在'
+        Assert-MockCalled -CommandName 'Disable-StartupItems' -Times 0 -Scope It
+    }
+
+    It 'a partially failed disable reports failed items and ok=$false' {
+        Mock Disable-StartupItems {
+            [PSCustomObject]@{
+                disabled = 1; failed = 1; backup = $null
+                details  = @(
+                    [PSCustomObject]@{ Name = 'ZedUpdater'; Source = '注册表';     Result = '已禁用' }
+                    [PSCustomObject]@{ Name = 'CloudSync';  Source = '启动文件夹'; Result = '失败: boom' }
+                )
+            }
+        }
+        $rep = [PSCustomObject]@{
+            issues = @([PSCustomObject]@{ id = 'startup.many'; severity = 'Medium'; title = 'x' })
+        }
+        $r = Invoke-SmartRecommendations -Report $rep -BackupDir (Join-Path $env:TEMP 'p3_none')
+        $r.ok | Should -BeFalse
+        @($r.applied) | Should -Contain 'ZedUpdater'
+        @($r.failed).Count | Should -Be 1
+        $r.failed[0].name   | Should -Be 'CloudSync'
+        $r.failed[0].reason | Should -Match '失败'
+    }
+}
+
+Describe 'Optimize.Core service dependency guard (P3-1, shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+        Mock Get-Service -ParameterFilter { $Name -eq 'RpcSs' } { [PSCustomObject]@{ Name = 'RpcSs'; Status = 'Running' } }
+        Mock Get-Service -ParameterFilter { $Name -eq 'DepA'  } { [PSCustomObject]@{ Name = 'DepA';  Status = 'Running' } }
+        Mock Get-WmiObject { [PSCustomObject]@{ Name = 'DepA' } }
+        Mock Set-Service  {}
+        Mock Stop-Service {}
+        Mock Start-Sleep {}
+    }
+
+    It 'Get-ServiceDependents returns only running dependents' {
+        $d = @(Get-ServiceDependents -Name 'RpcSs')
+        $d | Should -Contain 'DepA'
+    }
+
+    It 'Get-ServiceDependents tolerates unknown service names' {
+        Mock Get-Service -ParameterFilter { $Name -eq 'Ghost' } { $null }
+        Mock Get-WmiObject { @() }
+        @(Get-ServiceDependents -Name 'Ghost').Count | Should -Be 0
+    }
+
+    It 'Get-ServiceDependents tolerates WMI failure (returns empty, never throws)' {
+        Mock Get-WmiObject { throw 'WMI down' }
+        { @(Get-ServiceDependents -Name 'RpcSs') } | Should -Not -Throw
+        @(Get-ServiceDependents -Name 'RpcSs').Count | Should -Be 0
+    }
+
+    It 'Disable-Services skips services with running dependents by default' {
+        $r = Disable-Services -Services @([PSCustomObject]@{ Name = 'RpcSs'; Level = '安全禁用'; Desc = 'd' }) -Mode 'all'
+        $r.disabled | Should -Be 0
+        $r.skipped  | Should -Be 1
+        [string]$r.details[0].result | Should -Match '依赖'
+    }
+
+    It 'Disable-Services -Force overrides the dependency guard' {
+        $r = Disable-Services -Services @([PSCustomObject]@{ Name = 'RpcSs'; Level = '安全禁用'; Desc = 'd' }) -Mode 'all' -Force
+        $r.disabled | Should -Be 1
+        $r.skipped  | Should -Be 0
+        Assert-MockCalled -CommandName 'Set-Service' -Times 1 -Scope It
+    }
+
+    It 'Disable-Services -WhatIf previews the dependency skip without touching the system' {
+        $r = Disable-Services -Services @([PSCustomObject]@{ Name = 'RpcSs'; Level = '安全禁用'; Desc = 'd' }) -Mode 'all' -WhatIf
+        $r.skipped | Should -Be 1
+        Assert-MockCalled -CommandName 'Set-Service' -Times 0 -Scope It
+    }
+}
+
+Describe 'Optimize.Core real boot time sample (P3-1, accuracy)' {
+    BeforeAll { . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1') }
+
+    It 'Get-BootPerformanceSample always returns a well-formed result' {
+        $b = Get-BootPerformanceSample
+        @($b.PSObject.Properties.Name) | Should -Contain 'ok'
+        @($b.PSObject.Properties.Name) | Should -Contain 'seconds'
+        @($b.PSObject.Properties.Name) | Should -Contain 'source'
+        if ($b.ok) {
+            $b.seconds | Should -BeGreaterThan 1
+            $b.seconds | Should -BeLessThan 3600
+            $b.source  | Should -Not -BeNullOrEmpty
+        } else {
+            $b.seconds | Should -BeNullOrEmpty
+            $b.error   | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    It 'bench carries bootSeconds and tolerates missing boot events' {
+        $b = Get-SystemBench -StartupCount 3 -AutoServices 2
+        @($b.PSObject.Properties.Name) | Should -Contain 'bootSeconds'
+        @($b.PSObject.Properties.Name) | Should -Contain 'bootError'
+        $b.startupCount | Should -Be 3
+        $b.autoServices | Should -Be 2
+        $b.bootSeconds  | Should -BeNullOrEmpty
+        $b.bootError    | Should -Not -BeNullOrEmpty
+    }
+
+    It 'Get-HealthTrend parses bootSeconds when present and stays null-safe otherwise' {
+        $tmp = Join-Path $env:TEMP ('p3_boottrend_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path (Join-Path $tmp 'health') -Force | Out-Null
+            $mk = {
+                param($Day, $Score, $Boot)
+                $when = (Get-Date).AddDays(-$Day)
+                $o = [PSCustomObject]@{
+                    timestamp = $when.ToString('yyyy-MM-dd HH:mm:ss')
+                    host = 'h'; version = '3.9.0'; score = $Score; grade = 'x'
+                    metrics = [PSCustomObject]@{ freeRamPct = 50.0; cleanableMB = 100; startupCount = 5 }
+                    issues  = @()
+                }
+                if ($null -ne $Boot) {
+                    $o | Add-Member -NotePropertyName bench -NotePropertyValue ([PSCustomObject]@{ bootSeconds = $Boot }) -Force
+                }
+                $f = Join-Path $tmp ("health\health_{0}.json" -f $when.ToString('yyyyMMdd_HHmmss'))
+                $o | ConvertTo-Json -Depth 8 | Out-File -FilePath $f -Encoding UTF8
+                (Get-Item $f).LastWriteTime = $when
+            }
+            & $mk 2 60 $null
+            & $mk 1 70 42.5
+            $t = @(Get-HealthTrend -BackupDir $tmp -Days 30)
+            $t.Count | Should -Be 2
+            $t[0].bootSeconds  | Should -BeNullOrEmpty
+            $t[-1].bootSeconds | Should -Be 42.5
         } finally {
             Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
