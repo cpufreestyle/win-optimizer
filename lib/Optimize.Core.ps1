@@ -3857,3 +3857,223 @@ function Format-SmartRecommendations {
     }
     return $lines
 }
+
+# ============================================================
+#  统一优化预览（P2）
+#  与 health 的修复预览并列，但覆盖「一键全面优化」的完整流程：
+#  清理 / 服务 / 启动项 / 视觉 / 电源 / 磁盘 / 网络 / 遥测 / 组合包。
+#  只读：任何一步都不会改系统，只回答「点下去会发生什么」。
+#  三端与 MCP 共用同一份 plan 与同一套文案（Format-OptimizePlan）。
+# ============================================================
+function New-OptimizePlanStep {
+    param(
+        [string]$Domain, [string]$Title, [string]$Menu, [string]$Action,
+        [string]$Target, [string]$Detail, [string]$Impact, [string]$Risk
+    )
+    return [PSCustomObject]@{
+        domain = $Domain
+        title  = $Title
+        menu   = $Menu
+        action = $Action
+        target = $Target
+        detail = $Detail
+        impact = $Impact
+        risk   = $Risk
+    }
+}
+
+# 生成「完整优化将做什么」的只读清单。
+#   ProfileName     额外附上某个优化组合包的步骤预览（省略则不含组合包）
+#   PowerPlanGuid   电源计划目标 GUID，默认高性能
+#   DnsOption       DNS 选项编号（见 Get-DnsOptions），默认 1 = Cloudflare
+#   SkipCleanScan   跳过可清理空间统计（省十几秒，但清理那步会没有体积数据）
+# 返回 @{ ok; version; generatedAt; powerPlan; dns; steps; summary }
+function Get-OptimizePlan {
+    param(
+        [string]$ProfileName = '',
+        [string]$PowerPlanGuid = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c',
+        [int]$DnsOption = 1,
+        [switch]$SkipCleanScan
+    )
+    $steps = @()
+
+    $dnsLabel = ''
+    foreach ($o in @(Get-DnsOptions)) { if ($o.Value -eq $DnsOption) { $dnsLabel = $o.Label } }
+    $planTitle = $PowerPlanGuid
+    foreach ($p in @(Get-PowerPlanCatalog)) { if ($p.GUID -eq $PowerPlanGuid) { $planTitle = $p.Title } }
+
+    # --- [2] 临时文件清理 ---
+    if (-not $SkipCleanScan) {
+        $entries = @(); $totalBytes = [double]0
+        foreach ($t in @(Get-CleanTargets)) {
+            $b = Get-FolderSize $t.path
+            if ($b -gt 0) { $entries += [PSCustomObject]@{ name = $t.name; mb = [math]::Round($b / 1MB, 1) }; $totalBytes += [double]$b }
+        }
+        if ($entries.Count -gt 0) {
+            $top = @()
+            foreach ($e in ($entries | Sort-Object @{Expression = { [double]$_.mb }; Descending = $true} | Select-Object -First 3)) {
+                $top += ("{0} {1}MB" -f $e.name, $e.mb)
+            }
+            $steps += New-OptimizePlanStep -Domain 'clean' -Title '临时文件清理' -Menu '[2]' `
+                -Action 'Remove-FolderContent' -Risk 'low' `
+                -Target ("{0} 个目标，可释放约 {1} MB" -f $entries.Count, [math]::Round($totalBytes / 1MB, 1)) `
+                -Detail ("占用前三：" + ($top -join '、')) `
+                -Impact '临时文件删除后不可恢复；浏览器缓存会重新生成'
+        }
+    }
+
+    # --- [3] 服务优化（只统计当前仍为自动启动的可优化服务）---
+    $svcList  = @(Get-ServiceList)
+    $autoSvc  = @()
+    try {
+        $cimSvc = @(Get-CimInstance Win32_Service -ErrorAction Stop)
+        foreach ($s in $svcList) {
+            $hit = @($cimSvc | Where-Object { $_.Name -eq $s.Name })[0]
+            if ($hit -and $hit.StartMode -eq 'Auto') { $autoSvc += $s.Name }
+        }
+    } catch { }
+    if ($autoSvc.Count -gt 0) {
+        $names = @($autoSvc | Select-Object -First 8) -join '、'
+        if ($autoSvc.Count -gt 8) { $names += ' 等' }
+        $steps += New-OptimizePlanStep -Domain 'services' -Title '禁用不必要的后台服务' -Menu '[3]' `
+            -Action 'Disable-Services' -Risk 'medium' `
+            -Target ("config 可优化服务 {0} 项，其中 {1} 项仍为自动启动" -f $svcList.Count, $autoSvc.Count) `
+            -Detail $names `
+            -Impact '相关后台服务停止运行；已自动备份服务状态，可随时恢复'
+    }
+
+    # --- [4] 启动项优化（只给清单，不自动禁用）---
+    $startupItems = @(Get-StartupItems)
+    if ($startupItems.Count -gt 0) {
+        $startupTop = @()
+        foreach ($s in @((Get-SmartRecommendations -StartupItems $startupItems -Top 3 -IncludeStartup).startup)) {
+            $startupTop += $s.name
+        }
+        $detail = ''
+        if ($startupTop.Count -gt 0) { $detail = ('建议优先确认：' + ($startupTop -join '、')) }
+        $steps += New-OptimizePlanStep -Domain 'startup' -Title '启动项优化' -Menu '[4]' `
+            -Action 'List-StartupItems' -Risk 'low' `
+            -Target ("共 {0} 项启动项，只输出清单交由人工确认" -f $startupItems.Count) `
+            -Detail $detail `
+            -Impact '无任何改动，禁用需逐项确认；改前会自动备份'
+    }
+
+    # --- [5] 视觉效果 ---
+    $toggles = @(Get-VisualEffectToggles)
+    $visualLeft = @()
+    foreach ($t in $toggles) {
+        $cur = $null
+        try {
+            $p = Get-ItemProperty -Path $t.RegKey -Name $t.RegValue -ErrorAction SilentlyContinue
+            if ($p) { $cur = $p.PSObject.Properties[$t.RegValue].Value }
+        } catch { }
+        if ($null -eq $cur) { $visualLeft += $t.Name }
+        elseif ([string]$cur -ne [string]$t.RegData) { $visualLeft += $t.Name }
+    }
+    if ($visualLeft.Count -gt 0) {
+        $steps += New-OptimizePlanStep -Domain 'visual' -Title '视觉效果优化' -Menu '[5]' `
+            -Action 'Set-VisualEffectProfile' -Risk 'low' `
+            -Target '最佳性能（关闭全部视觉特效）' `
+            -Detail ("仍未关闭 {0} / {1} 项：" -f $visualLeft.Count, $toggles.Count) `
+            -Impact '窗口动画 / 阴影关闭，界面观感变化；已备份注册表，可恢复'
+    }
+
+    # --- [6] 电源计划 ---
+    $curPlan = Get-ActivePowerPlan
+    $curTitle = '未知'
+    foreach ($p in @(Get-PowerPlanCatalog)) { if ($p.GUID -eq $curPlan) { $curTitle = $p.Title } }
+    $powerDetail = ''
+    if ($curPlan -eq $PowerPlanGuid) { $powerDetail = '当前已是目标计划，这一步不会产生变化' }
+    $steps += New-OptimizePlanStep -Domain 'power' -Title '电源计划优化' -Menu '[6]' `
+        -Action 'Set-PowerPlan' -Risk 'low' `
+        -Target ("当前 {0} -> {1}" -f $curTitle, $planTitle) `
+        -Detail $powerDetail -Impact 'CPU 保持高频，耗电与发热上升；已备份电源配置，可恢复'
+
+    # --- [7] 磁盘优化 ---
+    $vols = @(Get-FixedVolumeList)
+    $mediaMap = $null
+    try { $mediaMap = Get-DriveMediaMap } catch { }
+    $diskDetail = @()
+    foreach ($v in $vols) {
+        $media = 'Unknown'
+        if ($mediaMap -and $mediaMap.ContainsKey($v.DriveLetter)) { $media = $mediaMap[$v.DriveLetter] }
+        $act = if ($media -eq 'SSD') { 'TRIM' } elseif ($media -eq 'HDD') { '碎片整理' } else { '仅分析' }
+        $diskDetail += ("{0}:({1},{2})" -f $v.DriveLetter, $media, $act)
+    }
+    $steps += New-OptimizePlanStep -Domain 'disk' -Title '磁盘优化' -Menu '[7]' `
+        -Action 'Invoke-DiskOptimization' -Risk 'low' `
+        -Target ("{0} 个分区（SSD 走 TRIM，HDD 走碎片整理）" -f $vols.Count) `
+        -Detail ($diskDetail -join '  ') `
+        -Impact '与磁盘类型匹配，不会对 SSD 做碎片整理；CompactOS 默认不启用'
+
+    # --- [8] 网络优化 ---
+    $adapters = @(Get-ActiveNetAdapters)
+    if ($adapters.Count -gt 0 -and $dnsLabel) {
+        $names = @($adapters | Select-Object -First 5 | ForEach-Object { $_.Name }) -join '、'
+        $steps += New-OptimizePlanStep -Domain 'network' -Title '网络优化' -Menu '[8]' `
+            -Action 'Invoke-NetworkOptimization' -Risk 'medium' `
+            -Target ("{0} 个活动网卡 -> {1}" -f $adapters.Count, $dnsLabel) `
+            -Detail ("网卡：" + $names) `
+            -Impact '切换 DNS 与网络参数；已备份原配置，可恢复'
+    }
+
+    # --- [10] 屏蔽 Windows 更新（遥测计划任务域）---
+    $tt = @(Get-TelemetryTasks)
+    if ($tt.Count -gt 0) {
+        $steps += New-OptimizePlanStep -Domain 'telemetry' -Title '屏蔽 Windows 更新推送' -Menu '[10]' `
+            -Action 'Disable-TelemetryTasks' -Risk 'medium' `
+            -Target ("{0} 个遥测/升级相关计划任务" -f $tt.Count) `
+            -Detail '' `
+            -Impact '停止自动升级推送；已备份任务状态，可随时恢复'
+    }
+
+    # --- [16] 优化组合包（可选）---
+    if ($ProfileName) {
+        $pp = Get-ProfilePlan -Name $ProfileName
+        if ($pp.ok) {
+            $titles = @()
+            foreach ($s in @($pp.steps)) { $titles += ("{0}：{1}({2})" -f $s.domain, $s.action, $s.risk) }
+            $steps += New-OptimizePlanStep -Domain 'profile' -Title ("组合包：" + $pp.title) -Menu '[16]' `
+                -Action 'Invoke-Profile' -Risk 'medium' `
+                -Target ("{0}（{1} 步）" -f $pp.name, @($pp.steps).Count) `
+                -Detail ($titles -join '、') `
+                -Impact '按组合包计划逐步执行，每步前自动备份，可回滚'
+        } else {
+            $steps += New-OptimizePlanStep -Domain 'profile' -Title '组合包' -Menu '[16]' `
+                -Action 'Invoke-Profile' -Risk 'medium' -Target $ProfileName `
+                -Detail '' -Impact $pp.error
+        }
+    }
+
+    $summary = [PSCustomObject]@{
+        total   = $steps.Count
+        low     = @($steps | Where-Object { $_.risk -eq 'low' }).Count
+        medium  = @($steps | Where-Object { $_.risk -eq 'medium' }).Count
+        high    = @($steps | Where-Object { $_.risk -eq 'high' }).Count
+    }
+
+    return [PSCustomObject]@{
+        ok          = $true
+        version     = (Get-OptVersion)
+        generatedAt = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        powerPlan   = $planTitle
+        dns         = $dnsLabel
+        steps       = @($steps)
+        summary     = $summary
+        error       = $null
+    }
+}
+
+# 把 Get-OptimizePlan 渲染成纯文本行（CLI / GUI 共用）
+function Format-OptimizePlan {
+    param([object]$Plan)
+    $lines = @()
+    if (-not $Plan -or -not $Plan.ok) { return $lines }
+    foreach ($s in @($Plan.steps)) {
+        $lines += ("  {0} {1}" -f $s.menu, $s.title)
+        $lines += ("       目标  : {0}" -f $s.target)
+        if ($s.detail) { $lines += ("       明细  : {0}" -f $s.detail) }
+        $lines += ("       影响  : {0}（风险 {1}）" -f $s.impact, $s.risk)
+    }
+    return $lines
+}

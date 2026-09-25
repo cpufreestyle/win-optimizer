@@ -214,8 +214,16 @@ config 新增 `safety.create_restore_point`（默认 `false`，与 `disk.compact
 
 ## P2（探索性）
 
-- **MCP `optimize_plan` dry-run 工具**：与 `health_scan` 并列，只返回「将做什么」不执行；
-  CLI/GUI/WebUI 的预览层统一调用 lib 的 plan 对象，三端预览文案零漂移。
+- ~~**MCP `optimize_plan` dry-run 工具**~~：**已实现（2026-09-26）**。与 `health_scan` 并列，只返回
+  「将做什么」不执行；CLI/GUI/WebUI/MCP 的预览层统一调用 lib 的 plan 对象，三端预览文案零漂移。落点：
+  - lib：`New-OptimizePlanStep`、`Get-OptimizePlan`（覆盖 [2]清理/[3]服务/[4]启动项/[5]视觉/[6]电源/
+    [7]磁盘/[8]网络/[10]遥测/[16]组合包；每步带 domain/title/menu/action/target/detail/impact/risk，
+    附 low/medium/high 汇总）、`Format-OptimizePlan`（三端共用纯文本渲染）。
+  - CLI：`Optimize.ps1 -Plan [-Profile <x>] [-SkipCleanScan]`，菜单新增 `[P] 优化预览（只读）`，
+    位于管理员检查之前的分支——纯只读模式无需提权。
+  - WebUI：`webui/ps/optimize_plan.ps1 -Action plan` + MCP `optimize_plan(profile, skip_clean_scan)`。
+  - 测试：新增 6 个用例（步骤结构 / summary 计数一致 / 电源与 DNS 标签 / 组合包与未知组合包 /
+    清理步可选 / 渲染契约），全量 **194/194** 通过。
 - **开机耗时基线**：体检报告加 `bench` 段（磁盘顺序读探测、启动项数、服务自动数），
   配合 P1-1 趋势图让「优化有没有变快」可量化。探测必须 <10s 且纯只读。
 - ~~**智能降级建议**~~：**已实现（2026-09-26）**。`memory.low` / `startup.many` 命中时给出
@@ -242,7 +250,7 @@ config 新增 `safety.create_restore_point`（默认 `false`，与 `disk.compact
 3. P0-4（时间线/回滚，依赖 P0-1 引入的备份 manifest 规范）
 4. P0-3（组合包，编排面最大）
 5. P1-1、P1-2、P1-3（已实现）
-6. P2 按社区反馈取舍（智能降级建议已落地；MCP `optimize_plan`、开机耗时基线 bench 待排）
+6. P2 按社区反馈取舍（智能降级建议、MCP `optimize_plan` dry-run 已落地；仅剩开机耗时基线 bench 待排）
 
 每步都走「集成分支 + PR」流程（见 HANDOFF §2），PR 前确认：Pester 151+ 全绿、
 `*.ps1` 全 BOM、`config/optimization.schema.json` 同步更新、GUI 改动真机点验。

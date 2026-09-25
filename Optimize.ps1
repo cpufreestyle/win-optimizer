@@ -13,6 +13,12 @@
 
 #Requires -Version 5.1
 
+param(
+    [switch]$Plan,               # 只读预览「全面优化将做什么」，不执行任何修改
+    [string]$Profile = '',       # -Plan 时额外附上某个优化组合包的步骤预览
+    [switch]$SkipCleanScan       # -Plan 时跳过可清理空间统计（省十几秒）
+)
+
 # ============================================================
 #  全局变量与初始化
 # ============================================================
@@ -98,6 +104,8 @@ function Show-Banner {
 # ============================================================
 
 function Show-Menu {
+    $script:PlanProfile       = $Profile
+    $script:PlanSkipCleanScan = $SkipCleanScan
     while ($true) {
         Show-Banner
 
@@ -137,6 +145,7 @@ function Show-Menu {
         Write-Host "   [B]  备份当前系统设置"
         Write-Host "   [R]  恢复系统设置"
         Write-Host ""
+        Write-Host "   [P]  优化预览（只读）   — 先看全面优化将做什么，不改任何设置" -ForegroundColor Cyan
         Write-Host "   [Q]  退出"
         Write-Host ("=" * 60) -ForegroundColor DarkGray
 
@@ -161,10 +170,38 @@ function Show-Menu {
             "16" { Invoke-ScriptModule "16-Profiles.ps1" }
             { $_ -eq "B" -or $_ -eq "b" } { Invoke-ScriptModule "09-BackupRestore.ps1" }
             { $_ -eq "R" -or $_ -eq "r" } { Invoke-ScriptModule "09-BackupRestore.ps1" }
+            { $_ -eq "P" -or $_ -eq "p" } { Show-OptimizePlanPreview }
             { $_ -eq "Q" -or $_ -eq "q" } { Write-Host "感谢使用，再见！" -ForegroundColor Green; return }
             default { Write-Host "无效选项，请重新输入。" -ForegroundColor Red; Start-Sleep -Seconds 1 }
         }
     }
+}
+
+# 只读预览：完整优化每一步将做什么（与 WebUI / MCP 的 optimize_plan 同源）
+function Show-OptimizePlanPreview {
+    Write-Host ""
+    Write-Host "================================================" -ForegroundColor Cyan
+    Write-Host "  优化预览（只读，不执行任何修改）" -ForegroundColor Cyan
+    Write-Host "================================================" -ForegroundColor Cyan
+    Write-Host "  正在统计（可清理空间较慢，约十几秒）..." -ForegroundColor DarkGray
+    $planArgs = @{}
+    if ($script:PlanProfile)       { $planArgs['ProfileName']    = $script:PlanProfile }
+    if ($script:PlanSkipCleanScan) { $planArgs['SkipCleanScan']  = $true }
+    # 注意：局部变量不能叫 $plan——脚本参数 [switch]$Plan 会让同名变量变成
+    # SwitchParameter 类型，往里塞 PSCustomObject 会直接转换失败。
+    $planPreview = Get-OptimizePlan @planArgs
+    if (-not $planPreview.ok) {
+        Write-Host "  预览失败: $($planPreview.error)" -ForegroundColor Red
+        Read-Host "按回车键返回主菜单"
+        return
+    }
+    Write-Host ("  共 {0} 步（低危 {1} / 中危 {2} / 高危 {3}）；电源目标 {4}，DNS {5}" -f `
+        $planPreview.summary.total, $planPreview.summary.low, $planPreview.summary.medium, $planPreview.summary.high, `
+        $planPreview.powerPlan, $planPreview.dns) -ForegroundColor Gray
+    foreach ($line in @(Format-OptimizePlan $planPreview)) { Write-Host $line -ForegroundColor DarkGray }
+    Write-Host ""
+    Write-Host "  说明: 以上仅为预览。真要执行请在菜单选择 [9] 一键全面优化。" -ForegroundColor Yellow
+    Read-Host "按回车键返回主菜单"
 }
 
 function Invoke-FullOptimization {
@@ -215,6 +252,25 @@ function Invoke-FullOptimization {
 # ============================================================
 #  入口
 # ============================================================
+
+# -Plan 是只读预览，不需要管理员权限；输出后直接退出
+if ($Plan) {
+    $planArgs = @{}
+    if ($Profile)       { $planArgs['ProfileName']   = $Profile }
+    if ($SkipCleanScan) { $planArgs['SkipCleanScan'] = $true }
+    # 同 Show-OptimizePlanPreview：不能把返回值赋给 $plan（与 [switch]$Plan 同名同型）
+    $planPreview = Get-OptimizePlan @planArgs
+    if (-not $planPreview.ok) { Write-Host "预览失败: $($planPreview.error)" -ForegroundColor Red; exit 1 }
+    Write-Host ""
+    Write-Host "================================================" -ForegroundColor Cyan
+    Write-Host "  优化预览（只读，不执行任何修改）" -ForegroundColor Cyan
+    Write-Host "================================================" -ForegroundColor Cyan
+    Write-Host ("  共 {0} 步（低危 {1} / 中危 {2} / 高危 {3}）；电源目标 {4}，DNS {5}" -f `
+        $planPreview.summary.total, $planPreview.summary.low, $planPreview.summary.medium, $planPreview.summary.high, `
+        $planPreview.powerPlan, $planPreview.dns) -ForegroundColor Gray
+    foreach ($line in @(Format-OptimizePlan $planPreview)) { Write-Host $line -ForegroundColor DarkGray }
+    exit 0
+}
 
 if (-not (Test-Administrator)) {
     Write-Host ""
