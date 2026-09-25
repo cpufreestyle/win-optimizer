@@ -312,6 +312,18 @@ Compact.exe /CompactOS:never
 
 ## 📝 更新日志
 
+### v3.7.0 (2026-09-26)
+- **智能降级建议（P2：不只说「哪里有问题」，还告诉你「先动哪个最划算」）**
+  - 启动项打分：僵尸项（目标已不存在）> 更新程序 > 云同步 > 常驻后台助手 > 开机预加载；
+    系统组件 / 硬件驱动 / 安全软件一律不进推荐（宁可漏，不可错）；`RunOnce` 一次性任务自动降权。
+  - 清理目标按「可释放体积」排序，直接给出 MB 与占比，不再只给菜单编号。
+  - **报告门控**：只有体检真的命中 `memory.low` / `startup.many` / `disk.space` / `disk.cleanable` 才给建议。
+  - 复用本次体检已量好的体积，不重复扫盘；全程只读。
+  - 三端入口：CLI 体检输出「智能建议」段 / GUI 健康页「智能建议」面板 / WebUI 体检页「智能建议」表格，
+    WebUI 另有 `GET /api/health/tips` 与 MCP `health_tips`。
+- 顺手修掉两类「语法检查通过、运行才炸」的静默故障：弯引号误作字符串定界符、
+  `[PSCustomObject]{ }` 漏写 `@` 导致返回 ScriptBlock（见 v3.6.0 之后的安全修复）。
+
 ### v3.6.0 (2026-09-26)
 - **优化前自动创建系统还原点（P1-3）**
   - `config/optimization.json` 新增 `safety.create_restore_point`（**默认关闭**，与 `disk.compact_os_default` 同一套默认值模式）。
@@ -347,7 +359,7 @@ Compact.exe /CompactOS:never
   - 现在默认值统一来自 `config/optimization.json` 的 `disk.compact_os_default`（默认 `false`）
   - 需要压缩：CLI 加 `-CompactOS`；GUI / WebUI 勾选「压缩系统文件 (CompactOS)」
   - 一键全面优化不再压缩系统文件；还原命令仍是 `Compact.exe /CompactOS:never`
-- **一键体检（只读）**：CLI `[15]` / GUI 系统体检 / WebUI 体检页，体检分 + 问题清单，支持优化前后对比（报告存 `backups/health/`）
+- **一键体检（只读）**：CLI `[15]` / GUI 系统体检 / WebUI 体检页，体检分 + 问题清单 + **智能降级建议**（先动哪个最划算），支持优化前后对比（报告存 `backups/health/`）
 - **三端逻辑统一**：启动项 / 视觉效果 / 电源 / 网络 / 磁盘五个域下沉到 `lib/Optimize.Core.ps1`
   - 修复 GUI、WebUI 备份无法被恢复、改 DNS 无备份、对 SSD 执行碎片整理等问题
 - **CLI 稳定性**：单个模块失败不再中断整条链路，一键优化输出失败清单；版本号统一收口到 config

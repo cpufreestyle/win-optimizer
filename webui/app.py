@@ -161,6 +161,11 @@ def _register_mcp_tools(server):
         return run_ps("15_health.ps1", "-Action", "plan")
 
     @server.tool()
+    def health_tips() -> dict:
+        """智能降级建议（只读）：按体检结果指出最值得禁用的启动项、最值得清理的目录（含理由与体积占比）。"""
+        return run_ps("15_health.ps1", "-Action", "tips")
+
+    @server.tool()
     def health_remediate(issue_code: str = "", max_severity: str = "Medium",
                         dns_option: int = 1, what_if: bool = False, force: bool = False,
                         create_restore_point: bool = False) -> dict:
@@ -628,6 +633,11 @@ def api_health_export():
     if to:
         args += ["-To", to]
     return jsonify(run_ps("15_health.ps1", *args))
+
+
+@app.route("/api/health/tips")
+def api_health_tips():
+    return jsonify(run_ps("15_health.ps1", "-Action", "tips"))
 
 
 @app.route("/api/health/trend")

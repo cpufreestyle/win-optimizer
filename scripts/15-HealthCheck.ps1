@@ -143,6 +143,14 @@ if (@($report.issues).Count -eq 0) {
     }
 }
 
+# --- 智能降级建议（P2）：不只说「哪里有问题」，还指出「先动哪个最划算」---
+# 复用本次报告里已经量好的体积，不重复扫盘；三端结论与文案同源。
+$tipLines = @(Format-SmartRecommendations (Get-SmartRecommendations -Report $report -Top 3))
+if ($tipLines.Count -gt 0) {
+    Write-Host "`n  [智能建议]" -ForegroundColor Cyan
+    foreach ($tipLine in $tipLines) { Write-Host $tipLine -ForegroundColor DarkGray }
+}
+
 # --- 保存本次报告 ---
 $file = Save-HealthReport -Report $report -BackupDir $backupDir
 Write-Host "`n  报告已保存: $file" -ForegroundColor Green

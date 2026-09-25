@@ -19,7 +19,8 @@
 > ✅ **2026-09-25**：PR #7 已合并入 `main`（merge commit `bfc7b54`），残留分支已清理，已打 tag `v3.3.0` 并发布 Release。
 > ✅ **2026-09-25**：P1-2（前后对比报告导出）已合并并随 v3.5.0 发布（见 §3.7）。
 > ✅ **2026-09-26**：P1-3（优化前自动创建系统还原点）已合并（PR #12），并随 v3.6.0 发布（见 §3.8）。
-> 当前 `main` = v3.6.0 发布态；P1-1（定时体检 + 趋势报告）已合并（见 §3.6）。
+> ✅ **2026-09-26**：PR #14 修复两类静默故障（弯引号误作字符串定界符 / `[PSCustomObject]` 漏写 `@`），并补源码静态检查（见 §3.10）。
+> 当前 `main` = v3.6.0 发布态；P2 智能降级建议已实现待发布（见 §3.9）。
 
 > 2026-09-18 更新：本轮已按 §8 的建议收口，详见文末 §9。
 
@@ -193,6 +194,35 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 
 ---
 
+### 3.9 P2 智能降级建议（2026-09-26，待发布）
+
+体检原来只回答「哪里有问题、去哪号菜单」，现在进一步回答「先动哪个最划算」。全程只读。
+
+| 层 | 落点 | 说明 |
+| --- | --- | --- |
+| lib | `Get-StartupRiskScore` | 纯函数打分：僵尸项 +40、更新程序 +30、云同步 +25、后台助手 +20、预加载 +15、用户目录 +10；`RunOnce` −20；命中系统/硬件/安全黑名单直接 −1000（**宁可漏推荐，不可错关**）。 |
+| lib | `Get-StartupTargetPath` | 从 `Value` 里解析目标路径（处理引号、参数、`%VAR%`），只用于「目标还在不在」判断与展示。 |
+| lib | `Get-SmartRecommendations` | 门控：`memory.low`/`startup.many` → 启动项建议；`disk.space`/`disk.cleanable` → 清理建议；没命中就不瞎建议。清理体积**优先复用本次体检已量好的 `metrics.cleanTargets`**，不重复扫盘。 |
+| lib | `Format-SmartRecommendations` | 三端共用渲染，保证 CLI / GUI / WebUI 文案零漂移。 |
+| CLI | `scripts/15-HealthCheck.ps1` | 体检输出里「问题清单」之后新增「智能建议」段。 |
+| GUI | `gui/pages/Health.ps1` | 新增「智能建议（先动哪个最划算）」面板（y=802，自动滚动区内）。 |
+| WebUI | `webui/ps/15_health.ps1 -Action tips` + `GET /api/health/tips` + MCP `health_tips` | 体检页新增「智能建议」表格；`-Action scan` 的响应里也直接带 `tips`，少一次请求。 |
+
+**边界**：`-StartupItems` 传空数组时必须判 `$null -ne $StartupItems`——PowerShell 里空数组求值为 `$false`，写成 `if ($StartupItems)` 会把「显式传空」误判成「没传」而去读真实注册表（测试里踩过）。
+
+测试：新增 12 个用例（目标路径解析 / 黑名单 / 僵尸项 / 降权 / Top 与排序 / 报告门控 / 复用测量 / 渲染），全量 **188/188** 通过。
+
+### 3.10 静默故障修复（2026-09-26，PR #14）
+
+两类「语法检查通过、运行到那一行才炸」的问题，根因都是通过命令行写中文时被 GBK 转码损坏：
+
+1. **弯引号被当成字符串定界符**（`“ ”` 取代 ASCII `"`）：`Install-HealthSchedule` 的三个 error 分支与管理员分支的 `$trigger`，以及 GUI 体检趋势那一行。中招后前者报 CommandNotFoundException，后者让 GUI 体检直接走 catch 显示「体检出错」。
+2. **`[PSCustomObject]{ }` 漏写 `@`**：多行/单行写法都会被解析成「脚本块转型」，返回 `ScriptBlock` 而不是对象，调用方读 `.ok` / `.error` 全是空。命中 `lib` 的 schtasks 失败分支与 `webui/ps/15_health.ps1` 的 catch 分支。
+
+防回归：新增 `Describe 'PowerShell source hygiene'`，静态检查所有 `.ps1` 语法零错误、无弯引号定界符、无漏 `@` 的 `[PSCustomObject]{`。
+
+---
+
 ## 4. 三端文件地图（按域）
 
 > 命名约定：CLI = `NN-Name.ps1`，GUI 页面 = `gui/pages/Name.ps1`，WebUI = `NN_name.ps1`。
@@ -300,7 +330,11 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 1. ✅ 合并 **PR [#7](https://github.com/cpufreestyle/win-optimizer/pull/7)**（`sync/v3.3.0-main` → `main`）；PR #5/#6 由 GitHub 自动关闭。
 2. ✅ 清理远端残留分支：`feat/optimizations`、`fix/cli-error-isolation-version`、`perf/folder-size-and-logging`、`release/v3.1.0` 与集成分支均已删除，远端只剩 `main`。
 3. ✅ 打 tag `v3.3.0`：Release workflow 成功，GitHub Release `v3.3.0` 已发布。
-4. 真机验收 GUI 体检页（§7）与新增的「体检趋势」显示（WebUI SVG 趋势卡片 / GUI 迷你图 / CLI `-Trend`）。
-5. ✅ P1-2 已发布 v3.5.0；P1-3 已发布 v3.6.0（见 §3.7、§3.8）。
-6. 后续功能建议：P1 系列（P1-1 / P1-2 / P1-3）已全部落地，下一步进入 P2 体验优化项（见 `docs/FEATURE-IDEAS.md`）。
+4. 真机验收 GUI 体检页（§7）与新增的「体检趋势」「智能建议」显示
+   （WebUI SVG 趋势卡片 / 智能建议表格 / GUI 迷你图与建议面板 / CLI `-Trend`）。
+5. ✅ P1 系列全部发布（P1-1 见 §3.6，P1-2→v3.5.0，P1-3→v3.6.0）；
+   ✅ P2 智能降级建议已实现（§3.9），待随 v3.7.0 发布。
+6. 后续功能建议：P2 剩余两项——MCP `optimize_plan` dry-run（与 `health_plan` 并列，统一三端预览层）、
+   开机耗时基线 bench（`memory.low`/`disk.space` 之外补一条可量化的「有没有变快」曲线）。
+   细则见 `docs/FEATURE-IDEAS.md` §P2。
    「一键优化组合包」（P0-3）、「优化回滚向导」（P0-4）、「定时体检 + 趋势报告」（P1-1）均已落地（见 §3.4、§3.5、§3.6）。

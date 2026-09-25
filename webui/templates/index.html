@@ -894,6 +894,28 @@ async function renderHealth(){
         <label><input type="checkbox" id="cbHealthRp"> 执行先创建系统还原点</label>
         ${btn('一键修复（中低危）','green',()=>runRemediate('Medium',false), actionable===0)}${btn('包含高危项','yellow',()=>runRemediate('High',true))}</div>`;
   }
+  // --- 智能降级建议（P2：先动哪个最划算；结论与 CLI / GUI 共用 lib 同一份数据）---
+  const tips = d.tips || {};
+  const tStart = tips.startup || [], tClean = tips.clean || [];
+  h += `<h3 style="margin:16px 0 8px">智能建议（先动哪个最划算）</h3>`;
+  if(!tStart.length && !tClean.length){
+    h += `<p class="muted">当前体检未命中需要优先处理的项目。</p>`;
+  } else {
+    h += `<div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>类型</th><th>对象</th><th>为什么先动它</th><th>怎么做</th></tr></thead><tbody>
+      ${tStart.map(x=>`<tr>
+        <td>${x.rank}</td><td>${badge('启动项','info')}</td>
+        <td>${esc(x.name)}<div class="muted">${esc(x.command)}（${esc(x.scope)}）</div></td>
+        <td>${esc(x.reason)}</td><td class="muted">${esc(x.hint)}</td>
+      </tr>`).join('')}
+      ${tClean.map(x=>`<tr>
+        <td>${x.rank}</td><td>${badge('清理','warn')}</td>
+        <td>${esc(x.name)}<div class="muted">${esc(x.path)}</div></td>
+        <td>${esc(x.reason)}</td><td class="muted">${esc(x.hint)}</td>
+      </tr>`).join('')}
+      </tbody></table></div>
+      <p class="muted" style="margin-top:6px">仅列最值得动的几项；启动项禁用与文件清理前都会自动备份。</p>`;
+  }
   const c = d.comparison;
   h += `<h3 style="margin:16px 0 8px">与上次体检对比</h3>`;
   if(!c){ h += `<p class="muted">这是首次体检，暂无历史报告。优化后再跑一次即可看到前后变化。</p>`; }
