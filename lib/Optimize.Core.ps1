@@ -2020,16 +2020,19 @@ function Invoke-HealthRemediation {
         [switch]$SkipCleanScan,
         [switch]$WhatIf,
         [switch]$Force,
-        [switch]$SkipExplorerRestart
+        [switch]$SkipExplorerRestart,
+        # 优化前先建系统还原点（P1-3）；默认读 config 的 safety.create_restore_point
+        [bool]$CreateRestorePoint = (Get-RestorePointDefault)
     )
 
     $res = [PSCustomObject]@{
-        ok       = $true
-        whatIf   = [bool]$WhatIf
-        executed = @()
-        skipped  = @()
-        results  = @()
-        error    = $null
+        ok           = $true
+        whatIf       = [bool]$WhatIf
+        executed     = @()
+        skipped      = @()
+        results      = @()
+        restorePoint = $null
+        error        = $null
     }
 
     $plan = @(Get-HealthRemediationPlan -Report $Report -PowerPlanGuid $PowerPlanGuid `
@@ -2081,6 +2084,13 @@ function Invoke-HealthRemediation {
             continue
         }
         $done[$item.actionKey] = $true
+
+        # 真要动系统了才建还原点（懒创建）：若全部项目都被跳过，不默默硬建一个。
+        # 失败不阻塞：只记录，让上层膨警告。
+        if (-not $WhatIf -and $CreateRestorePoint -and $null -eq $restorePoint) {
+            $restorePoint = New-SystemRestorePoint -Description ("PC-Optimizer 体棃修复前 {0:yyyy-MM-dd HH:mm}" -f (Get-Date))
+            $res.restorePoint = $restorePoint
+        }
 
         $step = [PSCustomObject]@{
             id        = $item.id
@@ -2142,10 +2152,11 @@ function Invoke-HealthRemediation {
         $executed += $item.id
     }
 
-    $res.executed = $executed
-    $res.skipped  = $skips
-    $res.results  = $results
-    $res.ok       = (@($results | Where-Object { -not $_.ok }).Count -eq 0)
+    $res.executed     = $executed
+    $res.skipped      = $skips
+    $res.results      = $results
+    $res.restorePoint = $restorePoint
+    $res.ok           = (@($results | Where-Object { -not $_.ok }).Count -eq 0)
     if ($res.error) { $res.ok = $false }
     return $res
 }
@@ -3071,7 +3082,9 @@ function Invoke-Profile {
         [string]$Name,
         [string]$BackupDir,
         [switch]$WhatIf,
-        [switch]$Force
+        [switch]$Force,
+        # 优化前先建系统还原点（P1-3）；默认读 config 的 safety.create_restore_point
+        [bool]$CreateRestorePoint = (Get-RestorePointDefault)
     )
     $plan = Get-ProfilePlan -Name $Name
     $res  = [PSCustomObject]@{
@@ -3084,6 +3097,7 @@ function Invoke-Profile {
         steps    = @($plan.steps)
         results  = @()
         skipped  = @()
+        restorePoint = $null
         error    = $null
     }
     if (-not $plan.ok) { $res.error = $plan.error; return $res }
@@ -3098,6 +3112,11 @@ function Invoke-Profile {
             $reason = if (-not $s.auto) { "需人工确认后执行（$($s.action)）" } else { "风险级别 $($s.risk)，需 -Force" }
             $res.skipped += [PSCustomObject]@{ id = $s.id; domain = $s.domain; risk = $s.risk; reason = $reason; action = $s.action }
             continue
+        }
+        # 真要动系统了才建还原点（P1-3）；失败不阻塞优化。
+        if (-not $WhatIf -and $CreateRestorePoint -and $null -eq $restorePoint) {
+            $restorePoint = New-SystemRestorePoint -Description ("PC-Optimizer 组合包 $($plan.title) 优化前 {0:yyyy-MM-dd HH:mm}" -f (Get-Date))
+            $res.restorePoint = $restorePoint
         }
         $r = [PSCustomObject]@{ id = $s.id; domain = $s.domain; action = $s.action; ok = $false; summary = ''; backup = $null; error = $null }
         try {
@@ -3503,4 +3522,111 @@ function ConvertTo-HealthCompareHtml {
 '@
     $html = $html.Replace('__GEN__', $gen).Replace('__BEFORE__', [string]$c.beforeScore).Replace('__AFTER__', [string]$c.afterScore).Replace('__DCLS__', $dcls).Replace('__SIGN__', $sign).Replace('__ROWS__', $rows.ToString()).Replace('__RESOLVED__', $resolvedHtml.ToString()).Replace('__NEW__', $newHtml.ToString())
     return $html
+}
+
+
+# ============================================================
+#  优化前自动创建系统还原点（P1-3）
+# ============================================================
+# 系统还原点是“改坏了还能退回上一版”的最后一道保险：
+# 备份文件只覆盖自己动过的那些键值，还原点是整机快照。
+# 默认关闭（config 的 safety.create_restore_point）——很多老机器上
+# System Restore 本是关着的，感觉上打开会占掉几个 GB 磁盘，不能用户不知情。
+# 创建失败只警告、不阻塞：非管理员 / SR 被禁用 / 24 小时内已建过
+# 这三种情形都会失败，到时拦住用户优化比不建还原点更糟。
+
+# 默认值唯一来源：config/optimization.json 的 safety.create_restore_point
+function Get-RestorePointDefault {
+    $cfg = Get-OptConfig
+    if ($cfg -and $cfg.safety -and ($cfg.safety.PSObject.Properties.Name -contains 'create_restore_point')) {
+        return [bool]$cfg.safety.create_restore_point
+    }
+    return $false
+}
+
+# 系统还原是否处于可用状态；判断不出时按“可用”处理，交给 API 去决定。
+# 只读注册表，不会改动任何设置——SR 被关掉时我们返回 false 告诉命令行展示。
+function Test-SystemRestoreEnabled {
+    $paths = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore',
+        'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\SystemRestore'
+    )
+    foreach ($rp in $paths) {
+        try {
+            if (-not (Test-Path -LiteralPath $rp)) { continue }
+            $v = Get-ItemProperty -LiteralPath $rp -ErrorAction SilentlyContinue
+            if ($null -eq $v) { continue }
+            if ($v.PSObject.Properties.Name -contains 'DisableSR') {
+                if ([int]$v.DisableSR -ne 0) { return $false }
+            }
+        } catch {
+            # 读不到就当没限制，不因为读注册表失败而影响优化
+        }
+    }
+    return $true
+}
+
+# 创建系统还原点：先 Checkpoint-Computer（Win8+），失败再退 WMI SystemRestore（Win7 可用）。
+# 返回 @{ok; method; name; error; returnValue; whatIf}＋异常不往外抔。
+function New-SystemRestorePoint {
+    param(
+        [string]$Description = 'PC-Optimizer 优化前自动还原点',
+        [int]$RestorePointType = 12,
+        [switch]$WhatIf
+    )
+
+    $res = [PSCustomObject]@{
+        ok          = $false
+        whatIf      = [bool]$WhatIf
+        method      = $null
+        name        = $Description
+        error       = $null
+        returnValue = $null
+    }
+
+    # 预演不能真建还原点（那就不只读了），但要把结果给出去，让 UI 能告诉用户“会建”。
+    if ($WhatIf) {
+        $res.ok     = $true
+        $res.method = 'WhatIf'
+        return $res
+    }
+
+    if (-not (Test-IsAdmin)) {
+        $res.error = '创建系统还原点需要管理员权限（请以管理员身份运行）'
+        return $res
+    }
+    if (-not (Test-SystemRestoreEnabled)) {
+        $res.error = '系统还原已被关闭或被组策略禁用，跳过创建（可在「系统属性→系统保护」中开启）'
+        return $res
+    }
+
+    $cpError = $null
+    if (Get-Command Checkpoint-Computer -ErrorAction SilentlyContinue) {
+        try {
+            Checkpoint-Computer -Description $Description -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop
+            $res.ok     = $true
+            $res.method = 'Checkpoint-Computer'
+            return $res
+        } catch {
+            $cpError = $_.Exception.Message
+        }
+    }
+
+    try {
+        $sr = [WMIClass]("\\" + $env:COMPUTERNAME + "\root\default:SystemRestore")
+        $rc = $sr.CreateRestorePoint($Description, $RestorePointType, 100)
+        $rv = [int]$rc.ReturnValue
+        $res.returnValue = $rv
+        if ($rv -eq 0) {
+            $res.ok     = $true
+            $res.method = 'WMI SystemRestore'
+            return $res
+        }
+        # 非 0 就是失败；常见的是系统节流（24h 内只让建一个还原点）、空间不足
+        $res.error = "WMI SystemRestore.CreateRestorePoint 返回码 $rv"
+    } catch {
+        $res.error = "调用 WMI SystemRestore 失败: $($_.Exception.Message)"
+    }
+    if ($cpError) { $res.error = ($res.error + '；Checkpoint-Computer: ' + $cpError) }
+    return $res
 }

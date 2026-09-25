@@ -179,6 +179,19 @@
     # 一键修复按钮：确认后执行，每步前自动备份
     $script:BtnHealthFix = New-Button "一键修复" 180 716 150 40 $Theme.Warning 11
     $script:BtnHealthFix.Enabled = $false
+
+    # 执行前先建系统还原点（P1-3）；默认值与 CLI / WebUI 同源（config 的 safety.create_restore_point）
+    $script:chkHealthRp = New-Object System.Windows.Forms.CheckBox
+    $script:chkHealthRp.Location = New-Object System.Drawing.Point(515, 722)
+    $script:chkHealthRp.Size = New-Object System.Drawing.Size(265, 24)
+    $script:chkHealthRp.Text = "执行前先建系统还原点"
+    $script:chkHealthRp.Checked = (Get-RestorePointDefault)
+    $script:chkHealthRp.Font = $Fonts.Body
+    $script:chkHealthRp.ForeColor = $Theme.TextMain
+    $script:chkHealthRp.BackColor = $Theme.BgDark
+    $script:chkHealthRp.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $page.Controls.Add($script:chkHealthRp)
+
     $script:BtnHealthFix.Add_Click({
         try {
             if (-not $script:HealthReport) {
@@ -206,7 +219,8 @@
             Invoke-UIRefresh
 
             $rr = Invoke-HealthRemediation -Report $script:HealthReport -MaxSeverity 'Medium' `
-                                           -BackupDir $script:BackupDir -SkipCleanScan
+                                           -BackupDir $script:BackupDir -SkipCleanScan `
+                                           -CreateRestorePoint $script:chkHealthRp.Checked
             foreach ($s in @($rr.results)) {
                 if ($s.ok) { Write-Log "修复 [$($s.domain)] $($s.id)：$($s.summary)" "SUCCESS" }
                 else { Write-Log "修复 [$($s.domain)] $($s.id) 失败：$($s.error)" "ERROR" }
@@ -214,9 +228,19 @@
             }
             foreach ($s in @($rr.skipped)) { Write-Log "跳过 $($s.id)：$($s.reason)" "INFO" }
 
+            $rpTxt = ''
+            if ($rr.restorePoint) {
+                if ($rr.restorePoint.ok) {
+                    $rpTxt = "`n`n[系统还原点已创建] $($rr.restorePoint.name) ($($rr.restorePoint.method))"
+                    Write-Log "系统还原点已创建: $($rr.restorePoint.name)" "SUCCESS"
+                } else {
+                    $rpTxt = "`n`n[还原点创建失败] $($rr.restorePoint.error)（已继续执行修复）"
+                    Write-Log "系统还原点创建失败: $($rr.restorePoint.error)" "WARNING"
+                }
+            }
             $doneTxt = if ($rr.ok) { "修复完成，建议重新体检查看前后对比。" }
                        else { "部分项目修复失败，详情见日志。" }
-            [System.Windows.Forms.MessageBox]::Show($doneTxt, "一键修复", `
+            [System.Windows.Forms.MessageBox]::Show(($doneTxt + $rpTxt), "一键修复", `
                 [System.Windows.Forms.MessageBoxButtons]::OK, `
                 [System.Windows.Forms.MessageBoxIcon]::Information)
 

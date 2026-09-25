@@ -162,7 +162,8 @@ def _register_mcp_tools(server):
 
     @server.tool()
     def health_remediate(issue_code: str = "", max_severity: str = "Medium",
-                        dns_option: int = 1, what_if: bool = False, force: bool = False) -> dict:
+                        dns_option: int = 1, what_if: bool = False, force: bool = False,
+                        create_restore_point: bool = False) -> dict:
         """按体检结果自动修复。issue_code: 只修指定 issue id（逗号分隔），留空为全部；
         max_severity: 允许自动执行的最高严重级别 High/Medium/Low（High 级需 force=true）；
         dns_option: 1=Cloudflare 2=Google 3=阿里 4=114 5=腾讯。每步执行前自动备份。"""
@@ -178,6 +179,7 @@ def _register_mcp_tools(server):
             args.append("-WhatIf")
         if force:
             args.append("-Force")
+        args += ["-CreateRestorePoint", str(bool(create_restore_point)).lower()]
         return run_ps("15_health.ps1", *args)
 
     @server.tool()
@@ -237,7 +239,8 @@ def _register_mcp_tools(server):
         return run_ps("16_profiles.ps1", "-Action", "plan", "-Name", str(name))
 
     @server.tool()
-    def profile_apply(name: str, dry_run: bool = False, force: bool = False) -> dict:
+    def profile_apply(name: str, dry_run: bool = False, force: bool = False,
+                      create_restore_point: bool = False) -> dict:
         """执行优化组合包（服务/启动项/视觉/电源/网络/遥测/磁盘）。
         dry_run: 只出计划不修改；force: 放行高风险步骤（如禁用全部启动项、CompactOS）。
         默认会跳过高风险/需人工确认的步骤。每个域执行前自动备份。"""
@@ -246,6 +249,7 @@ def _register_mcp_tools(server):
             args.append("-DryRun")
         if force:
             args.append("-Force")
+        args += ["-CreateRestorePoint", str(bool(create_restore_point)).lower()]
         return run_ps("16_profiles.ps1", *args, timeout=1800)
 
     @server.tool()
@@ -649,6 +653,7 @@ def api_health_remediate():
         args.append("-WhatIf")
     if data.get("force"):
         args.append("-Force")
+    args += ["-CreateRestorePoint", str(bool(data.get("create_restore_point", False))).lower()]
     return jsonify(run_ps("15_health.ps1", *args))
 
 
@@ -736,6 +741,7 @@ def api_profile_apply():
         args.append("-DryRun")
     if data.get("force"):
         args.append("-Force")
+    args += ["-CreateRestorePoint", str(bool(data.get("create_restore_point", False))).lower()]
     return jsonify(run_ps("16_profiles.ps1", *args, timeout=1800))
 
 

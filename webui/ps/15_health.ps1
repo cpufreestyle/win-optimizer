@@ -27,7 +27,10 @@ param(
     [string]$From = "",
     [string]$To = "",
     [switch]$WhatIf,
-    [switch]$Force
+    [switch]$Force,
+    # 修复前先建系统还原点（P1-3）；auto / true / false，默认 auto（取 config 的 safety.create_restore_point）。
+    # 用字符串而不是 [bool]：这里通过 powershell -File 调用，[bool] 绑定不了“false”。
+    [string]$CreateRestorePoint = "auto"
 )
 
 
@@ -84,11 +87,26 @@ try {
                                           -DnsOption $DnsOption -PowerPlanGuid $PowerPlanGuid `
                                           -SkipCleanScan -WhatIf:$WhatIf -Force:$Force
         } else {
+            $rpOn = switch ("$CreateRestorePoint".Trim().ToLower()) {
+                'true'  { $true }
+                'false' { $false }
+                default { Get-RestorePointDefault }
+            }
             $r = Invoke-HealthRemediation -BackupDir $backupDir -MaxSeverity $MaxSeverity `
                                           -DnsOption $DnsOption -PowerPlanGuid $PowerPlanGuid `
-                                          -SkipCleanScan -WhatIf:$WhatIf -Force:$Force
+                                          -SkipCleanScan -WhatIf:$WhatIf -Force:$Force `
+                                          -CreateRestorePoint:$rpOn
         }
-        Out-Json $r
+        # 还原点状态单独带出，前端可直接弹提示
+        Out-Json ([PSCustomObject]@{
+            ok           = $r.ok
+            whatIf       = $r.whatIf
+            executed     = $r.executed
+            skipped      = $r.skipped
+            results      = $r.results
+            restorePoint = $r.restorePoint
+            error        = $r.error
+        })
     }
     elseif ($Action -eq "export") {
         $fmt = if ($Format -eq "md") { "Markdown" } else { "Html" }

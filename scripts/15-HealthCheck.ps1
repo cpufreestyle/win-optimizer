@@ -22,6 +22,7 @@ param(
     [ValidateSet('Html', 'Markdown')][string]$Format = 'Html',  # 导出格式
     [string]$From,             # 对比起点：体检报告 JSON 路径（默认取上一次体检）
     [string]$To,               # 对比终点：体检报告 JSON 路径（默认取本次体检）
+    [switch]$RestorePoint,        # 修复前先建系统还原点；省略时取 config 的 safety.create_restore_point
     [int]$TrendDays = 30         # -Trend 回溯天数
 )
 
@@ -250,8 +251,23 @@ if ($actionable.Count -gt 0) {
     }
     if ($answer -eq 'Y' -or $answer -eq 'y') {
         Write-Host "`n  开始自动修复（High 级高危项不在本流程内）..." -ForegroundColor Yellow
+        $rpOn = if ($RestorePoint) { $true } else { Get-RestorePointDefault }
+        if ($rpOn) {
+            if (-not (Test-IsAdmin)) {
+                Write-Host "  [提示] 创建系统还原点需要管理员权限，本次将跳过。" -ForegroundColor Yellow
+            } elseif (-not (Test-SystemRestoreEnabled)) {
+                Write-Host "  [提示] 系统还原已关闭，跳过还原点。" -ForegroundColor Yellow
+            }
+        }
         $rr = Invoke-HealthRemediation -Report $report -MaxSeverity 'Medium' -BackupDir $backupDir `
-                                       -SkipCleanScan -SkipExplorerRestart
+                                       -SkipCleanScan -SkipExplorerRestart -CreateRestorePoint:$rpOn
+        if ($rr.restorePoint) {
+            if ($rr.restorePoint.ok) {
+                Write-Host "  [还原点] 已创建: $($rr.restorePoint.name) ($($rr.restorePoint.method))" -ForegroundColor Green
+            } else {
+                Write-Host "  [还原点] 创建失败，继续修复: $($rr.restorePoint.error)" -ForegroundColor Yellow
+            }
+        }
         Write-Host ""
         foreach ($s in @($rr.results)) {
             $mark = if ($s.ok) { '[成功]' } else { '[失败]' }

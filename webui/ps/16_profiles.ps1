@@ -11,6 +11,9 @@ param(
     [ValidateSet("list", "plan", "apply")]$Action = "list",
     [string]$Name = "",
     [switch]$DryRun,
+    # 优化前还原点（P1-3）：auto / true / false，默认 auto（取 config 的 safety.create_restore_point）。
+    # 字符串三态：通过 powershell -File 调用，[bool] 绑定不了“false”。
+    [string]$CreateRestorePoint = "auto",
     [switch]$Force
 )
 
@@ -71,8 +74,26 @@ try {
     }
     elseif ($Action -eq "apply") {
         if (-not $Name) { Out-Json ([PSCustomObject]@{ ok = $false; error = "缺少 -Name 参数" }); exit }
-        $r = Invoke-Profile -Name $Name -BackupDir $backupDir -WhatIf:$DryRun -Force:$Force
-        Out-Json $r
+        # 优化前还原点（P1-3）：未显式传入时取 config 默认值
+        $rp = switch ("$CreateRestorePoint".Trim().ToLower()) {
+            'true'  { $true }
+            'false' { $false }
+            default { Get-RestorePointDefault }
+        }
+        $r = Invoke-Profile -Name $Name -BackupDir $backupDir -WhatIf:$DryRun -Force:$Force -CreateRestorePoint:$rp
+        Out-Json ([PSCustomObject]@{
+            ok           = $r.ok
+            name         = $r.name
+            title        = $r.title
+            desc         = $r.desc
+            dryRun       = $r.dryRun
+            forced       = $r.forced
+            steps        = $r.steps
+            results      = $r.results
+            skipped      = $r.skipped
+            restorePoint = $r.restorePoint
+            error        = $r.error
+        })
     }
 } catch {
     Out-Json ([PSCustomObject]@{ ok = $false; error = $_.Exception.Message })

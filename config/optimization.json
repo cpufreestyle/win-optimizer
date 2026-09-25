@@ -38,6 +38,9 @@
     "disk": {
         "compact_os_default": false
     },
+    "safety": {
+        "create_restore_point": false
+    },
     "profiles": {
         "old_balanced": {
             "title": "老机均衡",

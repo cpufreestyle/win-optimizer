@@ -189,11 +189,26 @@ lib 新增 `Get-Profiles` / `Get-ProfilePlan <name>` / `Invoke-Profile <name> [-
 - GUI：`gui/pages/Health.ps1` 新增“导出对比报告”按钮（HTML / Markdown 二选一，弹窗提示文件路径）。
 - 测试：`tests/Optimize.Core.Tests.ps1` 新增 6 个用例（HTML 自包含断言 / Markdown 表格 / JSON 路径传参 / 自动取最新两份 / 缺报告安全失败 / HTML 转义），全量 162/162 通过。
 
-## P1-3 优化前自动创建系统还原点
+
+## P1-3 优化前自动创建系统还原点 — 已实现
 
 config 新增 `safety.create_restore_point`（默认 `false`，与 `disk.compact_os_default` 同思路）。
 修改类操作前执行 `Checkpoint-Computer`，失败回退 WMI `SystemRestore`，再失败只警告不阻断。
 老硬盘创建还原点较慢，默认关闭；GUI/WebUI 设置项同步。有 AST 契约用例兜底默认值。
+
+**落点（P1-3，2026-09-26 实现）**
+- lib：`Get-RestorePointDefault`（唯一默认来源：`config/optimization.json` 的 `safety.create_restore_point`，默认 `false`）、
+  `Test-SystemRestoreEnabled`（只读注册表判断 SR 是否被禁用）、
+  `New-SystemRestorePoint [-Description] [-WhatIf]`：先 `Checkpoint-Computer`（Win8+），失败退 WMI `SystemRestore.CreateRestorePoint`（Win7 可用）；
+  非管理员 / SR 关闭 / 24h 节流均返回 `@{ok=$false; error}`
+  而不弹异常。
+- 接线：`Invoke-HealthRemediation` 与 `Invoke-Profile` 新增 `-CreateRestorePoint`，**懒创建**——真要动系统的第一步前才建，
+  全部步骤被跳过时不默默硬建；`-WhatIf` 不建；结果对象新增 `restorePoint` 字段。
+- 三端：CLI `15-HealthCheck.ps1 -RestorePoint` 与 `16-Profiles.ps1` 交互询问；
+  GUI `gui/pages/Health.ps1` 复选框“执行前先建系统还原点”；
+  WebUI `-CreateRestorePoint`（auto/true/false 三态字符串）+ 前端两处复选框，执行结果展示还原点状态。
+- 测试：`tests/Optimize.Core.Tests.ps1` 新增 9 个用例（默认关闭 / config 存在 / schema 开放 safety / `-WhatIf` 预演 /
+  不可用时不抔异常 / remediation 与 profile 结果对象 / 三端默认同源 / Win7 红线无 CIM API），全量 **171/171** 通过。
 
 ---
 
@@ -214,7 +229,7 @@ config 新增 `safety.create_restore_point`（默认 `false`，与 `disk.compact
 2. P0-2（体检修复，lib 单点映射，测试友好）
 3. P0-4（时间线/回滚，依赖 P0-1 引入的备份 manifest 规范）
 4. P0-3（组合包，编排面最大）
-5. P1-1、P1-2（已实现）→ P1-3
+5. P1-1、P1-2、P1-3（已实现）
 6. P2 按社区反馈取舍
 
 每步都走「集成分支 + PR」流程（见 HANDOFF §2），PR 前确认：Pester 151+ 全绿、
