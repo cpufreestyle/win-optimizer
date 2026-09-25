@@ -25,7 +25,7 @@
 > 开机性能基线 bench（§3.12，PR #18）。Roadmap 的 P0 / P1 / P2 全部收口。
 > 当前 `main` = v3.8.0 发布态；本地 `main` 与远端一致（`git ls-remote` 核对）。
 
-> 2026-09-18 更新：本轮已按 §8 的建议收口，详见文末 §9。
+> ✅ **2026-09-26**：P3-1 智能建议一键应用闭环已合并（PR #21）并随 v3.9.0 发布（见 §3.13）。> 2026-09-18 更新：本轮已按 §8 的建议收口，详见文末 §9。
 
 > ✅ **2026-09-23 复核（实测，已推翻「main 严重落后」的旧结论）**：
 > - `git ls-remote origin refs/heads/main` 返回 `7cb9d17`，与本地 `main` **完全一致**——本地 `main` 并不落后，无需先同步。
@@ -258,6 +258,23 @@ WebUI 折线只在采样点 ≥2 且 >0 时渲染，老用户升级后第一篇�
 
 测试：新增 6 个用例（探测结构 / 复用计数 / 实扫计数 / 报告挂载 / `-SkipBench` / 旧报告趋势兼容），全量 **200/200** 通过。
 
+### 3.13 P3-1 智能建议一键应用闭环 + 服务依赖护栏 + 真实开机耗时（2026-09-26，v3.9.0）
+
+| 层 | 落点 | 说明 |
+|----|------|------|
+| lib | `Invoke-SmartRecommendations` | 智能建议从只读变可执行：只应用启动项类，先备份（一次覆盖全部选中项，失败即中止）再禁用；`-CreateRestorePoint` 懒创建；`-WhatIf` 零副作用；建议与现场不一致时安全失败（匹配不到不动手）。返回 `@{ ok; whatIf; applied; failed; backup; restorePoint; error }` |
+| lib | `Get-ServiceDependents` + `Disable-Services -Force` | 正被运行中服务依赖的服务默认跳过并说明原因；WMI `Win32_DependentService`（Win7 兼容）；查询失败按空处理不阻碍流程 |
+| lib | `Get-BootPerformanceSample` | 解析 Diagnostics-Performance Event 100 取最近一次真实开机耗时；bench 新增 `bootSeconds/bootAt/bootSource/bootError`，历史报告无数据按 null 兼容 |
+| CLI | `15-HealthCheck.ps1` 智能建议段后交互应用；bench 段展示开机耗时；`03-DisableServices.ps1` 备份/禁用下沉 lib 并新增 `-Force` | 非交互环境自动跳过提问 |
+| GUI | `gui/pages/Health.ps1`「应用智能建议」按钮（完成后自动重新体检）；`gui/pages/Services.ps1` 改走 lib 禁用（获得护栏 + manifest 备份） | 还原点复用体检页同一复选框 |
+| WebUI | `15_health.ps1 -Action apply-tips` + `POST /api/health/apply-tips` + MCP `health_apply_tips` + 体检页按钮 | `-CreateRestorePoint` 沿用 auto/true/false 三态字符串 |
+
+**边界**：清理类建议永远不自动执行（删文件不可逆性强）；WMI 来源启动项无法代码禁用，
+`failed` 里给「需通过任务管理器手动禁用」的理由；开机耗时探测不到事件时只少一个指标，不报错。
+
+测试：新增 16 个用例（应用闭环 / WhatIf 零副作用 / 还原点懒创建 / 建议消失安全失败 /
+部分失败上报 / 依赖护栏默认跳过与 -Force 覆盖 / 开机耗时结构与趋势兼容），全量 **216/216** 通过。
+CLI 03/15、WebUI `tips`、`apply-tips -WhatIf` 与首页渲染均实测通过。
 ---
 
 ## 4. 三端文件地图（按域）
