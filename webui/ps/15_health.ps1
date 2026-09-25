@@ -133,5 +133,5 @@ try {
         })
     }
 } catch {
-    Out-Json ([PSCustomObject]{ ok = $false; error = $_.Exception.Message })
+    Out-Json ([PSCustomObject]@{ ok = $false; error = $_.Exception.Message })
 }

@@ -114,7 +114,7 @@
                 $spark    = Format-Sparkline -Values ([double[]]@($trendPoints | ForEach-Object { [double]$_.score }))
                 $minScore = (@($trendPoints.score) | Measure-Object -Minimum).Minimum
                 $maxScore = (@($trendPoints.score) | Measure-Object -Maximum).Maximum
-                $lines += (“体检趋势     : {0}（近30天 {1} 次，{2} → {3} 分，最低 {4} 最高 {5}）” -f $spark, $trendPoints.Count, $trendPoints[0].score, $trendPoints[-1].score, $minScore, $maxScore)
+                $lines += ("体检趋势     : {0}（近30天 {1} 次，{2} → {3} 分，最低 {4} 最高 {5}）" -f $spark, $trendPoints.Count, $trendPoints[0].score, $trendPoints[-1].score, $minScore, $maxScore)
             }
             $script:TxtHealthMetrics.Lines = $lines
 
