@@ -312,6 +312,16 @@ Compact.exe /CompactOS:never
 
 ## 📝 更新日志
 
+### v3.5.0 (2026-09-25)
+- **?????????P1-2?**
+  - `lib/Optimize.Core.ps1` 新增 `Export-HealthReport -From -To -Format Html|Markdown [-BackupDir] [-OutDir] [-FileName]`；
+    省略 `-From/-To` 时自动取历史最新两份体棃报告做对比，默认输出到桌面。
+  - HTML 为**自包含单文件**（全内联 CSS、暗色模式、零外部请求），含总分变化、逐指标对比、已解决 / 新增 issue 清单。
+  - Markdown 为纯文本表格，可直接粘贴到求助帖。
+  - 三端入口：CLI `-Export`、GUI “导出对比报告”按钮、WebUI `/api/health/export` + MCP `health_export` + 前端导出按钮。
+  - 用途：发帖求助时随手附上，一眼看懂优化前后的分数与指标变化。
+- 测试：Pester 162 / 162 通过（新增 6 个导出相关用例）
+
 ### v3.4.0 (2026-09-25)
 - **定时体检 + 趋势报告（P1-1）**
   - `scripts/15-HealthCheck.ps1 -InstallSchedule [-Time 09:00]` 注册每日自动体检计划任务（非管理员自动降级为登录时触发），`-UninstallSchedule` 卸载
