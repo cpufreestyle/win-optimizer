@@ -23,7 +23,8 @@ param(
     [string]$From,             # 对比起点：体检报告 JSON 路径（默认取上一次体检）
     [string]$To,               # 对比终点：体检报告 JSON 路径（默认取本次体检）
     [switch]$RestorePoint,        # 修复前先建系统还原点；省略时取 config 的 safety.create_restore_point
-    [int]$TrendDays = 30         # -Trend 回溯天数
+    [int]$TrendDays = 30,        # -Trend 回溯天数
+    [switch]$SkipBench           # 跳过开机性能基线探测（磁盘顺序读写 + 启动负担，默认随体检执行）
 )
 
 # 复用共享核心库（体检引擎的统一实现）
@@ -52,6 +53,13 @@ function Show-HealthTrend {
     $minScore = ($scores | Measure-Object -Minimum).Minimum
     $maxScore = ($scores | Measure-Object -Maximum).Maximum
     Write-Host ("  分数: {0}   （{1} ~ {2} 分，共 {3} 次）" -f (Format-Sparkline -Values $scores), $minScore, $maxScore, $trend.Count) -ForegroundColor Green
+    $diskPts = @($trend | Where-Object { $_.diskReadMBps -gt 0 })
+    if ($diskPts.Count -ge 2) {
+        $dvals = [double[]]@($diskPts | ForEach-Object { [double]$_.diskReadMBps })
+        $dmin  = ($dvals | Measure-Object -Minimum).Minimum
+        $dmax  = ($dvals | Measure-Object -Maximum).Maximum
+        Write-Host ("  磁盘读: {0}   （{1} ~ {2} MB/s，{3} 次采样）" -f (Format-Sparkline -Values $dvals), $dmin, $dmax, $diskPts.Count) -ForegroundColor Green
+    }
     Write-Host ("  区间: {0:MM-dd} → {1:MM-dd}" -f $trend[0].time, $trend[-1].time) -ForegroundColor Gray
     Write-Host ""
     Write-Host "  最近记录（日期时间 / 分数 / 内存可用% / 可清理MB / 启动项 / 问题数）:" -ForegroundColor Yellow
@@ -100,7 +108,7 @@ Write-Host "  本功能只读取系统状态，不做任何修改。" -Foregroun
 $prev = Get-PreviousHealthReport -BackupDir $backupDir
 
 Write-Host "`n正在扫描（统计可清理空间可能需要十几秒）..." -ForegroundColor Yellow
-$report = Get-SystemHealthReport
+$report = Get-SystemHealthReport -SkipBench:$SkipBench
 
 # --- 体检分 ---
 $scoreColor = if ($report.score -ge 90) { "Green" }
@@ -127,6 +135,17 @@ if ($null -ne $m.cleanableMB) {
 Write-Host ("    活动网卡     : {0} 个" -f $m.activeAdapters)
 foreach ($d in @($m.volumes)) {
     Write-Host ("    分区 {0}:      : 可用 {1}GB / 共 {2}GB（已用 {3}%）[{4}]" -f $d.drive, $d.freeGB, $d.totalGB, $d.usedPct, $d.media)
+}
+if ($report.bench) {
+    Write-Host "`n  [性能基线]（纯只读探测，随体检历史沉淀，可对比「优化后有没有变快」）" -ForegroundColor Yellow
+    if ($report.bench.diskReadMBps -gt 0) {
+        Write-Host ("    磁盘顺序读   : {0} MB/s" -f $report.bench.diskReadMBps)
+        Write-Host ("    磁盘顺序写   : {0} MB/s" -f $report.bench.diskWriteMBps)
+    } else {
+        Write-Host "    磁盘读写     : 探测失败（$($report.bench.error)）" -ForegroundColor DarkGray
+    }
+    Write-Host ("    开机加载负担 : 启动项 {0} 项 + 自动服务 {1} 个" -f $report.bench.startupCount, $report.bench.autoServices)
+    Write-Host ("    探测耗时     : {0} ms" -f $report.bench.elapsedMs)
 }
 
 # --- 问题清单 ---

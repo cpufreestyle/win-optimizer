@@ -127,6 +127,15 @@
             foreach ($d in @($m.volumes)) {
                 $lines += ("分区 {0}:     : 可用 {1}GB / 共 {2}GB（已用 {3}%）[{4}]" -f $d.drive, $d.freeGB, $d.totalGB, $d.usedPct, $d.media)
             }
+            if ($r.bench) {
+                if ($r.bench.diskReadMBps -gt 0) {
+                    $lines += ("磁盘顺序读   : {0} MB/s（写 {1} MB/s）" -f $r.bench.diskReadMBps, $r.bench.diskWriteMBps)
+                } else {
+                    $lines += ("磁盘顺序读   : 探测失败（{0}）" -f $r.bench.error)
+                }
+                $lines += ("开机加载负担 : 启动项 {0} 项 + 自动服务 {1} 个" -f $r.bench.startupCount, $r.bench.autoServices)
+                $lines += ("基线探测耗时 : {0} ms" -f $r.bench.elapsedMs)
+            }
             # --- 体检趋势（迷你 sparkline，与 CLI/WebUI 同源数据）---
             $trendPoints = @(Get-HealthTrend -BackupDir $script:BackupDir -Days 30)
             if ($trendPoints.Count -ge 2) {

@@ -224,8 +224,17 @@ config 新增 `safety.create_restore_point`（默认 `false`，与 `disk.compact
   - WebUI：`webui/ps/optimize_plan.ps1 -Action plan` + MCP `optimize_plan(profile, skip_clean_scan)`。
   - 测试：新增 6 个用例（步骤结构 / summary 计数一致 / 电源与 DNS 标签 / 组合包与未知组合包 /
     清理步可选 / 渲染契约），全量 **194/194** 通过。
-- **开机耗时基线**：体检报告加 `bench` 段（磁盘顺序读探测、启动项数、服务自动数），
-  配合 P1-1 趋势图让「优化有没有变快」可量化。探测必须 <10s 且纯只读。
+- ~~**开机耗时基线**~~：**已实现（2026-09-26）**。体检报告新增 `bench` 段（磁盘顺序读/写、启动项数、
+  自动服务数、物理内存、探测耗时），配合 P1-1 趋势图让「优化有没有变快」可量化。落点：
+  - lib：`Get-SystemBench`（%TEMP% 64MB 块文件顺序写+读回即删，实测约 0.4-1s）、
+    `Get-AutoOptimizableServices`（体检与基线共用，避免重复扫 CIM）；`Get-SystemHealthReport`
+    新增 `-SkipBench`，bench 挂报告顶层属性（不进 metrics，不影响评分与对比）。
+  - CLI：体检输出「性能基线」段；`-Trend` 新增磁盘读 sparkline。
+  - GUI：健康页关键指标区追加三行基线数据。
+  - WebUI：`15_health.ps1 -SkipBench` 参数；体检页关键指标表加「性能基线 / 开机负担」两行，
+    趋势区新增磁盘读 SVG 折线（无历史 bench 数据的旧报告按 0 处理，不抛异常）。
+  - 测试：新增 6 个用例（探测结果结构 / 复用传入计数 / 实扫计数 / 报告挂载 / -SkipBench /
+    旧报告趋势兼容），全量 **200/200** 通过。
 - ~~**智能降级建议**~~：**已实现（2026-09-26）**。`memory.low` / `startup.many` 命中时给出
   「最值得关的 3 个启动项」（僵尸项 > 更新程序 > 云同步 > 后台助手，系统/硬件组件一律不推荐），
   `disk.space` / `disk.cleanable` 命中时给出「最值得清的 3 个目录」并按可释放体积排序，
@@ -250,7 +259,7 @@ config 新增 `safety.create_restore_point`（默认 `false`，与 `disk.compact
 3. P0-4（时间线/回滚，依赖 P0-1 引入的备份 manifest 规范）
 4. P0-3（组合包，编排面最大）
 5. P1-1、P1-2、P1-3（已实现）
-6. P2 按社区反馈取舍（智能降级建议、MCP `optimize_plan` dry-run 已落地；仅剩开机耗时基线 bench 待排）
+6. ✅ P2 三项全部落地：智能降级建议、MCP `optimize_plan` dry-run、开机耗时基线 bench（细则见上）。
 
 每步都走「集成分支 + PR」流程（见 HANDOFF §2），PR 前确认：Pester 151+ 全绿、
 `*.ps1` 全 BOM、`config/optimization.schema.json` 同步更新、GUI 改动真机点验。
