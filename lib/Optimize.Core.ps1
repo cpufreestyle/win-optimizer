@@ -2086,9 +2086,9 @@ function Invoke-HealthRemediation {
         $done[$item.actionKey] = $true
 
         # 真要动系统了才建还原点（懒创建）：若全部项目都被跳过，不默默硬建一个。
-        # 失败不阻塞：只记录，让上层膨警告。
+        # 失败不阻塞：只记录，让上层弹警告。
         if (-not $WhatIf -and $CreateRestorePoint -and $null -eq $restorePoint) {
-            $restorePoint = New-SystemRestorePoint -Description ("PC-Optimizer 体棃修复前 {0:yyyy-MM-dd HH:mm}" -f (Get-Date))
+            $restorePoint = New-SystemRestorePoint -Description ("PC-Optimizer 体检修复前 {0:yyyy-MM-dd HH:mm}" -f (Get-Date))
             $res.restorePoint = $restorePoint
         }
 
@@ -3269,7 +3269,7 @@ function Test-IsAdmin {
 
 # 注册每日自动体检计划任务（schtasks.exe，Win7~Win11 通用，不依赖 ScheduledTasks 模块）
 # 非管理员自动降级为「登录时触发」并在 warning 中说明；
-# 注册失败只返回 error，绝不抛异常（虚拟机/域控环境容徙）。
+# 注册失败只返回 error，绝不抛异常（虚拟机/域控环境容错）。
 function Install-HealthSchedule {
     param(
         [string]$TaskName = 'PCOptimizer-DailyHealthCheck',
@@ -3415,7 +3415,7 @@ function ConvertTo-HealthCompareMarkdown {
     if (@($c.resolved).Count -eq 0) { $null = $sb.AppendLine("无") }
     foreach ($i in @($c.resolved)) { $null = $sb.AppendLine("- [$($i.severity)] $($i.title)") }
     $null = $sb.AppendLine("")
-    $null = $sb.AppendLine("## 新墟问题（$(@($c.new).Count) 项）")
+    $null = $sb.AppendLine("## 新增问题（$(@($c.new).Count) 项）")
     $null = $sb.AppendLine("")
     if (@($c.new).Count -eq 0) { $null = $sb.AppendLine("无") }
     foreach ($i in @($c.new)) { $null = $sb.AppendLine("- [$($i.severity)] $($i.title)") }
@@ -3513,7 +3513,7 @@ function ConvertTo-HealthCompareHtml {
     <ul>__RESOLVED__</ul>
   </div>
   <div class="card">
-    <h2>新墟问题</h2>
+    <h2>新增问题</h2>
     <ul>__NEW__</ul>
   </div>
   <footer class="muted">本报告由只读体检数据生成，不含任何个人隐私数据。</footer>
@@ -3567,7 +3567,7 @@ function Test-SystemRestoreEnabled {
 }
 
 # 创建系统还原点：先 Checkpoint-Computer（Win8+），失败再退 WMI SystemRestore（Win7 可用）。
-# 返回 @{ok; method; name; error; returnValue; whatIf}＋异常不往外抔。
+# 返回 @{ok; method; name; error; returnValue; whatIf}＋异常不往外抛。
 function New-SystemRestorePoint {
     param(
         [string]$Description = 'PC-Optimizer 优化前自动还原点',

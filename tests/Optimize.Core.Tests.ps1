@@ -2011,14 +2011,14 @@ Describe 'Optimize.Core health report export - self-contained Html/Markdown (P1-
             Test-Path -LiteralPath $r.file | Should -BeTrue
 
             $html = Get-Content -LiteralPath $r.file -Raw -Encoding UTF8
-            # ??????????????
+            # 自包含单文件：样式全内联、零外部请求
             $html | Should -Match '<style>'
             $html | Should -Not -Match 'https?://'
-            # ?????????
+            # 总分与分差直接渲染进 HTML
             $html | Should -Match '>61<'
             $html | Should -Match '>88<'
             $html | Should -Match '\+27'
-            # ????? + ???/?? issue ??
+            # 指标明细 + 已解决/新增 issue 内容
             $html | Should -Match 'freeRamPct'
             $html | Should -Match 'temp_bloat_title'
             $html | Should -Match 'pagefile_small_title'
@@ -2201,7 +2201,7 @@ Describe 'Optimize.Core restore point before optimize (P1-3, shared by CLI/GUI/W
     }
 
     It 'Invoke-HealthRemediation exposes restorePoint and skips creation by default' {
-        # 默认 false 时不应该真的去创建还原点（否则每次体棃都会在 CI 里建还原点）
+        # 默认 false 时不应该真的去创建还原点（否则每次体检都会在 CI 里建还原点）
         $report = [PSCustomObject]@{
             timestamp = '2026-09-26 09:00:00'; host = 'h'; version = '3.5.0'
             score = 61; grade = 'C'

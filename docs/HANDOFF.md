@@ -18,8 +18,8 @@
 
 > ✅ **2026-09-25**：PR #7 已合并入 `main`（merge commit `bfc7b54`），残留分支已清理，已打 tag `v3.3.0` 并发布 Release。
 > ✅ **2026-09-25**：P1-2（前后对比报告导出）已合并并随 v3.5.0 发布（见 §3.7）。
-> ✅ **2026-09-26**：P1-3（优化前自动创建系统还原点）已实现并验证（见 §3.8）。
-> 当前 `main` = v3.4.0 发布态；P1-1（定时体检 + 趋势报告）已合并（见 §3.6）。
+> ✅ **2026-09-26**：P1-3（优化前自动创建系统还原点）已合并（PR #12），并随 v3.6.0 发布（见 §3.8）。
+> 当前 `main` = v3.6.0 发布态；P1-1（定时体检 + 趋势报告）已合并（见 §3.6）。
 
 > 2026-09-18 更新：本轮已按 §8 的建议收口，详见文末 §9。
 
@@ -189,7 +189,7 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 
 **坑**：`powershell -File` 调用时 `[bool]` 参数绑定不了字符串 `false`，所以 WebUI 侧用三态字符串；另外 lib 是在 `param()` 之后才 dot-source 的，**参数默认值里不能调 lib 函数**（会命令未找到）。
 
-测试：`tests/Optimize.Core.Tests.ps1` 新墟 9 个用例，全量 **171/171** 通过。
+测试：`tests/Optimize.Core.Tests.ps1` 新增 9 个用例，全量 **171/171** 通过。
 
 ---
 
@@ -262,7 +262,7 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 19. **调用 lib 函数前必须先 dot-source lib**：`webui/ps/02_clean.ps1` 曾把 `Get-CleanTargets -Web` 写在 `if (Test-Path $libPath) { . $libPath }` 之前，
     运行时 `Get-CleanTargets` 未定义、`$ErrorActionPreference='Stop'` 把它变成终止错误，
     而 `run_ps` 只会把 stdout/stderr 拼成 JSON，最终表现为 `/api/clean/scan` 返回 `ok:false` + “无效的 JSON”。
-    固化顺序：dot-source → `Get-Command` 存在性校验（不足则输出 JSON 锟底）→ 再调用 lib 函数。
+    固化顺序：dot-source → `Get-Command` 存在性校验（不足则输出 JSON 兜底）→ 再调用 lib 函数。
 
 ---
 
@@ -301,6 +301,6 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 2. ✅ 清理远端残留分支：`feat/optimizations`、`fix/cli-error-isolation-version`、`perf/folder-size-and-logging`、`release/v3.1.0` 与集成分支均已删除，远端只剩 `main`。
 3. ✅ 打 tag `v3.3.0`：Release workflow 成功，GitHub Release `v3.3.0` 已发布。
 4. 真机验收 GUI 体检页（§7）与新增的「体检趋势」显示（WebUI SVG 趋势卡片 / GUI 迷你图 / CLI `-Trend`）。
-5. ✅ P1-2 已发布 v3.5.0；P1-3 已实现并验证（见 §3.7、§3.8）。
-6. 后续功能建议（按价值排序）：「前后对比报告导出」（P1-2）→「优化前自动创建系统还原点」（P1-3）→ P2 探索项。
+5. ✅ P1-2 已发布 v3.5.0；P1-3 已发布 v3.6.0（见 §3.7、§3.8）。
+6. 后续功能建议：P1 系列（P1-1 / P1-2 / P1-3）已全部落地，下一步进入 P2 体验优化项（见 `docs/FEATURE-IDEAS.md`）。
    「一键优化组合包」（P0-3）、「优化回滚向导」（P0-4）、「定时体检 + 趋势报告」（P1-1）均已落地（见 §3.4、§3.5、§3.6）。

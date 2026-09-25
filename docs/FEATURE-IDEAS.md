@@ -208,7 +208,7 @@ config 新增 `safety.create_restore_point`（默认 `false`，与 `disk.compact
   GUI `gui/pages/Health.ps1` 复选框“执行前先建系统还原点”；
   WebUI `-CreateRestorePoint`（auto/true/false 三态字符串）+ 前端两处复选框，执行结果展示还原点状态。
 - 测试：`tests/Optimize.Core.Tests.ps1` 新增 9 个用例（默认关闭 / config 存在 / schema 开放 safety / `-WhatIf` 预演 /
-  不可用时不抔异常 / remediation 与 profile 结果对象 / 三端默认同源 / Win7 红线无 CIM API），全量 **171/171** 通过。
+  不可用时不抛异常 / remediation 与 profile 结果对象 / 三端默认同源 / Win7 红线无 CIM API），全量 **171/171** 通过。
 
 ---
 

@@ -146,8 +146,8 @@ def _register_mcp_tools(server):
 
     @server.tool()
     def health_export(fmt: str = "html", frm: str = "", to: str = "") -> dict:
-        """导出前后体棃对比报告（自包含 HTML / Markdown单文件）。
-        fmt: html（默认）或 md；frm/to: 可选体棃报告 JSON 路径，省略时自动取历史最新两份。"""
+        """导出前后体检对比报告（自包含 HTML / Markdown单文件）。
+        fmt: html（默认）或 md；frm/to: 可选体检报告 JSON 路径，省略时自动取历史最新两份。"""
         args = ["-Action", "export", "-Format", str(fmt)]
         if frm:
             args += ["-From", str(frm)]
