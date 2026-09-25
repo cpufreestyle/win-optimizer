@@ -17,7 +17,8 @@
 ## 2. 当前分支与待合并 PR（最关键）
 
 > ✅ **2026-09-25**：PR #7 已合并入 `main`（merge commit `bfc7b54`），残留分支已清理，已打 tag `v3.3.0` 并发布 Release。
-> ✅ **2026-09-25**：P1-2（前后对比报告导出）已在分支 `feat/p1-2-report-export` 实现并验证（见 §3.7），待 PR。
+> ✅ **2026-09-25**：P1-2（前后对比报告导出）已合并并随 v3.5.0 发布（见 §3.7）。
+> ✅ **2026-09-26**：P1-3（优化前自动创建系统还原点）已实现并验证（见 §3.8）。
 > 当前 `main` = v3.4.0 发布态；P1-1（定时体检 + 趋势报告）已合并（见 §3.6）。
 
 > 2026-09-18 更新：本轮已按 §8 的建议收口，详见文末 §9。
@@ -171,6 +172,25 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 已经过实测：CLI / WebUI 端到端导出成功，GUI 无头 harness 验证控件布局（14 控件）。
 
 
+
+### 3.8 优化前自动创建系统还原点（P1-3，2026-09-26）
+
+备份文件只覆盖自己动过的那些键值；系统还原点是整机快照，改坏了能整体退回去。
+
+| 端 | 落点 |
+|----|------|
+| lib | `Get-RestorePointDefault`（config 的 `safety.create_restore_point`，**默认 false**）、`Test-SystemRestoreEnabled`（只读注册表）、`New-SystemRestorePoint [-Description] [-WhatIf]`：先 `Checkpoint-Computer`（Win8+），失败退 WMI `SystemRestore.CreateRestorePoint`（Win7 可用）。非管理员 / SR 关闭 / 24h 节流均返回 `@{ok=$false; error}`，**不弹异常、不阻塞**。 |
+| lib | `Invoke-HealthRemediation` / `Invoke-Profile` 新增 `-CreateRestorePoint`；**懒创建**——真要动系统的第一步前才建，全部步骤被跳过时不默默硬建；`-WhatIf` 不建。结果对象新增 `restorePoint` 字段。 |
+| CLI | `15-HealthCheck.ps1 -RestorePoint`；`16-Profiles.ps1` 确认执行前询问；两者都先检查管理员与 SR 开关并提示。 |
+| GUI | `gui/pages/Health.ps1` 一键修复行增加复选框“执行前先建系统还原点”；执行后弹窗告知成功/失败。 |
+| WebUI | `webui/ps/15_health.ps1` / `16_profiles.ps1` 参数 `-CreateRestorePoint`（**auto / true / false** 三态字符串，默认 auto）；`/api/health/remediate` 与 `/api/profile/apply` + MCP 同名参数；前端两处复选框（`cbHealthRp` / `cbProfRp`）。 |
+
+**为什么默认关闭**：很多老机器本就关着 System Restore，感觉上打开会占掉几个 GB 磁盘；因此只做“请求创建”，不感觉开启 SR。
+
+**坑**：`powershell -File` 调用时 `[bool]` 参数绑定不了字符串 `false`，所以 WebUI 侧用三态字符串；另外 lib 是在 `param()` 之后才 dot-source 的，**参数默认值里不能调 lib 函数**（会命令未找到）。
+
+测试：`tests/Optimize.Core.Tests.ps1` 新墟 9 个用例，全量 **171/171** 通过。
+
 ---
 
 ## 4. 三端文件地图（按域）
@@ -281,6 +301,6 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 2. ✅ 清理远端残留分支：`feat/optimizations`、`fix/cli-error-isolation-version`、`perf/folder-size-and-logging`、`release/v3.1.0` 与集成分支均已删除，远端只剩 `main`。
 3. ✅ 打 tag `v3.3.0`：Release workflow 成功，GitHub Release `v3.3.0` 已发布。
 4. 真机验收 GUI 体检页（§7）与新增的「体检趋势」显示（WebUI SVG 趋势卡片 / GUI 迷你图 / CLI `-Trend`）。
-5. ✅ P1-2 已实现并验证（见 §3.7）；待走「集成分支 + PR + merge + tag v3.5.0」流程。
+5. ✅ P1-2 已发布 v3.5.0；P1-3 已实现并验证（见 §3.7、§3.8）。
 6. 后续功能建议（按价值排序）：「前后对比报告导出」（P1-2）→「优化前自动创建系统还原点」（P1-3）→ P2 探索项。
    「一键优化组合包」（P0-3）、「优化回滚向导」（P0-4）、「定时体检 + 趋势报告」（P1-1）均已落地（见 §3.4、§3.5、§3.6）。

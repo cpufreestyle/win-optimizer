@@ -2150,3 +2150,101 @@ Describe 'Optimize.Core health report export - self-contained Html/Markdown (P1-
         }
     }
 }
+
+Describe 'Optimize.Core restore point before optimize (P1-3, shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+
+    # 还原点占磁盘、且很多老机根本开着 System Restore，
+    # 所以默认必须关闭，与 Safe-by-default 一致。
+    It 'Get-RestorePointDefault returns a bool and is false by default' {
+        $d = Get-RestorePointDefault
+        $d | Should -BeOfType [bool]
+        $d | Should -BeFalse
+    }
+
+    It 'config safety.create_restore_point exists and is false' {
+        $cfg = Get-OptConfig
+        $cfg.safety | Should -Not -BeNullOrEmpty
+        $cfg.safety.create_restore_point | Should -BeFalse
+    }
+
+    It 'config schema allows the safety section' {
+        $sp = Join-Path $PWD.Path 'config\optimization.schema.json'
+        Test-Path $sp | Should -BeTrue
+        { Get-Content -LiteralPath $sp -Raw -Encoding UTF8 | ConvertFrom-Json } | Should -Not -Throw
+        $json = Get-Content -LiteralPath $sp -Raw -Encoding UTF8 | ConvertFrom-Json
+        $json.properties.safety | Should -Not -BeNullOrEmpty
+        $json.properties.safety.properties.create_restore_point.type | Should -Be 'boolean'
+        # root 不开放其它字段，因此 safety 必须显式声明
+        $json.additionalProperties | Should -BeFalse
+    }
+
+    It 'New-SystemRestorePoint -WhatIf only previews and reports its method' {
+        $r = New-SystemRestorePoint -WhatIf
+        $r.ok     | Should -BeTrue
+        $r.whatIf | Should -BeTrue
+        $r.method | Should -Be 'WhatIf'
+        $r.name  | Should -Not -BeNullOrEmpty
+    }
+
+    It 'New-SystemRestorePoint never throws when restore point creation is unavailable' {
+        # 非管理员 / SR 关闭 / 节流：全部应该返回对象而不是弹异常
+        $e = $null
+        try { $r = New-SystemRestorePoint -Description 'Pester smoke' } catch { $e = $_ }
+        $e | Should -BeNullOrEmpty
+        $r | Should -Not -BeNullOrEmpty
+        $r.PSObject.Properties.Name | Should -Contain 'ok'
+        $r.PSObject.Properties.Name | Should -Contain 'method'
+        $r.PSObject.Properties.Name | Should -Contain 'error'
+    }
+
+    It 'Invoke-HealthRemediation exposes restorePoint and skips creation by default' {
+        # 默认 false 时不应该真的去创建还原点（否则每次体棃都会在 CI 里建还原点）
+        $report = [PSCustomObject]@{
+            timestamp = '2026-09-26 09:00:00'; host = 'h'; version = '3.5.0'
+            score = 61; grade = 'C'
+            metrics   = [PSCustomObject]@{ freeRamPct = 42.5; cleanableMB = 0; startupCount = 3 }
+            issues    = @()
+        }
+        # 防歇层：即使以后改了配置默认，也不会在测试里真建还原点
+        Mock New-SystemRestorePoint { [PSCustomObject]@{ ok = $true; whatIf = $true; method = 'Mock'; name = 'mocked'; error = $null; returnValue = $null } }
+        $r = Invoke-HealthRemediation -Report $report -MaxSeverity 'Medium' -WhatIf -CreateRestorePoint:$false
+        $r.PSObject.Properties.Name | Should -Contain 'restorePoint'
+        # -WhatIf 下不创建
+        if ($r.restorePoint) { $r.restorePoint.ok | Should -BeTrue; $r.restorePoint.method | Should -Be 'WhatIf' }
+    }
+
+    It 'Invoke-Profile exposes restorePoint in its result object' {
+        Mock New-SystemRestorePoint { [PSCustomObject]@{ ok = $true; whatIf = $true; method = 'Mock'; name = 'mocked'; error = $null; returnValue = $null } }
+        $plan = Get-ProfilePlan -Name ( @(Get-Profiles)[0].name )
+        $r = Invoke-Profile -Name $plan.name -WhatIf -Force -CreateRestorePoint:$false
+        $r.PSObject.Properties.Name | Should -Contain 'restorePoint'
+        if ($r.restorePoint) { $r.restorePoint.ok | Should -BeTrue; $r.restorePoint.method | Should -Be 'WhatIf' }
+    }
+
+    # 三端默认值同源：GUI 复选框 / CLI 开关、WebUI 参数都必须回到 Get-RestorePointDefault
+    It 'three ends share the same restore-point default (Get-RestorePointDefault)' {
+        foreach ($rel in @('scripts\15-HealthCheck.ps1', 'scripts\16-Profiles.ps1', 'gui\pages\Health.ps1',
+                           'webui\ps\15_health.ps1', 'webui\ps\16_profiles.ps1')) {
+            $f = Join-Path $PWD.Path $rel
+            Test-Path $f | Should -BeTrue
+            (Get-Content $f -Raw -Encoding UTF8) | Should -Match 'Get-RestorePointDefault'
+        }
+    }
+
+    It 'lib restore-point helpers exist and are pure PowerShell (no Storage module APIs)' {
+        foreach ($fn in @('Get-RestorePointDefault', 'Test-SystemRestoreEnabled', 'New-SystemRestorePoint')) {
+            (Get-Command $fn -ErrorAction SilentlyContinue) | Should -Not -BeNullOrEmpty
+        }
+        # Win7 红线：不允许 Get-CimInstance / Get-Volume / Get-PhysicalDisk 等 Win8+ API
+        $src = Get-Content (Join-Path $PWD.Path 'lib\Optimize.Core.ps1') -Raw -Encoding UTF8
+        $i = $src.IndexOf('function New-SystemRestorePoint')
+        $i | Should -BeGreaterThan 0
+        $seg = $src.Substring($i, [Math]::Min(3000, $src.Length - $i))
+        $seg | Should -Not -Match 'Get-CimInstance'
+        $seg | Should -Not -Match 'Get-Volume'
+        $seg | Should -Not -Match 'Get-PhysicalDisk'
+    }
+}

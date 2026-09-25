@@ -890,7 +890,9 @@ async function renderHealth(){
       </tr>`).join('')}
       </tbody></table></div>
       <p class="muted" style="margin-top:6px">共 ${actionable} 项可一键修复（每步执行前自动备份；High 级高危项不会自动执行）。</p>
-      <div class="row" style="margin-top:8px">${btn('一键修复（中低危）','green',()=>runRemediate('Medium',false), actionable===0)}${btn('包含高危项','yellow',()=>runRemediate('High',true))}</div>`;
+      <div class="row" style="margin-top:8px">
+        <label><input type="checkbox" id="cbHealthRp"> 执行先创建系统还原点</label>
+        ${btn('一键修复（中低危）','green',()=>runRemediate('Medium',false), actionable===0)}${btn('包含高危项','yellow',()=>runRemediate('High',true))}</div>`;
   }
   const c = d.comparison;
   h += `<h3 style="margin:16px 0 8px">与上次体检对比</h3>`;
@@ -931,8 +933,13 @@ async function runRemediate(maxSeverity, force){
     : '即将执行中低危问题的自动修复，每步执行前会自动备份。确认继续？';
   if(!confirm(msg)) return;
   log('开始自动修复（'+(dangerous?'含高危':'中低危')+'）');
-  const d = await api('/api/health/remediate',{method:'POST',body:{max_severity:maxSeverity, force:!!force}});
+  const rp = !!($('#cbHealthRp') && $('#cbHealthRp').checked);
+  const d = await api('/api/health/remediate',{method:'POST',body:{max_severity:maxSeverity, force:!!force, create_restore_point:rp}});
   if(!d.ok){ log('修复失败：'+d.error,'err'); return; }
+  if(d.restorePoint){
+    if(d.restorePoint.ok){ log('[还原点] 已创建：'+d.restorePoint.name+' ('+d.restorePoint.method+')','ok'); }
+    else { log('[还原点] 创建失败，继续修复：'+d.restorePoint.error,'err'); }
+  }
   (d.results||[]).forEach(s=>{
     log((s.ok?'[成功] ':'[失败] ')+s.id+'（'+s.domain+'）'+s.summary+(s.backup?(' 备份:'+s.backup):''));
     if(s.error) log('  错误：'+s.error,'err');
@@ -948,6 +955,7 @@ async function renderProfiles(){
       <div class="row">
         ${btn('刷新','ghost',renderProfiles)}
         <label><input type="checkbox" id="cbProfForce"> 包含高风险步骤（禁用全部启动项 / CompactOS）</label>
+        <label><input type="checkbox" id="cbProfRp"> 执行先创建系统还原点</label>
       </div>
       <div id="proflist" class="muted" style="margin-top:8px">加载中…</div>
     </div>
@@ -1025,6 +1033,7 @@ async function showProfilePlan(name){
 async function runProfile(dryRun){
   if(!profSel){ log('请先点击某个组合包的「查看计划」','err'); return; }
   const force = !!($('#cbProfForce') && $('#cbProfForce').checked);
+  const rp = !!($('#cbProfRp') && $('#cbProfRp').checked);
   if(!dryRun){
     const msg = '即将执行「'+profSel+'」组合包，每个域执行前会自动备份。\n'
       + (force ? '已勾选高风险步骤，会一并执行禁用全部启动项 / CompactOS 等操作。\n' : '高风险步骤会保持跳过。\n')
@@ -1032,7 +1041,7 @@ async function runProfile(dryRun){
     if(!confirm(msg)) return;
   }
   log((dryRun?'预演':'执行')+'组合包：'+profSel+(force?'（含高风险）':''));
-  const d = await api('/api/profile/apply',{method:'POST',body:{name:profSel,dry_run:dryRun,force:force}});
+  const d = await api('/api/profile/apply',{method:'POST',body:{name:profSel,dry_run:dryRun,force:force,create_restore_point:rp}});
   const card = $('#profresCard'), box = $('#profres');
   card.style.display = '';
   if(!d.ok){ box.innerHTML = badge('失败','err')+' '+esc(d.error); log('执行失败：'+d.error,'err'); return; }

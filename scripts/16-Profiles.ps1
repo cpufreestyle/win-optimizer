@@ -74,6 +74,13 @@ function Show-ProfileResult {
     $okCount = @($Result.results | Where-Object { $_.ok }).Count
     $failCount = @($Result.results | Where-Object { -not $_.ok }).Count
     Write-Host ("  合计: 成功 {0} 步，失败 {1} 步，跳过 {2} 步" -f $okCount, $failCount, @($Result.skipped).Count) -ForegroundColor $(if ($failCount -eq 0) { 'Green' } else { 'Yellow' })
+    if ($Result.restorePoint) {
+        if ($Result.restorePoint.ok) {
+            Write-Host "  [还原点] 已创建: $($Result.restorePoint.name) ($($Result.restorePoint.method))" -ForegroundColor Green
+        } else {
+            Write-Host "  [还原点] 创建失败，继续执行: $($Result.restorePoint.error)" -ForegroundColor Yellow
+        }
+    }
     if ($Result.dryRun) { Write-Host "  （预演模式，未修改任何设置）" -ForegroundColor DarkGray }
 }
 
@@ -157,7 +164,20 @@ if ($needForce) {
     }
 }
 
-$rbArgs = @{ Name = $chosen.name; BackupDir = $backupDir; Force = $true }
+# 优化前还原点（P1-3）：默认取 config 的 safety.create_restore_point，交互环境允许覆盖。
+$rpOn = Get-RestorePointDefault
+if ([Environment]::UserInteractive) {
+    $rpDef = if ($rpOn) { 'Y' } else { 'N' }
+    $rpAns = (Read-Host "  执行前先创建系统还原点？[Y/N]（配置默认 $rpDef）").Trim()
+    if ($rpAns -eq 'Y' -or $rpAns -eq 'y') { $rpOn = $true }
+    elseif ($rpAns -eq 'N' -or $rpAns -eq 'n') { $rpOn = $false }
+}
+if ($rpOn -and -not (Test-IsAdmin)) {
+    Write-Host "  [提示] 创建还原点需要管理员权限，将跳过。" -ForegroundColor Yellow
+} elseif ($rpOn -and -not (Test-SystemRestoreEnabled)) {
+    Write-Host "  [提示] 系统还原已关闭，将跳过。" -ForegroundColor Yellow
+}
+$rbArgs = @{ Name = $chosen.name; BackupDir = $backupDir; Force = $true; CreateRestorePoint = $rpOn }
 $r = Invoke-Profile @rbArgs
 Show-ProfileResult -Result $r
 

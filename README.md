@@ -312,6 +312,15 @@ Compact.exe /CompactOS:never
 
 ## 📝 更新日志
 
+### v3.6.0 (2026-09-26)
+- **优化前自动创建系统还原点（P1-3）**
+  - `config/optimization.json` 新墟 `safety.create_restore_point`（**默认关闭**，与 `disk.compact_os_default` 同一套默认值模式）。
+  - 新增 `New-SystemRestorePoint`：先 `Checkpoint-Computer`（Win8+），失败自动退 WMI `SystemRestore`（Win7 可用）。
+  - 非管理员、System Restore 被关闭、或 24 小时内已建过还原点时，**只提示不阻塞**，优化照常执行。
+  - 三端入口：CLI `-RestorePoint` / GUI “执行前先建系统还原点”复选框 / WebUI 同名复选框。
+  - 只在真要改动系统的第一步前创建；预演（WhatIf）与全部跳过时不创建。
+- 测试：Pester 171 / 171 通过（新墟 9 个还原点相关用例）
+
 ### v3.5.0 (2026-09-25)
 - **?????????P1-2?**
   - `lib/Optimize.Core.ps1` 新增 `Export-HealthReport -From -To -Format Html|Markdown [-BackupDir] [-OutDir] [-FileName]`；
