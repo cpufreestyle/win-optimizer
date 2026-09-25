@@ -312,6 +312,16 @@ Compact.exe /CompactOS:never
 
 ## 📝 更新日志
 
+### v3.4.0 (2026-09-25)
+- **定时体检 + 趋势报告（P1-1）**
+  - `scripts/15-HealthCheck.ps1 -InstallSchedule [-Time 09:00]` 注册每日自动体检计划任务（非管理员自动降级为登录时触发），`-UninstallSchedule` 卸载
+  - `Get-HealthTrend` 读取 `backups/health/` 历史报告，输出分数 / 内存可用% / 可清理 MB / 启动项数趋势序列
+  - WebUI 体检页新墟「体检趋势」卡片（内联 SVG 折线，无外链依赖）、CLI `-Trend` 字符 sparkline、GUI 迷你趋势行
+  - 体检后自动附带近期分数趋势；计划任务自动运行时跳过交互提问
+- 修复：`Invoke-Profile -WhatIf` 预演现在真零副作用（不再落盘备份与 `startup_items` 目录）
+- 修复：GitHub Actions 上 4 个环境相关测试失败（7 代 runner 无活动网卡 / 短路径 TEMP）
+- 测试：Pester 156 / 156 通过（本地 + GitHub Actions）
+
 ### v3.3.0 (2026-09-18)
 - **CompactOS 改为「显式开关、默认关闭」**
   - 此前 CLI 磁盘优化无条件压缩系统文件，而 GUI / WebUI 默认关闭，三端不一致
