@@ -64,6 +64,18 @@
       },
       "additionalProperties": false
     },
+    "smart": {
+      "type": "object",
+      "description": "智能建议的准确性护栏：trusted_publishers 是受保护厂商的签名特征列表（子串匹配，大小写不敏感）。命中即不推荐禁用对应启动项——名字黑名单管不住改名 / 换目录的系统组件，而它们几乎都带有效数字签名。留空或缺省时 lib 回退内置默认。",
+      "properties": {
+        "trusted_publishers": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
     "profiles": {
       "type": "object",
       "description": "优化组合包（Profiles）：name -> {title, desc, services, startup, visual, power, dns, telemetry, disk, compact_os}。config 驱动，社区可直接贡献；缺失时 lib 回退内置默认。",

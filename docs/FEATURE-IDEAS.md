@@ -295,6 +295,32 @@ CLI `03-DisableServices.ps1` / GUI 服务页顺手把备份+禁用统一下沉 l
 从消息里用正则提取毫秒并做 0/超1小时异常值过滤；bench 新增
 `bootSeconds / bootAt / bootSource / bootError`，`Get-HealthTrend` 同步带出（旧报告按 null 兼容）。
 拿不到事件的机器按「无数据」处理，绝不影响体检主流程——这是尽力而为的增强指标。
+## P4（准确性 / 留存，v3.10）
+
+### P4-1 启动项建议的「签名厂商否决」—— 已实现（2026-09-26）
+
+**痛点**：智能建议的名字黑名单（`Get-StartupRiskScore`）是按文件名 / 路径关键词匹配的，
+管不住改名、换目录、伪装名的系统组件与驱动——一旦漏掉，用户禁掉 ` SecurityHealthSystray `
+改名后的项，轻则功能失效，重则开机异常。「一键应用」（P3-1）把误关的代价从「读一遍」变成了「点一下」，
+准确性护栏必须同步加厚。
+
+**方案**：lib 新增 `Get-FilePublisher`（Get-AuthenticodeSignature 取签名证书 CN，PS2 可用，
+任何失败返回空串）+ `Test-TrustedPublisher` / `Get-TrustedPublisherPatterns`
+（受保护厂商特征走 `config/optimization.json` 的 `smart.trusted_publishers`，子串匹配，缺失回退内置默认）。
+`Get-SmartRecommendations` 在启动项打分前加一道否决：目标文件存在且签名命中受保护厂商 →
+不进推荐，并记入返回值的 `vetoed`（name/command/path/publisher/reason）。
+`Format-SmartRecommendations` 统一渲染「已保护」清单，CLI / GUI 零改动即可展示；
+WebUI `-Action tips` 带出 `vetoed`，前端在建议表下方列出被保护的项与原因。
+
+**边界**：
+- 「未知」不等于「信任」：未签名 / 取不到签名的项不否决，仍按既有打分规则参与推荐（虚警率不降）。
+- 否决只作用于「智能建议」链路（含 P3-1 的一键应用）；菜单 [4] 手动禁用启动项不受影响，
+  高级用户仍可自行决定。
+- 取签名是本地只读操作，无网络；对每个候选启动项最多一次调用，失败静默降级。
+
+**三端落点**：CLI / GUI 经 `Format-SmartRecommendations` 自动展示；WebUI `-Action tips` 新增
+`vetoed` 字段 + `index.html` 建议区展示，`/api/health/scan` 的 `tips` 内嵌对象同步生效。
+
 ## 建议实施顺序
 
 1. P0-1（半天，先消灭现存漂移，可作为独立 PR）

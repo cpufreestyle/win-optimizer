@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -921,7 +921,7 @@ async function renderHealth(){
       <thead><tr><th>#</th><th>类型</th><th>对象</th><th>为什么先动它</th><th>怎么做</th></tr></thead><tbody>
       ${tStart.map(x=>`<tr>
         <td>${x.rank}</td><td>${badge('启动项','info')}</td>
-        <td>${esc(x.name)}<div class="muted">${esc(x.command)}（${esc(x.scope)}）</div></td>
+        <td>${esc(x.name)}<div class="muted">${esc(x.command)}（${esc(x.scope)}）</div>${x.publisher?`<div class="muted">签名：${esc(x.publisher)}</div>`:''}</td>
         <td>${esc(x.reason)}</td><td class="muted">${esc(x.hint)}</td>
       </tr>`).join('')}
       ${tClean.map(x=>`<tr>
@@ -930,6 +930,7 @@ async function renderHealth(){
         <td>${esc(x.reason)}</td><td class="muted">${esc(x.hint)}</td>
       </tr>`).join('')}
       </tbody></table></div>
+      ${(tips.vetoed&&tips.vetoed.length)?`<p class="muted" style="margin-top:6px">已保护 ${tips.vetoed.length} 个启动项：${tips.vetoed.map(x=>esc(x.name)).join('、')}——带系统/硬件厂商数字签名，不推荐禁用（避免误伤驱动与系统组件）。</p>`:''}
       <p class="muted" style="margin-top:6px">仅列最值得动的几项；启动项禁用与文件清理前都会自动备份。</p>
       <div class="row" style="margin-top:10px">
         <label><input type="checkbox" id="cbTipsRp"> 执行前创建系统还原点</label>
