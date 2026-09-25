@@ -3277,10 +3277,10 @@ function Install-HealthSchedule {
         [string]$HealthScript
     )
     if ([string]::IsNullOrWhiteSpace($HealthScript) -or -not (Test-Path -LiteralPath $HealthScript)) {
-        return [PSCustomObject]@{ ok = $false; error = (“未找到体检脚本: {0}” -f $HealthScript); task = $TaskName; trigger = $null; warning = $null }
+        return [PSCustomObject]@{ ok = $false; error = ("未找到体检脚本: {0}" -f $HealthScript); task = $TaskName; trigger = $null; warning = $null }
     }
     if ($Time -notmatch '^([01]?[0-9]|2[0-3]):[0-5][0-9]$') {
-        return [PSCustomObject]@{ ok = $false; error = (“时间格式无效: {0}（应为 HH:mm，例如 09:00）” -f $Time); task = $TaskName; trigger = $null; warning = $null }
+        return [PSCustomObject]@{ ok = $false; error = ("时间格式无效: {0}（应为 HH:mm，例如 09:00）" -f $Time); task = $TaskName; trigger = $null; warning = $null }
     }
     $isAdmin = Test-IsAdmin
     $schtasksArgs = @('/Create', '/F', '/TN', $TaskName)
@@ -3290,15 +3290,15 @@ function Install-HealthSchedule {
     try {
         $out = & schtasks.exe @schtasksArgs 2>&1
         if ($LASTEXITCODE -ne 0) {
-            return [PSCustomObject]{
-                ok = $false; error = (“schtasks 退出码 {0}: {1}” -f $LASTEXITCODE, (($out | Out-String).Trim()))
+            return [PSCustomObject]@{
+                ok = $false; error = ("schtasks 退出码 {0}: {1}" -f $LASTEXITCODE, (($out | Out-String).Trim()))
                 task = $TaskName; trigger = $null; warning = $null
             }
         }
     } catch {
         return [PSCustomObject]@{ ok = $false; error = $_.Exception.Message; task = $TaskName; trigger = $null; warning = $null }
     }
-    $trigger = if ($isAdmin) { “每日 $Time” } else { '登录时' }
+    $trigger = if ($isAdmin) { "每日 $Time" } else { '登录时' }
     $warning = if ($isAdmin) { $null } else { '当前非管理员，已降级为「登录时触发」（每日定时需管理员权限）' }
     return [PSCustomObject]@{ ok = $true; error = $null; warning = $warning; task = $TaskName; trigger = $trigger }
 }

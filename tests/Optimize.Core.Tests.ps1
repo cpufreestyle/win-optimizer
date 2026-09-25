@@ -2248,3 +2248,67 @@ Describe 'Optimize.Core restore point before optimize (P1-3, shared by CLI/GUI/W
         $seg | Should -Not -Match 'Get-PhysicalDisk'
     }
 }
+
+# ============================================================
+#  源码卫生：字符串定限符与返回对象类型（防命令行中文转码回归）
+#  背景：命令行中文经 GBK 往返时，ASCII 双引号有概率被写成中文弯引号，
+#  PowerShell 并不把弯引号当字符串定界符——语法检查照样通过，直到运行
+#  那一行才把整段当命令名报错（P1 期间真实踩过两次：体检趋势行、
+#  Install-HealthSchedule 的 schtasks 失败分支）。
+#  另一类 quieter 的坑是多行 [PSCustomObject]{ }：缺少 @ 会被解析成
+#  「脚本块转型」，返回的是 ScriptBlock 而不是对象，属性全读不到。
+# ============================================================
+Describe 'PowerShell source hygiene - string delimiters and returned object types' {
+    BeforeAll {
+        $script:psFiles = @(
+            Get-ChildItem -Path $PWD.Path -Filter *.ps1 -File
+            Get-ChildItem -Path (Join-Path $PWD.Path 'lib')     -Filter *.ps1 -File -Recurse
+            Get-ChildItem -Path (Join-Path $PWD.Path 'scripts') -Filter *.ps1 -File -Recurse
+            Get-ChildItem -Path (Join-Path $PWD.Path 'gui')     -Filter *.ps1 -File -Recurse
+            Get-ChildItem -Path (Join-Path $PWD.Path 'webui')   -Filter *.ps1 -File -Recurse
+        ) | Where-Object { $_.FullName -notlike '*_scratch*' -and $_.FullName -notlike '*tests*' } | ForEach-Object { $_.FullName }
+        # lib 供下方 Install-HealthSchedule 用例直接调用
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+
+    It 'collects the PowerShell sources to check' {
+        @($script:psFiles).Count | Should -BeGreaterThan 10
+    }
+
+    It 'every PowerShell source parses without syntax errors' {
+        foreach ($f in @($script:psFiles)) {
+            $errs = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$null, [ref]$errs)
+            ("{0} -> {1} parse error(s)" -f (Split-Path -Leaf $f), @($errs).Count) | Should -Match ' 0 parse error'
+        }
+    }
+
+    It 'no curly quotes are used as string delimiters' {
+        # 赋值 / 参数 / 括号之后紧跟弯引号，说明弯引号被当成了定界符
+        foreach ($f in @($script:psFiles)) {
+            $text = Get-Content -LiteralPath $f -Raw -Encoding UTF8
+            foreach ($line in ($text -split "`r?`n")) {
+                if ($line -match '(=|\()\s*[\u201c\u2018]' -or $line -match '[\u201d\u2019]\s*(-f|\)|;|,|\}|\]|\|)') {
+                    ("{0}: {1}" -f (Split-Path -Leaf $f), $line.Trim()) | Should -Match '___never_matches___'
+                }
+            }
+        }
+    }
+
+    It 'no multi-line [PSCustomObject]{{ cast (it would return a ScriptBlock)' {
+        foreach ($f in @($script:psFiles)) {
+            $text = Get-Content -LiteralPath $f -Raw -Encoding UTF8
+            $text | Should -Not -Match '\[PSCustomObject\]\{'
+        }
+    }
+
+    It 'Install-HealthSchedule always returns a shaped object, never a ScriptBlock' {
+        $badTime = Install-HealthSchedule -Time 'abc' -HealthScript (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+        $badTime | Should -BeOfType [System.Management.Automation.PSCustomObject]
+        @($badTime.PSObject.Properties.Name) | Should -Contain 'ok'
+        @($badTime.PSObject.Properties.Name) | Should -Contain 'error'
+        @($badTime.PSObject.Properties.Name) | Should -Contain 'task'
+        $badTime.ok | Should -BeFalse
+        $badTime.error | Should -Match 'HH:mm'
+    }
+}
