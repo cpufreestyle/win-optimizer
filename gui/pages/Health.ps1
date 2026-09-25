@@ -232,6 +232,39 @@
     })
     $page.Controls.Add($script:BtnHealthFix)
 
+    # 导出前后对比报告（自包含 HTML / Markdown，默认输出到桌面）
+    $script:BtnHealthExport = New-Button "导出对比报告" 350 716 150 40 $Theme.Success 11
+    $script:BtnHealthExport.Add_Click({
+        try {
+            $pick = [System.Windows.Forms.MessageBox]::Show(
+                "是否导出前后对比报告？`n`n[是] HTML（单文件，可直接发帖）`n[否] Markdown（纯文本，贴吧友好）`n[取消] 不导出`n`n文件默认输出到桌面。",
+                "导出对比报告",
+                [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
+                [System.Windows.Forms.MessageBoxIcon]::Question)
+            if ($pick -eq [System.Windows.Forms.DialogResult]::Cancel) { return }
+            $fmt = if ($pick -eq [System.Windows.Forms.DialogResult]::No) { 'Markdown' } else { 'Html' }
+            $exp = Export-HealthReport -Format $fmt -BackupDir $script:BackupDir
+            if ($exp.ok) {
+                Write-Log "对比报告已导出: $($exp.file)" "SUCCESS"
+                [System.Windows.Forms.MessageBox]::Show(
+                    "对比报告已导出：`n$($exp.file)`n`n可直接作为附件发帖求助。",
+                    "导出成功",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Information)
+            } else {
+                Write-Log "对比报告导出失败: $($exp.error)" "ERROR"
+                [System.Windows.Forms.MessageBox]::Show(
+                    "导出失败：$($exp.error)`n`n需要至少两次体棃历史记录才能对比。",
+                    "导出失败",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning)
+            }
+        } catch {
+            Write-Log "导出报告异常: $($_.Exception.Message)" "ERROR"
+        }
+    })
+    $page.Controls.Add($script:BtnHealthExport)
+
     # 对比结果提示
     $script:LblHealthCompare = New-Label "点击「开始体检」后，这里会显示与上一次体检的对比。" 340 726 440 24 $Fonts.Small $Theme.TextDim
     $script:LblHealthCompare.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right

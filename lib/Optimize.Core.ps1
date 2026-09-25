@@ -3301,3 +3301,206 @@ function Remove-HealthSchedule {
         return [PSCustomObject]@{ ok = $false; removed = $false; error = $_.Exception.Message; task = $TaskName }
     }
 }
+
+# ============================================================
+#  前后对比报告导出（P1-2）
+# ============================================================
+
+# 将前后对比结果导出为自包含单文件（HTML / Markdown）。
+# 用途：发帖求助、优化前后效果证明。HTML 内联全部 CSS，零外链依赖。
+# 参数 -From/-To 支持：报告对象 / health JSON 文件路径；省略时自动取最新一对。
+function Export-HealthReport {
+    param(
+        $From,
+        $To,
+        [ValidateSet('Html', 'Markdown')][string]$Format = 'Html',
+        [string]$BackupDir,
+        [string]$OutDir,
+        [string]$FileName
+    )
+    $resolve = {
+        param($Item)
+        if ($null -eq $Item) { return $null }
+        if ($Item -is [string]) {
+            if (-not (Test-Path -LiteralPath $Item)) { return $null }
+            try { return (Get-Content -LiteralPath $Item -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return $null }
+        }
+        return $Item
+    }
+    $before = & $resolve $From
+    $after  = & $resolve $To
+    if ((-not $before -or -not $after) -and $BackupDir) {
+        $hist = @(Get-HealthHistory -BackupDir $BackupDir -Count 2)
+        if (-not $after  -and $hist.Count -ge 1) { $after  = & $resolve $hist[0].FullName }
+        if (-not $before -and $hist.Count -ge 2) { $before = & $resolve $hist[1].FullName }
+    }
+    if (-not $before -or -not $after) {
+        return [PSCustomObject]@{ ok = $false; error = '需要两份体检报告（From/To）才能导出对比'; file = $null; format = $Format }
+    }
+    $cmp = Compare-HealthReports -Before $before -After $after
+    if (-not $cmp) {
+        return [PSCustomObject]@{ ok = $false; error = '对比失败：报告缺失 score/metrics 字段'; file = $null; format = $Format }
+    }
+
+    $dir = $OutDir
+    if ([string]::IsNullOrWhiteSpace($dir)) {
+        $dir = [Environment]::GetFolderPath('Desktop')
+        if ([string]::IsNullOrWhiteSpace($dir) -or -not (Test-Path $dir)) { $dir = $env:USERPROFILE }
+    }
+    if (-not (Test-Path $dir)) {
+        try { New-Item -ItemType Directory -Path $dir -Force | Out-Null } catch {
+            return [PSCustomObject]@{ ok = $false; error = "无法创建输出目录: $($_.Exception.Message)"; file = $null; format = $Format }
+        }
+    }
+    $name = $FileName
+    if ([string]::IsNullOrWhiteSpace($name)) {
+        $name = ('health-compare_{0:yyyyMMdd_HHmmss}.{1}' -f (Get-Date), $(if ($Format -eq 'Html') { 'html' } else { 'md' }))
+    }
+    $outFile = Join-Path $dir $name
+    $body = if ($Format -eq 'Html') { ConvertTo-HealthCompareHtml -Comparison $cmp } else { ConvertTo-HealthCompareMarkdown -Comparison $cmp }
+    try {
+        [System.IO.File]::WriteAllText($outFile, $body, (New-Object System.Text.UTF8Encoding($false)))
+    } catch {
+        return [PSCustomObject]@{ ok = $false; error = "写入失败: $($_.Exception.Message)"; file = $null; format = $Format }
+    }
+    return [PSCustomObject]@{ ok = $true; error = $null; file = $outFile; format = $Format; comparison = $cmp }
+}
+
+# --- 内部：对比结果 -> Markdown ---
+function ConvertTo-HealthCompareMarkdown {
+    param($Comparison)
+    $c = $Comparison
+    $sign = if ($c.scoreDelta -gt 0) { "+$($c.scoreDelta)" } else { "$($c.scoreDelta)" }
+    $sb = New-Object System.Text.StringBuilder
+    $null = $sb.AppendLine("# 系统体检前后对比报告")
+    $null = $sb.AppendLine("")
+    $null = $sb.AppendLine("- 优化前：**$($c.beforeScore) 分**（$($c.beforeTime)）")
+    $null = $sb.AppendLine("- 优化后：**$($c.afterScore) 分**（$($c.afterTime)）")
+    $null = $sb.AppendLine("- 分数变化：**$sign**")
+    $null = $sb.AppendLine("")
+    $null = $sb.AppendLine("## 指标对比")
+    $null = $sb.AppendLine("")
+    if (@($c.metricDeltas).Count -eq 0) {
+        $null = $sb.AppendLine("无可对比的数值指标变化。")
+    } else {
+        $null = $sb.AppendLine("| 指标 | 优化前 | 优化后 | 变化 |")
+        $null = $sb.AppendLine("|------|--------|--------|------|")
+        foreach ($d in @($c.metricDeltas)) {
+            $ds = if ($d.delta -gt 0) { "+$($d.delta)" } else { "$($d.delta)" }
+            $null = $sb.AppendLine("| $($d.metric) | $($d.before) | $($d.after) | $ds |")
+        }
+    }
+    $null = $sb.AppendLine("")
+    $null = $sb.AppendLine("## 已解决的问题（$(@($c.resolved).Count) 项）")
+    $null = $sb.AppendLine("")
+    if (@($c.resolved).Count -eq 0) { $null = $sb.AppendLine("无") }
+    foreach ($i in @($c.resolved)) { $null = $sb.AppendLine("- [$($i.severity)] $($i.title)") }
+    $null = $sb.AppendLine("")
+    $null = $sb.AppendLine("## 新墟问题（$(@($c.new).Count) 项）")
+    $null = $sb.AppendLine("")
+    if (@($c.new).Count -eq 0) { $null = $sb.AppendLine("无") }
+    foreach ($i in @($c.new)) { $null = $sb.AppendLine("- [$($i.severity)] $($i.title)") }
+    $null = $sb.AppendLine("")
+    $null = $sb.AppendLine("---")
+    $null = $sb.AppendLine("由 PC-Optimizer-7thGen 体检对比生成（只读报告，不含任何个人隐私数据）。")
+    return $sb.ToString()
+}
+
+# --- 内部：对比结果 -> 自包含 HTML（全内联 CSS）---
+function ConvertTo-HealthCompareHtml {
+    param($Comparison)
+    $c  = $Comparison
+    $e  = { param([string]$s) [System.Net.WebUtility]::HtmlEncode([string]$s) }
+    $sign = if ($c.scoreDelta -gt 0) { "+$($c.scoreDelta)" } else { "$($c.scoreDelta)" }
+    $dcls = if ($c.scoreDelta -gt 0) { 'up' } elseif ($c.scoreDelta -lt 0) { 'down' } else { 'flat' }
+    $rows = New-Object System.Text.StringBuilder
+    foreach ($d in @($c.metricDeltas)) {
+        $ds = if ($d.delta -gt 0) { "+$($d.delta)" } else { "$($d.delta)" }
+        $null = $rows.Append($(
+            "<tr><td>$(& $e $d.metric)</td><td>$(& $e "$($d.before)")</td><td>$(& $e "$($d.after)")</td><td class='num'>$ds</td></tr>"))
+    }
+    if ($rows.Length -eq 0) {
+        $null = $rows.Append("<tr><td colspan='4' class='muted'>无可对比的数值指标变化</td></tr>")
+    }
+    $resolvedHtml = New-Object System.Text.StringBuilder
+    foreach ($i in @($c.resolved)) {
+        $null = $resolvedHtml.Append("<li><span class='tag ok'>$(& $e $i.severity)</span> $(& $e $i.title)<div class='muted'>$(& $e $i.detail)</div></li>")
+    }
+    if ($resolvedHtml.Length -eq 0) { $null = $resolvedHtml.Append("<li class='muted'>无</li>") }
+    $newHtml = New-Object System.Text.StringBuilder
+    foreach ($i in @($c.new)) {
+        $null = $newHtml.Append("<li><span class='tag bad'>$(& $e $i.severity)</span> $(& $e $i.title)<div class='muted'>$(& $e $i.detail)</div></li>")
+    }
+    if ($newHtml.Length -eq 0) { $null = $newHtml.Append("<li class='muted'>无</li>") }
+    $gen = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $html = @'
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>系统体检前后对比报告</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; background: #f3f5f9; color: #1f2733; }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  .card { background: #fff; border: 1px solid #e4e8ee; border-radius: 12px; padding: 20px 24px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(16,24,40,.06); }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 12px; color: #344054; }
+  .muted { color: #667085; font-size: 12px; }
+  .scores { display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap; }
+  .score { font-size: 40px; font-weight: 700; }
+  .delta { font-size: 22px; font-weight: 700; }
+  .up { color: #12925a; } .down { color: #d92d20; } .flat { color: #667085; }
+  .num { font-variant-numeric: tabular-nums; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eef1f5; }
+  th { color: #667085; font-weight: 600; }
+  ul { margin: 0; padding-left: 18px; }
+  li { margin-bottom: 8px; }
+  .tag { display: inline-block; min-width: 52px; text-align: center; padding: 1px 8px; border-radius: 999px; font-size: 12px; margin-right: 8px; }
+  .tag.ok  { background: #e7f6ee; color: #12925a; }
+  .tag.bad { background: #fdecea; color: #d92d20; }
+  footer { text-align: center; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #101418; color: #e6e9ee; }
+    .card { background: #171c22; border-color: #2a3138; box-shadow: none; }
+    h2 { color: #aeb6c2; } th { color: #98a2b3; } th, td { border-color: #262c33; }
+  }
+</style>
+</head>
+<body><div class="wrap">
+  <div class="card">
+    <h1>系统体检前后对比报告</h1>
+    <div class="muted">生成于 __GEN__ · PC-Optimizer-7thGen</div>
+  </div>
+  <div class="card">
+    <h2>总分变化</h2>
+    <div class="scores">
+      <span class="score">__BEFORE__</span><span class="muted">优化前</span>
+      <span class="muted">→</span>
+      <span class="score">__AFTER__</span><span class="muted">优化后</span>
+      <span class="delta __DCLS__">__SIGN__</span>
+    </div>
+  </div>
+  <div class="card">
+    <h2>指标对比</h2>
+    <table><thead><tr><th>指标</th><th>优化前</th><th>优化后</th><th>变化</th></tr></thead>
+    <tbody>__ROWS__</tbody></table>
+  </div>
+  <div class="card">
+    <h2>已解决的问题</h2>
+    <ul>__RESOLVED__</ul>
+  </div>
+  <div class="card">
+    <h2>新墟问题</h2>
+    <ul>__NEW__</ul>
+  </div>
+  <footer class="muted">本报告由只读体检数据生成，不含任何个人隐私数据。</footer>
+</div></body>
+</html>
+'@
+    $html = $html.Replace('__GEN__', $gen).Replace('__BEFORE__', [string]$c.beforeScore).Replace('__AFTER__', [string]$c.afterScore).Replace('__DCLS__', $dcls).Replace('__SIGN__', $sign).Replace('__ROWS__', $rows.ToString()).Replace('__RESOLVED__', $resolvedHtml.ToString()).Replace('__NEW__', $newHtml.ToString())
+    return $html
+}

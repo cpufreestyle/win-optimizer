@@ -17,6 +17,7 @@
 ## 2. 当前分支与待合并 PR（最关键）
 
 > ✅ **2026-09-25**：PR #7 已合并入 `main`（merge commit `bfc7b54`），残留分支已清理，已打 tag `v3.3.0` 并发布 Release。
+> ✅ **2026-09-25**：P1-2（前后对比报告导出）已在分支 `feat/p1-2-report-export` 实现并验证（见 §3.7），待 PR。
 > 当前 `main` = v3.4.0 发布态；P1-1（定时体检 + 趋势报告）已合并（见 §3.6）。
 
 > 2026-09-18 更新：本轮已按 §8 的建议收口，详见文末 §9。
@@ -154,6 +155,22 @@ WMI「系统启动命令」行与它们重复，仅登记不动作。
 **一键全面优化（CLI `[9]`）不再压缩系统文件。** 测试侧新增 AST 断言：
 CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再次回归成无条件压缩。
 
+
+### 3.7 前后对比报告导出（P1-2，2026-09-25）
+
+`Compare-HealthReports` 之前只能在屏幕上看，发帖求助时要手动截图、手掉数据，证明不了「优化前后真的改善了」。
+
+| 端 | 落点 |
+|----|------|
+| lib | `Export-HealthReport -From -To -Format Html|Markdown [-BackupDir] [-OutDir] [-FileName]`；`-From/-To` 接报告对象或 health JSON 路径，省略时自动取历史最新两份；默认输出到桌面（失败回退 `%USERPROFILE%`）。渲染由 `ConvertTo-HealthCompareHtml` / `ConvertTo-HealthCompareMarkdown` 完成，HTML 全内联 CSS + 暗色模式、零外部请求，全文本 `HtmlEncode` 转义。返回 `@{ok;error;file;format;comparison}`。 |
+| CLI | `scripts/15-HealthCheck.ps1 -Export [-Format Html|Markdown] [-From 路径] [-To 路径]`；交互环境下对比区后询问“是否导出”。 |
+| GUI | `gui/pages/Health.ps1` “导出对比报告”按钮：Yes=HTML / No=Markdown / Cancel=取消，弹窗给出文件路径。 |
+| WebUI | `webui/ps/15_health.ps1` `-Action export [-Format html|md] [-From] [-To]`；`POST /api/health/export` + MCP `health_export`；健康页“导出对比报告”按钮 + 格式下拉。 |
+
+测试：`tests/Optimize.Core.Tests.ps1` 新增 6 个用例（HTML 自包含断言 / Markdown 表格 / JSON 路径传参 / 自动取最新两份 / 缺报告安全失败 / HTML 转义），全量 **162/162** 通过。
+已经过实测：CLI / WebUI 端到端导出成功，GUI 无头 harness 验证控件布局（14 控件）。
+
+
 ---
 
 ## 4. 三端文件地图（按域）
@@ -264,5 +281,6 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 2. ✅ 清理远端残留分支：`feat/optimizations`、`fix/cli-error-isolation-version`、`perf/folder-size-and-logging`、`release/v3.1.0` 与集成分支均已删除，远端只剩 `main`。
 3. ✅ 打 tag `v3.3.0`：Release workflow 成功，GitHub Release `v3.3.0` 已发布。
 4. 真机验收 GUI 体检页（§7）与新增的「体检趋势」显示（WebUI SVG 趋势卡片 / GUI 迷你图 / CLI `-Trend`）。
-5. 后续功能建议（按价值排序）：「前后对比报告导出」（P1-2）→「优化前自动创建系统还原点」（P1-3）→ P2 探索项。
+5. ✅ P1-2 已实现并验证（见 §3.7）；待走「集成分支 + PR + merge + tag v3.5.0」流程。
+6. 后续功能建议（按价值排序）：「前后对比报告导出」（P1-2）→「优化前自动创建系统还原点」（P1-3）→ P2 探索项。
    「一键优化组合包」（P0-3）、「优化回滚向导」（P0-4）、「定时体检 + 趋势报告」（P1-1）均已落地（见 §3.4、§3.5、§3.6）。

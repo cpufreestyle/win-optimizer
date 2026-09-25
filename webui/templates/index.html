@@ -904,9 +904,24 @@ async function renderHealth(){
     if((!c.resolved||!c.resolved.length)&&(!c.new||!c.new.length)) h += `<div class="muted" style="margin-top:6px">问题清单无变化。</div>`;
     h += `</div>`;
   }
-  h += `<div class="row" style="margin-top:12px">${btn('重新体检','green',renderHealth)}</div>`;
+  h += `<div class="row" style="margin-top:12px">${btn('重新体检','green',renderHealth)}
+        <select id="selExpFmt">
+          <option value="html">HTML（单文件，可直接发帖）</option>
+          <option value="md">Markdown（纯文本，贴吧友好）</option>
+        </select>
+        ${btn('导出对比报告','yellow',exportHealthCompare)}</div>`;
   $('#healthCard').innerHTML = h;
   bindBtns($('#healthCard'));
+}
+
+async function exportHealthCompare(){
+  const sel = $('#selExpFmt');
+  const fmt = sel ? sel.value : 'html';
+  log('开始导出' + (fmt === 'md' ? ' Markdown' : ' HTML') + '对比报告…');
+  const d = await api('/api/health/export', {method:'POST', body:{format: fmt}});
+  if(!d.ok){ log('导出失败：' + (d.error || '未知错误'), 'err'); return; }
+  log('对比报告已导出：' + d.file, 'ok');
+  log('文件位于桌面，可直接作为附件发帖求助。');
 }
 
 async function runRemediate(maxSeverity, force){

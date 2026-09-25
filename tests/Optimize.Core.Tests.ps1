@@ -1973,3 +1973,180 @@ Describe 'Optimize.Core health trend, sparkline and schedule (shared by CLI/GUI/
         Test-IsAdmin | Should -BeOfType [bool]
     }
 }
+
+Describe 'Optimize.Core health report export - self-contained Html/Markdown (P1-2)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+
+    It 'Export-HealthReport writes a self-contained HTML comparison file' {
+        $tmp = Join-Path $env:TEMP ('export_' + (New-Guid).ToString('N'))
+        try {
+            $before = [PSCustomObject]@{
+                timestamp = '2026-09-20 09:00:00'; host = 'h'; version = '3.4.0'
+                score = 61; grade = 'C'
+                metrics = [PSCustomObject]@{ freeRamPct = 42.5; cleanableMB = 1200; startupCount = 18 }
+                issues  = @(
+                    [PSCustomObject]@{ id = 'temp_bloat';     severity = 'High';   title = 'temp_bloat_title';     detail = 'd1' }
+                    [PSCustomObject]@{ id = 'startup_bloat';  severity = 'Medium'; title = 'startup_bloat_title';  detail = 'd2' }
+                )
+            }
+            $after = [PSCustomObject]@{
+                timestamp = '2026-09-25 09:00:00'; host = 'h'; version = '3.5.0'
+                score = 88; grade = 'B'
+                metrics = [PSCustomObject]@{ freeRamPct = 61.0; cleanableMB = 300; startupCount = 9 }
+                issues  = @(
+                    [PSCustomObject]@{ id = 'startup_bloat';  severity = 'Medium'; title = 'startup_bloat_title';  detail = 'd2' }
+                    [PSCustomObject]@{ id = 'pagefile_small'; severity = 'Low';    title = 'pagefile_small_title'; detail = 'd3' }
+                )
+            }
+
+            $r = Export-HealthReport -From $before -To $after -Format Html -OutDir $tmp -FileName 'cmp.html'
+            $r.ok            | Should -BeTrue
+            $r.error         | Should -BeNullOrEmpty
+            $r.format        | Should -Be 'Html'
+            $r.comparison.beforeScore | Should -Be 61
+            $r.comparison.afterScore  | Should -Be 88
+            $r.comparison.scoreDelta  | Should -Be 27
+            Test-Path -LiteralPath $r.file | Should -BeTrue
+
+            $html = Get-Content -LiteralPath $r.file -Raw -Encoding UTF8
+            # ??????????????
+            $html | Should -Match '<style>'
+            $html | Should -Not -Match 'https?://'
+            # ?????????
+            $html | Should -Match '>61<'
+            $html | Should -Match '>88<'
+            $html | Should -Match '\+27'
+            # ????? + ???/?? issue ??
+            $html | Should -Match 'freeRamPct'
+            $html | Should -Match 'temp_bloat_title'
+            $html | Should -Match 'pagefile_small_title'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Export-HealthReport writes a Markdown table-based report' {
+        $tmp = Join-Path $env:TEMP ('export_' + (New-Guid).ToString('N'))
+        try {
+            $before = [PSCustomObject]@{
+                timestamp = '2026-09-20 09:00:00'; score = 61
+                metrics = [PSCustomObject]@{ freeRamPct = 42.5 }
+                issues  = @([PSCustomObject]@{ id = 'temp_bloat'; severity = 'High'; title = 'temp_bloat_title'; detail = 'd1' })
+            }
+            $after = [PSCustomObject]@{
+                timestamp = '2026-09-25 09:00:00'; score = 88
+                metrics = [PSCustomObject]@{ freeRamPct = 61.0 }
+                issues  = @([PSCustomObject]@{ id = 'pagefile_small'; severity = 'Low'; title = 'pagefile_small_title'; detail = 'd3' })
+            }
+
+            $r = Export-HealthReport -From $before -To $after -Format Markdown -OutDir $tmp -FileName 'cmp.md'
+            $r.ok     | Should -BeTrue
+            $r.format | Should -Be 'Markdown'
+            Test-Path -LiteralPath $r.file | Should -BeTrue
+
+            $md = Get-Content -LiteralPath $r.file -Raw -Encoding UTF8
+            $md | Should -Match '\| freeRamPct \|'
+            $md | Should -Match '\| 42.5 \| 61 \| \+18.5 \|'
+            $md | Should -Match 'temp_bloat_title'
+            $md | Should -Match 'pagefile_small_title'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Export-HealthReport accepts health JSON file paths as From/To' {
+        $tmp = Join-Path $env:TEMP ('export_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path (Join-Path $tmp 'health') -Force | Out-Null
+            $mk = {
+                param($Name, $Score)
+                $o = [PSCustomObject]@{
+                    timestamp = '2026-09-2' + $Name + ' 09:00:00'; host = 'h'; version = '3.4.0'
+                    score = $Score; grade = 'x'
+                    metrics = [PSCustomObject]@{ freeRamPct = 42.5; cleanableMB = 1200; startupCount = 18 }
+                    issues  = @()
+                }
+                $o | ConvertTo-Json -Depth 8 | Out-File -FilePath (Join-Path $tmp "health\health_$Name.json") -Encoding UTF8
+            }
+            & $mk '0' 61
+            & $mk '5' 88
+
+            $r = Export-HealthReport -From (Join-Path $tmp 'health\health_0.json') -To (Join-Path $tmp 'health\health_5.json') -OutDir $tmp -FileName 'json.html'
+            $r.ok | Should -BeTrue
+            $r.comparison.scoreDelta | Should -Be 27
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Export-HealthReport falls back to the two newest history reports when From/To are omitted' {
+        $tmp = Join-Path $env:TEMP ('export_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path (Join-Path $tmp 'health') -Force | Out-Null
+            $mk = {
+                param($Name, $Score)
+                $when = [datetime]::ParseExact($Name, 'yyyyMMdd_HHmmss', $null)
+                $o = [PSCustomObject]@{
+                    timestamp = $when.ToString('yyyy-MM-dd HH:mm:ss'); host = 'h'; version = '3.4.0'
+                    score = $Score; grade = 'x'
+                    metrics = [PSCustomObject]@{ freeRamPct = 42.5; cleanableMB = 1200; startupCount = 18 }
+                    issues  = @()
+                }
+                $f = Join-Path $tmp "health\health_$Name.json"
+                $o | ConvertTo-Json -Depth 8 | Out-File -FilePath $f -Encoding UTF8
+                (Get-Item $f).LastWriteTime = $when
+            }
+            & $mk '20260920_090000' 61
+            & $mk '20260925_090000' 88
+
+            $r = Export-HealthReport -BackupDir $tmp -OutDir $tmp -FileName 'auto.html'
+            $r.ok | Should -BeTrue
+            $r.comparison.beforeScore | Should -Be 61
+            $r.comparison.afterScore  | Should -Be 88
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Export-HealthReport fails cleanly when reports are missing' {
+        $tmp = Join-Path $env:TEMP ('export_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+
+            $r1 = Export-HealthReport -OutDir $tmp -FileName 'x.html'
+            $r1.ok    | Should -BeFalse
+            $r1.file  | Should -BeNullOrEmpty
+            $r1.error | Should -Match 'From/To'
+
+            $r2 = Export-HealthReport -From "$tmp\no_such.json" -OutDir $tmp -FileName 'x.html'
+            $r2.ok | Should -BeFalse
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Export-HealthReport escapes markup in issue text' {
+        $tmp = Join-Path $env:TEMP ('export_' + (New-Guid).ToString('N'))
+        try {
+            $before = [PSCustomObject]@{
+                timestamp = '2026-09-20 09:00:00'; score = 61
+                metrics = [PSCustomObject]@{ freeRamPct = 42.5 }
+                issues  = @([PSCustomObject]@{ id = 'x'; severity = 'High'; title = '<script>alert(1)</script>'; detail = 'a & b' })
+            }
+            $after = [PSCustomObject]@{
+                timestamp = '2026-09-25 09:00:00'; score = 88
+                metrics = [PSCustomObject]@{ freeRamPct = 61.0 }
+                issues  = @()
+            }
+
+            $r = Export-HealthReport -From $before -To $after -Format Html -OutDir $tmp -FileName 'esc.html'
+            $html = Get-Content -LiteralPath $r.file -Raw -Encoding UTF8
+            $html | Should -Not -Match '<script>alert'
+            $html | Should -Match '&lt;script&gt;'
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}

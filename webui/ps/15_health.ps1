@@ -11,15 +11,21 @@
         -PowerPlanGuid 电源计划目标 GUID，默认高性能
         -WhatIf       只预览
         -Force        允许自动执行 High 级问题（需配合 -MaxSeverity High）
+    -Action export   : 将前后两次体检导出为自包含单文件（Html / Markdown）
+        -Format       导出格式 html / md（Markdown），默认 html
+        -From / -To  对比两端：体检报告 JSON 路径，省略时自动取历史最新两份
     逻辑复用共享库 lib/Optimize.Core.ps1，与 CLI / GUI 行为一致。
 #>
 param(
-    [ValidateSet("scan", "plan", "remediate", "trend")]$Action = "scan",
+    [ValidateSet("scan", "plan", "remediate", "trend", "export")]$Action = "scan",
     [string[]]$IssueCode = @(),
     [ValidateSet("High", "Medium", "Low")]$MaxSeverity = "Medium",
     [int]$DnsOption = 1,
     [string]$PowerPlanGuid = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c",
     [int]$Days = 30,
+    [ValidateSet("html", "md", "Html", "Markdown")][string]$Format = "html",
+    [string]$From = "",
+    [string]$To = "",
     [switch]$WhatIf,
     [switch]$Force
 )
@@ -83,6 +89,23 @@ try {
                                           -SkipCleanScan -WhatIf:$WhatIf -Force:$Force
         }
         Out-Json $r
+    }
+    elseif ($Action -eq "export") {
+        $fmt = if ($Format -eq "md") { "Markdown" } else { "Html" }
+        $expArgs = @{ Format = $fmt }
+        if ($From) { $expArgs['From'] = $From } else { $expArgs['BackupDir'] = $backupDir }
+        if ($To)   { $expArgs['To']   = $To }
+        $exp = Export-HealthReport @expArgs
+        if ($exp.ok) {
+            Out-Json ([PSCustomObject]@{
+                ok         = $true
+                format     = $exp.format
+                file       = $exp.file
+                comparison = $exp.comparison
+            })
+        } else {
+            Out-Json ([PSCustomObject]@{ ok = $false; error = $exp.error })
+        }
     }
     elseif ($Action -eq "trend") {
         Out-Json ([PSCustomObject]@{
