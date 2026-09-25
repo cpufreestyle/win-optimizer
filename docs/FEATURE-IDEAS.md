@@ -252,6 +252,49 @@ config 新增 `safety.create_restore_point`（默认 `false`，与 `disk.compact
 
 ---
 
+---
+
+## P3（v3.9 增量）—— 已实现（2026-09-26）
+
+> 主题：把「智能建议」补成闭环（实用性），顺手修两个准确性/安全缺口。
+> 延续总原则：逻辑一律先进 lib，三端只做渲染；只读先行、修改必备份；Win7 红线不破；Pester 契约兜底。
+
+### P3-1 智能建议一键应用（闭环）
+
+**痛点**：P2 的智能建议只能看不能点——用户知道「该关 QianwenUpdater」，还要自己去菜单 [4] 翻编号。
+
+**方案**：lib 新增 `Invoke-SmartRecommendations [-Report] [-Top 3] [-BackupDir] [-WhatIf] [-CreateRestorePoint]`：
+- 只应用启动项类建议；**清理类不自动执行**（删文件不可逆性强，保留菜单 [2] 手动确认）。
+- 执行前一次 `Backup-StartupItems` 覆盖全部选中项；备份失败即中止，不动系统。
+- `-CreateRestorePoint` 懒创建（真要动系统的第一步前才建，与 `Invoke-HealthRemediation` 一致）。
+- `-WhatIf` 零副作用（不备份、不建还原点、不改系统）。
+- 执行前按 Name+Value 重新匹配实时启动项，匹配不到就跳过——宁可不做，也不误删。
+- 返回 `@{ ok; whatIf; applied; failed; backup; restorePoint; error }`，`failed` 带每项原因
+  （如 WMI 来源的「需通过任务管理器手动禁用」）。
+
+**三端落点**：CLI `15-HealthCheck.ps1` 智能建议段后交互应用（先检查管理员/SR 开关）；
+GUI `gui/pages/Health.ps1`「应用智能建议」按钮（复用还原点复选框，完成后自动重新体检）；
+WebUI `-Action apply-tips` + `POST /api/health/apply-tips` + MCP `health_apply_tips` + 体检页按钮与还原点勾选。
+
+### P3-2 服务依赖护栏（准确性 / 安全）
+
+**痛点**：`Disable-Services` 只看服务自身状态；若某服务正被运行中服务依赖，禁用它会连带故障
+（表现为「另一个功能莫名其妙挂了」）。
+
+**方案**：lib 新增 `Get-ServiceDependents`（WMI `Win32_DependentService`，Win7 兼容，不用 CIM）；
+`Disable-Services` 新增 `-Force`：默认跳过「有运行中依赖者」的服务并在 details 写明
+`跳过: 正被 X, Y 依赖`，`-Force` 才强制执行。WMI 查询失败按空处理，不阻碍原有流程。
+CLI `03-DisableServices.ps1` / GUI 服务页顺手把备份+禁用统一下沉 lib（获得 manifest 备份与护栏）。
+
+### P3-3 真实开机耗时（准确性）
+
+**痛点**：bench 原来只能数启动项/服务数，是「负担代理指标」；「到底开机几秒」没有真实数据。
+
+**方案**：lib 新增 `Get-BootPerformanceSample`：解析 `Diagnostics-Performance` Event 100
+（Win8+ 走 `Microsoft-Windows-Diagnostics-Performance/Operational`，Win7 回退经典日志），
+从消息里用正则提取毫秒并做 0/超1小时异常值过滤；bench 新增
+`bootSeconds / bootAt / bootSource / bootError`，`Get-HealthTrend` 同步带出（旧报告按 null 兼容）。
+拿不到事件的机器按「无数据」处理，绝不影响体检主流程——这是尽力而为的增强指标。
 ## 建议实施顺序
 
 1. P0-1（半天，先消灭现存漂移，可作为独立 PR）
