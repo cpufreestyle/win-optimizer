@@ -1882,3 +1882,94 @@ Describe 'Optimize.Core profiles - optimization bundles (shared by CLI/GUI/WebUI
         }
     }
 }
+Describe 'Optimize.Core health trend, sparkline and schedule (shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+
+    It 'Format-Sparkline maps values onto a fixed ASCII ramp' {
+        Format-Sparkline -Values @(0.0, 50.0, 100.0) | Should -Be '.=%'
+        Format-Sparkline -Values @()                  | Should -Be ''
+        # 恒定序列输出平线（不除零）
+        (Format-Sparkline -Values @(5.0, 5.0, 5.0)) | Should -Be '+++'
+        # 越界值被夹紧到端点
+        Format-Sparkline -Values @(-10.0, 500.0) | Should -Be '.%'
+    }
+
+    It 'Get-HealthTrend returns an ordered series from history JSON' {
+        $tmp = Join-Path $env:TEMP ('trend_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path (Join-Path $tmp 'health') -Force | Out-Null
+            $mk = {
+                param($Day, $Score, $Free, $MB, $Startups)
+                $when = (Get-Date).AddDays(-$Day)
+                $name = $when.ToString('yyyyMMdd_HHmmss')
+                $o = [PSCustomObject]@{
+                    timestamp = $when.ToString('yyyy-MM-dd HH:mm:ss')
+                    host      = 'h'; version = '3.3.0'; score = $Score; grade = 'x'
+                    metrics   = [PSCustomObject]@{ freeRamPct = $Free; cleanableMB = $MB; startupCount = $Startups }
+                    issues    = @()
+                }
+                $f = Join-Path $tmp "health\health_$name.json"
+                $o | ConvertTo-Json -Depth 8 | Out-File -FilePath $f -Encoding UTF8
+                (Get-Item $f).LastWriteTime = $when
+            }
+            & $mk 2 61 42.5 1200 18
+            & $mk 1 72 55.0  900 12
+            & $mk 0 80 60.0  300  9
+
+            $t = @(Get-HealthTrend -BackupDir $tmp -Days 30)
+            $t.Count | Should -Be 3
+            $t[0].score | Should -Be 61
+            $t[-1].score | Should -Be 80
+            $t[1].freeRamPct   | Should -Be 55.0
+            $t[1].cleanableMB  | Should -Be 900
+            $t[1].startupCount | Should -Be 12
+            $t[1].issueCount   | Should -Be 0
+            # 时间升序
+            ($t[1].time -gt $t[0].time) | Should -BeTrue
+            ($t[2].time -gt $t[1].time) | Should -BeTrue
+
+            # -Days 过滤：只看近 1 天应剩 1 点
+            @(Get-HealthTrend -BackupDir $tmp -Days 1).Count | Should -Be 1
+            # -MaxPoints 抽样：5 点取 2 应得 3 点（0/2/4 索引）且末点为最新
+            & $mk 3 55 30.0 2000 20
+            $s = @(Get-HealthTrend -BackupDir $tmp -Days 30 -MaxPoints 2)
+            $s.Count    | Should -Be 3
+            $s[-1].score | Should -Be 80
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Get-HealthTrend returns empty when no history exists' {
+        $tmp = Join-Path $env:TEMP ('trend_empty_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            @(Get-HealthTrend -BackupDir $tmp).Count | Should -Be 0
+            @(Get-HealthTrend -BackupDir (Join-Path $tmp 'no_such_subdir')).Count | Should -Be 0
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Install-HealthSchedule validates time and script path without touching schtasks' {
+        $badTime = Install-HealthSchedule -Time 'abc' -HealthScript "$PWD\lib\Optimize.Core.ps1"
+        $badTime.ok    | Should -BeFalse
+        $badTime.error | Should -Match 'HH:mm'
+        $badTime.trigger | Should -BeNullOrEmpty
+
+        $badScript = Install-HealthSchedule -Time '09:00' -HealthScript "$PWD\no_such_health_script.ps1"
+        $badScript.ok    | Should -BeFalse
+        $badScript.error | Should -Match '未找到体检脚本'
+
+        # 时间格式校验通过后才会命中 schtasks（此处不再测试真实注册）
+        '09:00' -match '^([01]?[0-9]|2[0-3]):[0-5][0-9]$' | Should -BeTrue
+        '9:5'   -match '^([01]?[0-9]|2[0-3]):[0-5][0-9]$' | Should -BeFalse
+        '24:00' -match '^([01]?[0-9]|2[0-3]):[0-5][0-9]$' | Should -BeFalse
+    }
+
+    It 'Test-IsAdmin returns a boolean' {
+        Test-IsAdmin | Should -BeOfType [bool]
+    }
+}

@@ -13,6 +13,13 @@
     仅在输入 Y 确认后调用 lib 的 Invoke-HealthRemediation 执行修复，
     每步执行前自动备份；High 级高危项不在自动修复范围内。
 #>
+param(
+    [switch]$InstallSchedule,    # 注册每日自动体检计划任务后退出（不执行体检）
+    [switch]$UninstallSchedule,  # 删除计划任务后退出
+    [switch]$Trend,              # 只打印体检趋势（字符 sparkline），不执行体检
+    [string]$Time = '09:00',     # -InstallSchedule 的每日触发时间（HH:mm）
+    [int]$TrendDays = 30         # -Trend 回溯天数
+)
 
 # 复用共享核心库（体检引擎的统一实现）
 $coreLib = Join-Path $PSScriptRoot "..\lib\Optimize.Core.ps1"
@@ -23,6 +30,60 @@ if (-not (Get-Command Get-SystemHealthReport -ErrorAction SilentlyContinue)) {
 }
 
 $backupDir = Join-Path (Split-Path -Parent $PSScriptRoot) "backups"
+
+# --- 子命令：计划任务注册/删除、只看趋势（不进入体检流程）---
+function Show-HealthTrend {
+    param([int]$Days)
+    $trend = @(Get-HealthTrend -BackupDir $backupDir -Days $Days)
+    Write-Host ""
+    Write-Host "============================================" -ForegroundColor Cyan
+    Write-Host "  体检趋势（近 $Days 天）" -ForegroundColor Cyan
+    Write-Host "============================================" -ForegroundColor Cyan
+    if ($trend.Count -eq 0) {
+        Write-Host "  暂无历史体检报告。多跑几次体检后即可看到趋势。" -ForegroundColor Gray
+        return
+    }
+    $scores   = [double[]]@($trend | ForEach-Object { [double]$_.score })
+    $minScore = ($scores | Measure-Object -Minimum).Minimum
+    $maxScore = ($scores | Measure-Object -Maximum).Maximum
+    Write-Host ("  分数: {0}   （{1} ~ {2} 分，共 {3} 次）" -f (Format-Sparkline -Values $scores), $minScore, $maxScore, $trend.Count) -ForegroundColor Green
+    Write-Host ("  区间: {0:MM-dd} → {1:MM-dd}" -f $trend[0].time, $trend[-1].time) -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "  最近记录（日期时间 / 分数 / 内存可用% / 可清理MB / 启动项 / 问题数）:" -ForegroundColor Yellow
+    foreach ($p in @($trend | Select-Object -Last 10)) {
+        Write-Host ("    {0:MM-dd HH:mm}  {1,3}  {2,7}%  {3,9}  {4,5}  {5}" -f `
+            $p.time, $p.score, $p.freeRamPct, $p.cleanableMB, $p.startupCount, $p.issueCount)
+    }
+}
+
+if ($UninstallSchedule) {
+    $ru = Remove-HealthSchedule
+    if ($ru.ok -and $ru.removed) { Write-Host "`n  已删除计划任务: $($ru.task)" -ForegroundColor Green }
+    elseif ($ru.ok)              { Write-Host "`n  计划任务不存在，无需删除: $($ru.task)" -ForegroundColor Gray }
+    else                         { Write-Host "`n  删除失败: $($ru.error)" -ForegroundColor Red }
+    return
+}
+
+if ($InstallSchedule) {
+    Write-Host ""
+    Write-Host "============================================" -ForegroundColor Cyan
+    Write-Host "  注册每日自动体检计划任务" -ForegroundColor Cyan
+    Write-Host "============================================" -ForegroundColor Cyan
+    $ri = Install-HealthSchedule -Time $Time -HealthScript $PSCommandPath
+    if ($ri.ok) {
+        Write-Host "  已注册: $($ri.task)（触发: $($ri.trigger)）" -ForegroundColor Green
+        Write-Host "  任务内容: powershell -NoProfile -ExecutionPolicy Bypass -File \`"$PSCommandPath\`"" -ForegroundColor DarkGray
+        if ($ri.warning) { Write-Host "  注意: $($ri.warning)" -ForegroundColor Yellow }
+    } else {
+        Write-Host "  注册失败: $($ri.error)" -ForegroundColor Red
+    }
+    return
+}
+
+if ($Trend) {
+    Show-HealthTrend -Days $TrendDays
+    return
+}
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
@@ -117,6 +178,15 @@ if (-not $prev) {
     }
 }
 
+# --- 体检趋势（字符 sparkline，与 GUI/WebUI 同源）---
+$trendPoints = @(Get-HealthTrend -BackupDir $backupDir)
+if ($trendPoints.Count -ge 2) {
+    $spark = Format-Sparkline -Values ([double[]]@($trendPoints | ForEach-Object { [double]$_.score }))
+    Write-Host ("`n  近期分数趋势: {0}  （共 {1} 次体检，{2} → {3} 分）" -f `
+        $spark, $trendPoints.Count, $trendPoints[0].score, $trendPoints[-1].score) -ForegroundColor Cyan
+    Write-Host "  查看详细趋势: powershell -File scripts\15-HealthCheck.ps1 -Trend" -ForegroundColor DarkGray
+}
+
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 # --- 自动修复（只读先行：先出「将做什么」清单，确认后才执行）---
@@ -146,7 +216,12 @@ if ($actionable.Count -gt 0) {
         }
     }
 
-    $answer = Read-Host "`n  是否一键修复以上项目？输入 Y 确认，其它键跳过"
+    $answer = ''
+    if ([Environment]::UserInteractive) {
+        $answer = Read-Host "`n  是否一键修复以上项目？输入 Y 确认，其它键跳过"
+    } else {
+        Write-Host "`n  非交互环境（如计划任务自动运行），已跳过自动修复。" -ForegroundColor Gray
+    }
     if ($answer -eq 'Y' -or $answer -eq 'y') {
         Write-Host "`n  开始自动修复（High 级高危项不在本流程内）..." -ForegroundColor Yellow
         $rr = Invoke-HealthRemediation -Report $report -MaxSeverity 'Medium' -BackupDir $backupDir `
@@ -171,5 +246,20 @@ if ($actionable.Count -gt 0) {
         }
     } else {
         Write-Host "  已跳过自动修复。" -ForegroundColor Gray
+    }
+}
+
+# --- 定时体检（仅交互环境提示；计划任务自动运行时跳过）---
+if ([Environment]::UserInteractive) {
+    Write-Host ""
+    $ansSchedule = Read-Host "  是否注册每日自动体检计划任务？输入 Y 注册（管理员=每日 09:00，非管理员=登录时），其它键跳过"
+    if ($ansSchedule -eq 'Y' -or $ansSchedule -eq 'y') {
+        $ri = Install-HealthSchedule -Time '09:00' -HealthScript $PSCommandPath
+        if ($ri.ok) {
+            Write-Host "  已注册: $($ri.task)（触发: $($ri.trigger)）" -ForegroundColor Green
+            if ($ri.warning) { Write-Host "  注意: $($ri.warning)" -ForegroundColor Yellow }
+        } else {
+            Write-Host "  注册失败: $($ri.error)" -ForegroundColor Red
+        }
     }
 }

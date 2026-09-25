@@ -3166,3 +3166,138 @@ function Invoke-Profile {
     elseif (-not $res.ok) { $res.error = ("有 {0} 个步骤失败，详见 results" -f $failed.Count) }
     return $res
 }
+
+# ============================================================
+#  体检趋势与定时体检（P1-1）
+# ============================================================
+
+# 把数值序列渲染成字符 sparkline。纯 ASCII 字符集，
+# Win7 控制台与 GUI 等宽字体都能稳定显示（不依赖 Unicode 区块字符）。
+function Format-Sparkline {
+    param([double[]]$Values, [int]$Levels = 8)
+    $chars = @('.', ':', '-', '=', '+', '*', '#', '%')
+    $vals = @($Values | Where-Object { $null -ne $_ })
+    if ($vals.Count -eq 0) { return '' }
+    $min   = ($vals | Measure-Object -Minimum).Minimum
+    $max   = ($vals | Measure-Object -Maximum).Maximum
+    $span  = $max - $min
+    $sb    = New-Object System.Text.StringBuilder
+    $top   = $chars.Count - 1
+    foreach ($x in $vals) {
+        if ($span -le 0) {
+            $null = $sb.Append($chars[[int][math]::Floor($chars.Count / 2)])
+            continue
+        }
+        $ratio = ($x - $min) / $span
+        if ($ratio -lt 0) { $ratio = 0 }
+        if ($ratio -gt 1) { $ratio = 1 }
+        $idx = [int][math]::Floor($ratio * $top + 0.0001)
+        if ($idx -lt 0)    { $idx = 0 }
+        if ($idx -gt $top) { $idx = $top }
+        $null = $sb.Append($chars[$idx])
+    }
+    return $sb.ToString()
+}
+
+# 体检趋势：读取 backups/health 下的历史报告，按时间升序输出指标序列。
+# 每点: time / score / freeRamPct / cleanableMB / startupCount / issueCount
+# -Days 只保留最近 N 天；超过 -MaxPoints 时均匀抽样（末点即最新一次必保留）。
+function Get-HealthTrend {
+    param([string]$BackupDir, [int]$Days = 30, [int]$MaxPoints = 60)
+    $dir = Join-Path (Get-OptBackupDir -BackupDir $BackupDir) 'health'
+    if (-not (Test-Path $dir)) { return @() }
+    $cutoff = (Get-Date).AddDays(-[math]::Abs($Days))
+    $files  = @(Get-ChildItem -Path $dir -Filter 'health_*.json' -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTime -ge $cutoff } |
+                Sort-Object LastWriteTime)
+    $points = @()
+    foreach ($f in $files) {
+        try {
+            $r = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($null -eq $r -or $null -eq $r.score) { continue }
+            $t = $f.LastWriteTime
+            try { $t = [datetime]::ParseExact([string]$r.timestamp, 'yyyy-MM-dd HH:mm:ss', $null) } catch { }
+            $points += [PSCustomObject]@{
+                time         = $t
+                score        = [int]$r.score
+                freeRamPct   = [double]$r.metrics.freeRamPct
+                cleanableMB  = [double]$r.metrics.cleanableMB
+                startupCount = [int]$r.metrics.startupCount
+                issueCount   = @($r.issues).Count
+            }
+        } catch { }
+    }
+    if ($points.Count -gt $MaxPoints -and $MaxPoints -gt 1) {
+        $step    = [int][math]::Ceiling($points.Count / $MaxPoints)
+        $sampled = @()
+        for ($i = 0; $i -lt $points.Count; $i += $step) { $sampled += $points[$i] }
+        if ($sampled[$sampled.Count - 1].time -ne $points[$points.Count - 1].time) {
+            $sampled += $points[$points.Count - 1]
+        }
+        $points = $sampled
+    }
+    return $points
+}
+
+# 当前进程是否管理员身份（计划任务降级判断用）
+function Test-IsAdmin {
+    try {
+        $id        = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object Security.Principal.WindowsPrincipal($id)
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch { return $false }
+}
+
+# 注册每日自动体检计划任务（schtasks.exe，Win7~Win11 通用，不依赖 ScheduledTasks 模块）
+# 非管理员自动降级为「登录时触发」并在 warning 中说明；
+# 注册失败只返回 error，绝不抛异常（虚拟机/域控环境容徙）。
+function Install-HealthSchedule {
+    param(
+        [string]$TaskName = 'PCOptimizer-DailyHealthCheck',
+        [string]$Time     = '09:00',
+        [string]$HealthScript
+    )
+    if ([string]::IsNullOrWhiteSpace($HealthScript) -or -not (Test-Path -LiteralPath $HealthScript)) {
+        return [PSCustomObject]@{ ok = $false; error = (“未找到体检脚本: {0}” -f $HealthScript); task = $TaskName; trigger = $null; warning = $null }
+    }
+    if ($Time -notmatch '^([01]?[0-9]|2[0-3]):[0-5][0-9]$') {
+        return [PSCustomObject]@{ ok = $false; error = (“时间格式无效: {0}（应为 HH:mm，例如 09:00）” -f $Time); task = $TaskName; trigger = $null; warning = $null }
+    }
+    $isAdmin = Test-IsAdmin
+    $schtasksArgs = @('/Create', '/F', '/TN', $TaskName)
+    if ($isAdmin) { $schtasksArgs += @('/SC', 'DAILY', '/ST', $Time) }
+    else          { $schtasksArgs += @('/SC', 'ONLOGON') }
+    $schtasksArgs += @('/TR', ('powershell -NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $HealthScript))
+    try {
+        $out = & schtasks.exe @schtasksArgs 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            return [PSCustomObject]{
+                ok = $false; error = (“schtasks 退出码 {0}: {1}” -f $LASTEXITCODE, (($out | Out-String).Trim()))
+                task = $TaskName; trigger = $null; warning = $null
+            }
+        }
+    } catch {
+        return [PSCustomObject]@{ ok = $false; error = $_.Exception.Message; task = $TaskName; trigger = $null; warning = $null }
+    }
+    $trigger = if ($isAdmin) { “每日 $Time” } else { '登录时' }
+    $warning = if ($isAdmin) { $null } else { '当前非管理员，已降级为「登录时触发」（每日定时需管理员权限）' }
+    return [PSCustomObject]@{ ok = $true; error = $null; warning = $warning; task = $TaskName; trigger = $trigger }
+}
+
+# 删除自动体检计划任务；任务不存在时视为成功（幂等）
+function Remove-HealthSchedule {
+    param([string]$TaskName = 'PCOptimizer-DailyHealthCheck')
+    try {
+        $null = & schtasks.exe /Query /TN $TaskName 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            return [PSCustomObject]@{ ok = $true; removed = $false; error = $null; task = $TaskName }
+        }
+        $out = & schtasks.exe /Delete /TN $TaskName /F 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            return [PSCustomObject]@{ ok = $false; removed = $false; error = (($out | Out-String).Trim()); task = $TaskName }
+        }
+        return [PSCustomObject]@{ ok = $true; removed = $true; error = $null; task = $TaskName }
+    } catch {
+        return [PSCustomObject]@{ ok = $false; removed = $false; error = $_.Exception.Message; task = $TaskName }
+    }
+}

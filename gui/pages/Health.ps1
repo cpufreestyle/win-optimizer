@@ -108,6 +108,14 @@
             foreach ($d in @($m.volumes)) {
                 $lines += ("分区 {0}:     : 可用 {1}GB / 共 {2}GB（已用 {3}%）[{4}]" -f $d.drive, $d.freeGB, $d.totalGB, $d.usedPct, $d.media)
             }
+            # --- 体检趋势（迷你 sparkline，与 CLI/WebUI 同源数据）---
+            $trendPoints = @(Get-HealthTrend -BackupDir $script:BackupDir -Days 30)
+            if ($trendPoints.Count -ge 2) {
+                $spark    = Format-Sparkline -Values ([double[]]@($trendPoints | ForEach-Object { [double]$_.score }))
+                $minScore = (@($trendPoints.score) | Measure-Object -Minimum).Minimum
+                $maxScore = (@($trendPoints.score) | Measure-Object -Maximum).Maximum
+                $lines += (“体检趋势     : {0}（近30天 {1} 次，{2} → {3} 分，最低 {4} 最高 {5}）” -f $spark, $trendPoints.Count, $trendPoints[0].score, $trendPoints[-1].score, $minScore, $maxScore)
+            }
             $script:TxtHealthMetrics.Lines = $lines
 
             # --- 问题清单 ---
