@@ -1611,8 +1611,93 @@ function New-HealthIssue {
 }
 
 # 只读扫描，生成体检报告
+# ============================================================
+#  开机性能基线（P2-2）：回答「这台机器开机/读盘是什么水平」，
+#  并随体检历史沉淀，让「优化后有没有变快」可量化（配合趋势图）。
+#  纯探测：不修改任何系统状态；%TEMP% 块文件测完立即删除。
+# ============================================================
+# 可优化服务里仍为「自动」启动的服务名清单（体检与性能基线共用，避免两处重复扫 CIM）
+function Get-AutoOptimizableServices {
+    param([object[]]$ServiceList)
+    $auto = @()
+    if (-not $ServiceList -or @($ServiceList).Count -eq 0) { return $auto }
+    try {
+        $cimSvc = @(Get-CimInstance Win32_Service -ErrorAction Stop)
+        foreach ($s in @($ServiceList)) {
+            $hit = @($cimSvc | Where-Object { $_.Name -eq $s.Name })[0]
+            if ($hit -and $hit.StartMode -eq 'Auto') { $auto += $s.Name }
+        }
+    } catch { }
+    return @($auto)
+}
+
+# 开机性能基线探测：磁盘顺序写/读 + 开机加载负担（启动项 / 自动服务）+ 物理内存。
+#   -SizeMB         块文件大小（默认 64MB，读写共约 1-3 秒；总耗时记录在 elapsedMs）
+#   -StartupCount   体检已量好的启动项数；传非负值直接复用，避免重复扫注册表
+#   -AutoServices   体检已量好的「仍自动启动的可优化服务」数；同上
+# 返回 @{ ok; diskReadMBps; diskWriteMBps; startupCount; autoServices; totalRamMB; elapsedMs; error }
+# 磁盘探测失败不视为整体失败（error 记录原因，磁盘两项为 0），启动项/服务数仍可用。
+function Get-SystemBench {
+    param(
+        [int]$SizeMB = 64,
+        [int]$StartupCount = -1,
+        [int]$AutoServices = -1
+    )
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $readMBps  = 0.0
+    $writeMBps = 0.0
+    $diskError = $null
+    $file = Join-Path $env:TEMP ("PCOptBench_{0}.tmp" -f [Guid]::NewGuid().ToString('N'))
+    $blockBytes = 4MB
+    try {
+        $buf = New-Object byte[] $blockBytes
+        (New-Object Random).NextBytes($buf)
+        $fs = [IO.File]::Create($file)
+        try {
+            $wSw = [Diagnostics.Stopwatch]::StartNew()
+            for ($i = 0; $i -lt [int]($SizeMB * 1MB / $blockBytes); $i++) { $fs.Write($buf, 0, $buf.Length) }
+            $fs.Flush($true)
+            $wSw.Stop()
+            if ($wSw.Elapsed.TotalSeconds -gt 0) { $writeMBps = [math]::Round($SizeMB / $wSw.Elapsed.TotalSeconds, 1) }
+        } finally { $fs.Dispose() }
+        $fs = [IO.File]::OpenRead($file)
+        try {
+            $rSw = [Diagnostics.Stopwatch]::StartNew()
+            $total = 0L
+            while (($n = $fs.Read($buf, 0, $buf.Length)) -gt 0) { $total += $n }
+            $rSw.Stop()
+            if ($rSw.Elapsed.TotalSeconds -gt 0) { $readMBps = [math]::Round(($total / 1MB) / $rSw.Elapsed.TotalSeconds, 1) }
+        } finally { $fs.Dispose() }
+    } catch {
+        $diskError = $_.Exception.Message
+    } finally {
+        [IO.File]::Delete($file)
+    }
+
+    if ($StartupCount -lt 0) { $StartupCount = @(Get-StartupItems).Count }
+    if ($AutoServices -lt 0) { $AutoServices = @(Get-AutoOptimizableServices -ServiceList @(Get-ServiceList)).Count }
+
+    $totalRamMB = 0
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        $totalRamMB = [math]::Round($os.TotalVisibleMemorySize / 1KB, 0)
+    } catch { }
+
+    $sw.Stop()
+    return [PSCustomObject]@{
+        ok            = $true
+        diskReadMBps  = $readMBps
+        diskWriteMBps = $writeMBps
+        startupCount  = [int]$StartupCount
+        autoServices  = [int]$AutoServices
+        totalRamMB    = $totalRamMB
+        elapsedMs     = $sw.ElapsedMilliseconds
+        error         = $diskError
+    }
+}
+
 function Get-SystemHealthReport {
-    param([switch]$SkipCleanScan)
+    param([switch]$SkipCleanScan, [switch]$SkipBench)
 
     $issues  = @()
     $metrics = [ordered]@{}
@@ -1770,6 +1855,12 @@ function Get-SystemHealthReport {
              elseif ($score -ge 60) { '建议优化' }
              else { '亟需优化' }
 
+    # --- 开机性能基线（P2-2，纯只读探测；-SkipBench 可跳过，计划任务夜间跑可用）---
+    $bench = $null
+    if (-not $SkipBench) {
+        $bench = Get-SystemBench -StartupCount $startups.Count -AutoServices $autoSvc.Count
+    }
+
     $hostName = $env:COMPUTERNAME
     return [PSCustomObject]@{
         timestamp = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
@@ -1778,6 +1869,7 @@ function Get-SystemHealthReport {
         score     = $score
         grade     = $grade
         metrics   = [PSCustomObject]$metrics
+        bench     = $bench
         issues    = $issues
     }
 }
@@ -3236,6 +3328,11 @@ function Get-HealthTrend {
             if ($null -eq $r -or $null -eq $r.score) { continue }
             $t = $f.LastWriteTime
             try { $t = [datetime]::ParseExact([string]$r.timestamp, 'yyyy-MM-dd HH:mm:ss', $null) } catch { }
+            # 兼容没有 bench 段的历史报告（P2-2 之前的体检）
+            $diskRead = 0.0
+            if ($r.PSObject.Properties.Name -contains 'bench' -and $null -ne $r.bench -and $null -ne $r.bench.diskReadMBps) {
+                $diskRead = [double]$r.bench.diskReadMBps
+            }
             $points += [PSCustomObject]@{
                 time         = $t
                 score        = [int]$r.score
@@ -3243,6 +3340,7 @@ function Get-HealthTrend {
                 cleanableMB  = [double]$r.metrics.cleanableMB
                 startupCount = [int]$r.metrics.startupCount
                 issueCount   = @($r.issues).Count
+                diskReadMBps = $diskRead
             }
         } catch { }
     }

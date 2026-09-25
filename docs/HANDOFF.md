@@ -21,7 +21,7 @@
 > ✅ **2026-09-26**：P1-3（优化前自动创建系统还原点）已合并（PR #12），并随 v3.6.0 发布（见 §3.8）。
 > ✅ **2026-09-26**：PR #14 修复两类静默故障（弯引号误作字符串定界符 / `[PSCustomObject]` 漏写 `@`），并补源码静态检查（见 §3.10）。
 > ✅ **2026-09-26**：P2 智能降级建议已合并（PR #15，见 §3.9）。
-> ✅ **2026-09-26**：P2-1 统一优化预览已实现待发布（见 §3.11）。
+> ✅ **2026-09-26**：P2-1 统一优化预览已实现待发布（见 §3.11）；P2-2 开机性能基线 bench 已实现待发布（见 §3.12）。
 > ✅ **v3.7.0 已发布**：P2 智能降级建议 + 统一优化预览（见 §3.9、§3.11）。
 > 当前 `main` = v3.7.0 发布态；本地 `main` 与远端一致（`git ls-remote` 核对）。
 
@@ -240,6 +240,24 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
 
 测试：新增 6 个用例（步骤结构 / summary 与实际一致 / 电源与 DNS 标签解析 / 组合包与未知组合包 / 清理步可选 / 渲染契约），全量 **194/194** 通过。
 
+### 3.12 开机性能基线 bench（P2-2，2026-09-26，待发布）
+
+「优化有没有变快」终于可量化：体检报告新增 `bench` 段，随历史沉淀进趋势图。
+
+| 层 | 落点 | 说明 |
+| --- | --- | --- |
+| lib | `Get-SystemBench` | `%TEMP%` 下落一块 64MB 临时文件，顺序写 + 顺序读回后立即删除（实测约 0.4-1s）；返回 `diskReadMBps / diskWriteMBps / startupCount / autoServices / totalRamMB / elapsedMs / error`。磁盘探测失败不拖垮整体（error 记录原因，磁盘项为 0）。 |
+| lib | `Get-AutoOptimizableServices` | 「仍为自动启动的可优化服务」清单抽成共享 helper，体检与 bench 共用，不再两处各扫一遍 CIM。 |
+| lib | `Get-SystemHealthReport -SkipBench` | `bench` 挂**报告顶层属性**（不放 metrics：不影响评分、不进 Compare-HealthReports 的差值遍历）。 |
+| CLI | `scripts/15-HealthCheck.ps1` | 「关键指标」后新增「性能基线」段；`-Trend` 新增磁盘读 sparkline；新增 `-SkipBench`（计划任务夜间跑可省 ~1s）。 |
+| GUI | `gui/pages/Health.ps1` | 关键指标文本框追加三行：磁盘顺序读/写、开机加载负担、探测耗时。 |
+| WebUI | `webui/ps/15_health.ps1` + `index.html` | scan 响应随 report 带出 bench；关键指标表加「性能基线 / 开机负担」两行；趋势区新增磁盘读 SVG 折线（复用 score 折线的同款零依赖画法）。 |
+
+**兼容性**：`Get-HealthTrend` 的每个点新增 `diskReadMBps`，旧报告（无 bench 段）按 0 处理，不抛异常；
+WebUI 折线只在采样点 ≥2 且 >0 时渲染，老用户升级后第一篇带 bench 的报告落地才出线。
+
+测试：新增 6 个用例（探测结构 / 复用计数 / 实扫计数 / 报告挂载 / `-SkipBench` / 旧报告趋势兼容），全量 **200/200** 通过。
+
 ---
 
 ## 4. 三端文件地图（按域）
@@ -313,8 +331,12 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
     运行时 `Get-CleanTargets` 未定义、`$ErrorActionPreference='Stop'` 把它变成终止错误，
     而 `run_ps` 只会把 stdout/stderr 拼成 JSON，最终表现为 `/api/clean/scan` 返回 `ok:false` + “无效的 JSON”。
     固化顺序：dot-source → `Get-Command` 存在性校验（不足则输出 JSON 兜底）→ 再调用 lib 函数。
+20. **`param()` 块不接受尾逗号**：`param([switch]$A, [switch]$B,)` 最后一个参数后的逗号会让 PS 5.1 解析器报
+    「Missing expression after ','」，且错误行指向最后一项参数、极易误判成注释或中文的问题。
+    给参数列表增补条目时，**新参数若不是最后一项就要带逗号，是最后一项则必须去掉逗号**。
+    本仓库的静态卫生检查（tests 的 source hygiene Describe）会抓住它，改动参数块后先跑一遍 Pester。
 
-20. **switch 参数名会遮蔽同名小写变量**：`param([switch]$Plan)` 一进脚本，所有 `$plan` 都变成强类型 `SwitchParameter`，
+21. **switch 参数名会遮蔽同名小写变量**：`param([switch]$Plan)` 一进脚本，所有 `$plan` 都变成强类型 `SwitchParameter`，
     `$plan = Get-OptimizePlan ...` 直接抛「Cannot convert PSCustomObject to SwitchParameter」，而错误栈只指向调用行，极难定位。
     **加 `-Xxx` switch 前先全文搜一遍 `$xxx`**；已中招的就地改名（本次 `Optimize.ps1` 的 `$plan` → `$planPreview`）。
 
@@ -358,7 +380,6 @@ CLI 脚本里的 `Set-CompactOSState` 必须处于 `if` 保护之下，防止再
    （WebUI SVG 趋势卡片 / 智能建议表格 / GUI 迷你图与建议面板 / CLI `-Trend`）。
 5. ✅ P1 系列全部发布（P1-1 见 §3.6，P1-2→v3.5.0，P1-3→v3.6.0）；
    ✅ P2 智能降级建议已实现（§3.9），待随 v3.7.0 发布。
-6. 后续功能建议：P2 仅剩开机耗时基线 bench——体检报告加 `bench` 段（磁盘顺序读探测、启动项数、服务自动数，
-   纯只读且 <10s），配合 P1-1 趋势图让「优化有没有变快」可量化。细则见 `docs/FEATURE-IDEAS.md` §P2。
-   （MCP `optimize_plan` dry-run 已实现，见 §3.11。）
+6. Roadmap 功能项已全部收口：P0 / P1 / P2 均落地（P2 三项见 §3.9、§3.11、§3.12）。
+   后续方向建议从社区反馈 / 新 Issue 里重新提炼（体体检报告的 bench 曲线已能为「要不要再优化」提供数据）。
    「一键优化组合包」（P0-3）、「优化回滚向导」（P0-4）、「定时体检 + 趋势报告」（P1-1）均已落地（见 §3.4、§3.5、§3.6）。

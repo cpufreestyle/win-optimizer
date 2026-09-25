@@ -21,6 +21,7 @@ param(
     [ValidateSet("scan", "plan", "remediate", "trend", "export", "tips")]$Action = "scan",
     [string[]]$IssueCode = @(),
     [ValidateSet("High", "Medium", "Low")]$MaxSeverity = "Medium",
+    [switch]$SkipBench,
     [int]$DnsOption = 1,
     [string]$PowerPlanGuid = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c",
     [int]$Days = 30,
@@ -55,7 +56,7 @@ try {
         # 在保存本次报告之前先取上一次的，用于对比
         $prev = Get-PreviousHealthReport -BackupDir $backupDir
 
-        $report = Get-SystemHealthReport
+        $report = Get-SystemHealthReport -SkipBench:$SkipBench
         $file   = Save-HealthReport -Report $report -BackupDir $backupDir
 
         $cmp = $null

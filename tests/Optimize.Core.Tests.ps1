@@ -2576,3 +2576,100 @@ Describe 'Optimize.Core unified optimize plan - read-only dry-run (P2, shared by
         @(Format-OptimizePlan ([PSCustomObject]@{ ok = $false })).Count | Should -Be 0
     }
 }
+
+Describe 'Optimize.Core boot-time performance baseline bench (P2-2, shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+
+    It 'Get-SystemBench returns a well-formed, fully populated read-only probe result' {
+        $b = Get-SystemBench -StartupCount 7 -AutoServices 3
+        $b | Should -BeOfType [PSCustomObject]
+        $b.ok | Should -BeTrue
+        foreach ($f in @('diskReadMBps','diskWriteMBps','startupCount','autoServices','totalRamMB','elapsedMs','error')) {
+            @($b.PSObject.Properties.Name) | Should -Contain $f
+        }
+        $b.diskReadMBps  | Should -BeGreaterThan 0
+        $b.diskWriteMBps | Should -BeGreaterThan 0
+        $b.totalRamMB    | Should -BeGreaterThan 0
+        $b.elapsedMs     | Should -BeGreaterThan 0
+        $b.error         | Should -BeNullOrEmpty
+    }
+
+    It 'Get-SystemBench reuses measured startup/service counts when supplied' {
+        $b = Get-SystemBench -StartupCount 42 -AutoServices 9
+        $b.startupCount | Should -Be 42
+        $b.autoServices | Should -Be 9
+        # 0 也是合法值（没有可优化服务处于自动启动），不得回退去重新扫描
+        $z = Get-SystemBench -StartupCount 0 -AutoServices 0
+        $z.startupCount | Should -Be 0
+        $z.autoServices | Should -Be 0
+    }
+
+    It 'Get-SystemBench measures live startup/service counts when not supplied' {
+        $b = Get-SystemBench
+        $b.ok | Should -BeTrue
+        $b.startupCount | Should -BeGreaterThan 0
+        $b.startupCount | Should -Be (@(Get-StartupItems).Count)
+        $b.autoServices | Should -BeGreaterOrEqual 0
+    }
+
+    It 'health report carries a bench section that reuses measured counts' {
+        $r = Get-SystemHealthReport -SkipCleanScan
+        $r.bench | Should -Not -BeNullOrEmpty
+        $r.bench.ok            | Should -BeTrue
+        $r.bench.startupCount  | Should -Be $r.metrics.startupCount
+        $r.bench.autoServices  | Should -Be $r.metrics.servicesStillAuto
+        $r.bench.diskReadMBps  | Should -BeGreaterThan 0
+        $r.score | Should -BeGreaterOrEqual 0
+    }
+
+    It 'health report -SkipBench leaves the bench section null' {
+        $r = Get-SystemHealthReport -SkipCleanScan -SkipBench
+        $r.bench | Should -BeNullOrEmpty
+    }
+
+    It 'Get-HealthTrend tolerates legacy reports without a bench section' {
+        $tmp = Join-Path $env:TEMP ('bench_trend_' + (New-Guid).ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path (Join-Path $tmp 'health') -Force | Out-Null
+            $mkOld = {
+                param($Day, $Score)
+                $when = (Get-Date).AddDays(-$Day)
+                $o = [PSCustomObject]@{
+                    timestamp = $when.ToString('yyyy-MM-dd HH:mm:ss')
+                    host      = 'h'; version = '3.6.0'; score = $Score; grade = 'x'
+                    metrics   = [PSCustomObject]@{ freeRamPct = 50.0; cleanableMB = 100; startupCount = 5 }
+                    issues    = @()
+                }
+                $f = Join-Path $tmp ("health\health_{0}.json" -f $when.ToString('yyyyMMdd_HHmmss'))
+                $o | ConvertTo-Json -Depth 8 | Out-File -FilePath $f -Encoding UTF8
+                (Get-Item $f).LastWriteTime = $when
+            }
+            & $mkOld 2 60
+            & $mkOld 1 70
+            # 新格式报告：带 bench 段
+            $when = Get-Date
+            $newRep = [PSCustomObject]@{
+                timestamp = $when.ToString('yyyy-MM-dd HH:mm:ss')
+                host      = 'h'; version = '3.7.0'; score = 80; grade = 'x'
+                metrics   = [PSCustomObject]@{ freeRamPct = 55.0; cleanableMB = 100; startupCount = 5 }
+                bench     = [PSCustomObject]@{ diskReadMBps = 1234.5 }
+                issues    = @()
+            }
+            $f = Join-Path $tmp ("health\health_{0}.json" -f $when.ToString('yyyyMMdd_HHmmss'))
+            $newRep | ConvertTo-Json -Depth 8 | Out-File -FilePath $f -Encoding UTF8
+            (Get-Item $f).LastWriteTime = $when
+
+            $t = @(Get-HealthTrend -BackupDir $tmp -Days 30)
+            $t.Count | Should -Be 3
+            # 历史（无 bench）点位磁盘读为 0，不抛异常
+            $t[0].diskReadMBps | Should -Be 0
+            $t[1].diskReadMBps | Should -Be 0
+            # 新点位读到 bench.diskReadMBps
+            $t[-1].diskReadMBps | Should -Be 1234.5
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
