@@ -1,5 +1,5 @@
 {
-    "version": "3.9.0",
+    "version": "3.10.0",
     "description": "7代CPU老电脑优化配置文件",
     "services": {
         "safe_to_disable": [
@@ -40,6 +40,21 @@
     },
     "safety": {
         "create_restore_point": false
+    },
+    "smart": {
+        "_note": "受保护厂商签名特征（子串匹配，大小写不敏感）：命中即不推荐禁用该启动项；留空时 lib 回退内置默认。",
+        "trusted_publishers": [
+            "Microsoft Corporation",
+            "Microsoft Windows",
+            "Intel Corporation",
+            "NVIDIA Corporation",
+            "Advanced Micro Devices",
+            "Realtek Semiconductor",
+            "Synaptics",
+            "Dell Inc",
+            "HP Inc",
+            "Lenovo"
+        ]
     },
     "profiles": {
         "old_balanced": {
