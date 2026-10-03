@@ -510,6 +510,27 @@ try/catch 里，任何一组抛异常都会走到 catch 分支，整页退回 ok
 
 更新相关域（10–14）在 GUI 中统一归入 `Update.ps1` 一个页面。
 
+### 4.1 v3.11.0 发布版 EXE 重建：入库二进制与源码的版本漂移（2026-10-03 续）
+
+**症状**：`PC-Optimizer.exe` 是按发布资产入库的二进制，但 `release.yml` 只在打 `v*` tag 时才重新构建。
+因此 v3.11.0 的五轮 GUI 改动（向导页 / 导出 / 一次性说明）全部落在源码里，而入库 EXE 仍是上一轮的
+v3.10.0（667,648 字节，构建于 PR #26）。`Start.bat` 的 `[E] EXE 程序` 选项会优先用它，
+用户双击得到的是没有一键向导页的旧界面。
+
+**修复**：跑 `Build-EXE.ps1` 重建（732,160 字节，FileVersion / ProductVersion 均 3.11.0.0）。
+以二进制 UTF-16LE 段检索确认新 EXE 含 `Build-GuidedPage`、`Invoke-GuidedExport`、
+`OnboardingHint`、侧边栏「一键向导」导航项与版本串 3.11.0。重建后 Pester 256/256 无回归。
+
+**维护约定（下次改 GUI 必看）**：
+
+1. 改完 `gui/pages/*.ps1` 或 `OptimizeGUI.ps1` 后，必须重跑 `Build-EXE.ps1` 并把新 `PC-Optimizer.exe` 一起提交；
+   否则 `Start.bat` 的 `[E]` 分支会把用户导向旧界面。
+2. `Build-EXE.ps1` 的 `$pageFiles` 是白名单，新增页面文件忘了加就会漏页（§3.18 的 `Health.ps1`、
+   上一轮的 `Guided.ps1` 都踩过）。现在由 `Describe 'GUI guided wizard page'` 的两条白名单用例守住。
+3. 版本号单一来源是 `config/optimization.json`（当前 3.11.0），`Build-EXE.ps1` 会读它生成四段式 EXE 文件版本。
+
+---
+
 ---
 
 ## 5. 踩过的坑 / 维护时务必注意
