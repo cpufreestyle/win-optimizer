@@ -343,7 +343,10 @@ CLI 主菜单加 `[0] 一键向导`，`-Guided` 直达、`-GuidedPlan` 只读预
   WebUI 与 GUI 均已落地：WebUI 是 `webui/ps/17_guided.ps1` + `/api/guided/{plan,apply,rerun}` + 侧栏「🧭 一键向导」页；
   GUI 是专用向导页 `gui/pages/Guided.ps1` + `gui/pages/GuidedActions.ps1`（侧边栏「一键向导」/ 仪表盘按钮进入：
   体检分卡片、推荐理由、步骤表、需人工项、执行与前后对比同页展示）。
-- 向导完成后可选「一键导出对比报告」（复用 P1-2 的 `Export-HealthReport`），把「优化成效」变成可分享产物。
+- ~~向导完成后可选「一键导出对比报告」（复用 P1-2 的 `Export-HealthReport`），把「优化成效」变成可分享产物。~~
+  **已落地（v3.11.0）**：GUI 向导页在拿到前后两份报告后出现「导出对比报告」按钮（`Invoke-GuidedExport`），
+  WebUI 在复检后出现同名按钮（`/api/guided/export` + `17_guided.ps1 -Action export`）。
+  两端都调 lib 的 `Export-HealthReport`，输出自包含 HTML / Markdown，不另写导出逻辑。
 - 首次运行时用一次性提示解释「为什么需要管理员 / 为什么建议重启」，减少中途放弃。
 
 ## 建议实施顺序

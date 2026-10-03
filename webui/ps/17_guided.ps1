@@ -15,7 +15,12 @@
     Compare-HealthReports，与 CLI `Optimize.ps1 -Guided` 完全同源。
 #>
 param(
-    [ValidateSet("plan", "apply", "rerun")]$Action = "plan",
+    [ValidateSet("plan", "apply", "rerun", "export")]$Action = "plan",
+    [ValidateSet("html", "markdown")]$Format = "html",
+    [string]$Before = "",
+    [string]$BeforeB64 = "",
+    [string]$After = "",
+    [string]$AfterB64 = "",
     [string]$Profile = "",
     [switch]$SkipCleanScan,
     [switch]$DryRun,
@@ -134,6 +139,32 @@ try {
                     new         = @($cmp.new)
                 }
             } else { $null })
+        })
+    }
+    elseif ($Action -eq "export") {
+        # 把前后两份体检报告导出成可分享的对比报告，复用 lib 的 Export-HealthReport
+        $bRaw = $Before
+        if (-not $bRaw -and $BeforeB64) {
+            try { $bRaw = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($BeforeB64)) } catch { $bRaw = "" }
+        }
+        $aRaw = $After
+        if (-not $aRaw -and $AfterB64) {
+            try { $aRaw = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($AfterB64)) } catch { $aRaw = "" }
+        }
+        $bObj = $null; $aObj = $null
+        try { if ($bRaw) { $bObj = $bRaw | ConvertFrom-Json } } catch { $bObj = $null }
+        try { if ($aRaw) { $aObj = $aRaw | ConvertFrom-Json } } catch { $aObj = $null }
+        if (-not $bObj -or -not $aObj) {
+            Out-Json ([PSCustomObject]@{ ok = $false; error = "需要前后两份体检报告才能导出对比" })
+            exit
+        }
+        $exp = Export-HealthReport -From $bObj -To $aObj -Format $Format
+        Out-Json ([PSCustomObject]@{
+            ok    = [bool]$exp.ok
+            error = $exp.error
+            file  = $exp.file
+            format = $exp.format
+            scoreDelta = $(if ($exp.comparison) { $exp.comparison.scoreDelta } else { $null })
         })
     }
 } catch {

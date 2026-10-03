@@ -840,6 +840,31 @@ def api_guided_rerun():
     return jsonify(run_ps("17_guided.ps1", *args, timeout=1800))
 
 
+@app.route("/api/guided/export", methods=["POST"])
+def api_guided_export():
+    """把向导的前后体检对比导出成 HTML / Markdown，落盘后返回文件路径。
+
+    与 GUI 体检页的「导出对比报告」、CLI 的 Export-HealthReport 共用同一份 lib 实现。
+    """
+    data = request.get_json(silent=True) or {}
+    args = ["-Action", "export"]
+    before = data.get("before")
+    after = data.get("after")
+    if before:
+        if not isinstance(before, str):
+            before = json.dumps(before, ensure_ascii=False)
+        args += ["-BeforeB64", base64.b64encode(before.encode("utf-8")).decode("ascii")]
+    if after:
+        if not isinstance(after, str):
+            after = json.dumps(after, ensure_ascii=False)
+        args += ["-AfterB64", base64.b64encode(after.encode("utf-8")).decode("ascii")]
+    fmt = str(data.get("format", "html") or "html").lower()
+    if fmt not in ("html", "markdown"):
+        fmt = "html"
+    args += ["-Format", fmt]
+    return jsonify(run_ps("17_guided.ps1", *args, timeout=600))
+
+
 def start_mcp_background(port: int = 5001):
     """在后台线程启动 MCP (WebMCP) SSE server，供 AI 客户端调用优化功能。
 

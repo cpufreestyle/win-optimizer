@@ -708,6 +708,14 @@ $script:Pages["Health"] = $pageHealth
 $pageGuided = New-Page "Guided"
 $script:Pages["Guided"] = $pageGuided
 
+# 一键向导页状态（由 gui/pages/Guided.ps1 与 GuidedActions.ps1 读写）
+# 显式置空，避免首次进入向导页时读到上一轮残留或未定义变量
+$script:GuidedPlan = $null
+$script:GuidedBefore = $null
+$script:GuidedAfter = $null
+$script:GuidedBusy = $false
+$script:GuidedBackBtn = $null
+
 
 
 # ============================================================

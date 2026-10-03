@@ -147,6 +147,12 @@ function Build-GuidedPage {
     $btnRescan.Add_Click({ Invoke-GuidedScan })
     $page.Controls.Add($btnRescan)
 
+    # 导出对比报告：只有真跑过一次优化（拿到前后两份报告）才给这个入口
+    if ($KeepPlan -and $script:GuidedBefore -and $script:GuidedAfter) {
+        $btnExport = New-Button "导出对比报告" 360 $y 170 42 $Theme.AccentDark 10
+        $btnExport.Add_Click({ Invoke-GuidedExport })
+        $page.Controls.Add($btnExport)
+    }
     $script:GuidedBackBtn = $btnRescan
     $page.Controls.Add((New-Label "执行过程中请耐心等待，界面可能短暂无响应，这属于正常现象" 370 ($y + 10) 400 24 $Fonts.Small $Theme.TextDim))
 }

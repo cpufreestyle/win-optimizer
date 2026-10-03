@@ -67,6 +67,7 @@ function Invoke-GuidedRun {
         # 前后对比（体检 -> 优化 -> 复检）
         if ($script:GuidedBefore) {
             $after = Get-SystemHealthReport
+            $script:GuidedAfter = $after
             $cmp = Compare-HealthReports -Before $script:GuidedBefore -After $after
             if ($cmp) {
                 Write-Log ("一键向导：优化前后体检 " + $cmp.beforeScore + " → " + $cmp.afterScore + "（" + $cmp.scoreDelta + "）") "SUCCESS"
@@ -110,5 +111,47 @@ function Show-GuidedPageFromDashboard {
     }
     $script:Pages["Guided"].AutoScrollPosition = New-Object System.Drawing.Point(0, 0)
     Build-GuidedPage -KeepPlan
+    # 不在这里重新体检：GuidedAfter 只由 Invoke-GuidedRun 在真正执行后写入，
+    # 否则每次切页都跑一次全身体检，既慢又会让「导出」拿到执行前的旧数据
+}
+
+function Invoke-GuidedExport {
+    <#
+    把本次向导的前后体检对比导出成可分享报告，复用 lib 的 Export-HealthReport，
+    与 GUI 体检页「导出对比报告」同一个函数，不另写一套导出逻辑。
+    #>
+    if (-not $script:GuidedBefore -or -not $script:GuidedAfter) {
+        [System.Windows.Forms.MessageBox]::Show("还没有可导出的对比：请先执行一次优化。", "一键向导",
+            [System.Windows.Forms.MessageBox]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+        return
+    }
+    try { Add-Type -AssemblyName Microsoft.VisualBasic -ErrorAction SilentlyContinue } catch { }
+    $fmt = 'Html'
+    if ('Microsoft.VisualBasic.Interaction' -as [type]) {
+        $pick = [Microsoft.VisualBasic.Interaction]::InputBox(
+            "导出哪种格式？`n`nY = HTML（可双击打开，图表更直观）`n其它 = Markdown（纯文本，便于贴到 Issue / 论坛）",
+            "导出对比报告", "Y")
+        if ($pick -eq 'N' -or $pick -eq 'n') { $fmt = 'Markdown' }
+    }
+    try {
+        $exp = Export-HealthReport -From $script:GuidedBefore -To $script:GuidedAfter -Format $fmt
+        if ($exp.ok) {
+            Write-Log ("一键向导：对比报告已导出 " + $exp.file) "SUCCESS"
+            $open = [System.Windows.Forms.MessageBox]::Show(
+                ("报告已保存到：" + $exp.file + "`n`n是否现在打开？"),
+                "导出完成", [System.Windows.Forms.MessageBox]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Information)
+            if ($open -eq [System.Windows.Forms.DialogResult]::Yes) {
+                try { Start-Process $exp.file } catch { }
+            }
+        } else {
+            Write-Log ("一键向导：导出失败 " + $exp.error) "ERROR"
+            [System.Windows.Forms.MessageBox]::Show("导出失败：" + $exp.error, "一键向导",
+                [System.Windows.Forms.MessageBox]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        }
+    } catch {
+        Write-Log ("一键向导：导出异常 " + $_.Exception.Message) "ERROR"
+        [System.Windows.Forms.MessageBox]::Show("导出出现异常：" + $_.Exception.Message, "一键向导",
+            [System.Windows.Forms.MessageBox]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+    }
 }
 

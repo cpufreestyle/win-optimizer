@@ -1261,6 +1261,22 @@ function renderGuidedPlan(d){
   bindBtns(box);
 }
 
+async function exportGuidedCompare(compareResult){
+  // compareResult 是 /api/guided/rerun 的返回；导出需要前后两份原始报告，
+  // before 就是体检时拿到的 guidedPlan.report，after 用复检返回的 report。
+  const before = guidedPlan && guidedPlan.report;
+  const after  = compareResult && compareResult.report;
+  if(!before || !after){ log('缺少前后体检报告，无法导出','err'); return; }
+  log('正在生成对比报告…');
+  try {
+    const d = await api('/api/guided/export',{method:'POST',body:{before:before, after:after, format:'html'}});
+    if(!d.ok){ log('导出失败：'+(d.error||''),'err'); return; }
+    log('对比报告已生成：'+(d.file||''),'ok');
+  } catch(e){
+    log('导出异常：'+e,'err');
+  }
+}
+
 async function runGuided(dryRun=false){
   if(guidedBusy){ return; }
   if(!guidedPlan || !guidedPlan.ok){ log('请先完成体检','err'); return; }
@@ -1333,7 +1349,7 @@ async function runGuided(dryRun=false){
         ch += `<div class="muted">复检完成：${esc(c.afterScore)} 分（${esc(c.afterGrade||'')}）</div>`;
       }
       ch += `<div class="muted" style="margin-top:8px">建议重启电脑使所有更改生效；如需回滚，可到「备份恢复」页按域恢复或一键回滚。</div>
-        <div class="row">${btn('重新体检','ghost',()=>renderGuided())}${btn('去备份恢复','ghost',()=>goPage('backup'))}</div>`;
+         <div class="row">${btn('重新体检','ghost',()=>renderGuided())}${btn('去备份恢复','ghost',()=>goPage('backup'))}${btn('导出对比报告','ghost',()=>exportGuidedCompare(c))}</div>`;
       resBox.innerHTML += ch;
       bindBtns(resBox);
       log('复检完成：'+c.afterScore+' 分'+(cmp?('（'+(cmp.scoreDelta>=0?'+':'')+cmp.scoreDelta+'）'):''),'ok');

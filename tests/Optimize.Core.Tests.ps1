@@ -3258,6 +3258,7 @@ Describe 'GUI guided wizard page (shared by sidebar and dashboard entry)' {
         $script:ProjectRoot = $root
         $script:GuidedPlan = $null
         $script:GuidedBefore = $null
+         $script:GuidedAfter = $null
         $script:GuidedBusy = $false
         $script:GuidedBackBtn = $null
         $script:CurrentPage = $null
@@ -3295,6 +3296,7 @@ Describe 'GUI guided wizard page (shared by sidebar and dashboard entry)' {
         $script:GuidedPage.Controls.Clear()
         $script:GuidedPlan = $null
         $script:GuidedBefore = $null
+        $script:GuidedAfter = $null
         $script:GuidedBusy = $false
     }
     It 'renders the not-yet-scanned state before any health check' {
@@ -3359,5 +3361,36 @@ Describe 'GUI guided wizard page (shared by sidebar and dashboard entry)' {
         $gui | Should -Match 'gui/pages/GuidedActions.ps1'
         $gui | Should -Match 'Key="Guided"'
         $gui | Should -Match '一键向导'
+    }
+    It 'offers the export button only after a real before/after pair exists' {
+        # 只有体检没执行：不应出现导出入口
+        $script:GuidedPlan = New-FakePlan
+        $script:GuidedBefore = $script:GuidedPlan.report
+        $script:GuidedAfter = $null
+        Build-GuidedPage -KeepPlan
+        $btns = @(Get-Descendants -Controls $script:GuidedPage.Controls -Type ([System.Windows.Forms.Button]))
+        @($btns | Where-Object { $_.Text -match '导出对比报告' }).Count | Should -Be 0
+
+        # 体检 + 执行后拿到前后两份报告：应出现导出入口
+        $script:GuidedAfter = [PSCustomObject]@{ score = 80 }
+        Build-GuidedPage -KeepPlan
+        $btns = @(Get-Descendants -Controls $script:GuidedPage.Controls -Type ([System.Windows.Forms.Button]))
+        @($btns | Where-Object { $_.Text -match '导出对比报告' }).Count | Should -Be 1
+    }
+    It 'exposes the export action that reuses the shared lib exporter' {
+        $fn = Get-Command Invoke-GuidedExport -ErrorAction SilentlyContinue
+        $fn | Should -Not -BeNullOrEmpty
+        $src = (Get-Command Invoke-GuidedExport).ScriptBlock.ToString()
+        # 必须复用 lib 的 Export-HealthReport，而不是自己另写一套导出逻辑
+        # 用 AST 而非纯文本匹配：注释里提到函数名不算复用，必须真的调用它
+        $tokens = $null; $errs = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($src, [ref]$tokens, [ref]$errs)
+        @($errs).Count | Should -Be 0
+        $called = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true) |
+            Where-Object { $_.GetCommandName() -eq 'Export-HealthReport' })
+        @($called).Count | Should -BeGreaterThan 0
+        # 必须把前后两份报告传给 lib（而不是让它自己去备份目录猜）
+        $src | Should -Match 'GuidedBefore'
+        $src | Should -Match 'GuidedAfter'
     }
 }
