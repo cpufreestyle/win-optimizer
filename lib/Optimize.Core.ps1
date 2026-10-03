@@ -2459,6 +2459,32 @@ function Get-GuidedStepKeyMap {
     }
 }
 
+# 导航目标三端映射
+function Get-GuidedNavMap {
+    return @{
+        'services' = @{ Cli = '[3]';  Gui = 'Services';  Web = 'services' }
+        'startup'  = @{ Cli = '[4]';  Gui = 'Startup';   Web = 'startup'  }
+        'visual'   = @{ Cli = '[5]';  Gui = 'Visual';    Web = 'visual'   }
+        'power'    = @{ Cli = '[6]';  Gui = 'Power';     Web = 'power'    }
+        'disk'     = @{ Cli = '[7]';  Gui = 'Disk';      Web = 'disk'     }
+        'network'  = @{ Cli = '[8]';  Gui = 'Network';   Web = 'network'  }
+        'clean'    = @{ Cli = '[2]';  Gui = 'Clean';     Web = 'clean'    }
+        'profiles' = @{ Cli = '[16]'; Gui = 'Dashboard'; Web = 'profiles' }
+        'memory'   = @{ Cli = '[15]'; Gui = 'Health';    Web = 'health'   }
+    }
+}
+
+function Get-GuidedNavTarget {
+    param(
+        [Parameter(Mandatory=$true)][string]$Key,
+        [ValidateSet('Cli','Gui','Web')][string]$End = 'Cli'
+    )
+    $map = Get-GuidedNavMap
+    $k = [string]$Key
+    if ($map.ContainsKey($k) -and $map[$k].ContainsKey($End)) { return [string]$map[$k][$End] }
+    return ''
+}
+
 # 一键向导计划：一次调用完成「体检 -> 推荐 -> 只读步骤清单 -> 预估收益」。
 #   Report         指定体检报告；省略时自动体检（可配合 -SkipCleanScan / -SkipBench 提速）
 #   ProfileName    指定组合包；省略时按体检结果自动推荐
@@ -2563,14 +2589,6 @@ function Get-GuidedPlan {
     $covered  = @{}
     foreach ($st in @($res.steps)) { $covered[[string]$st.id] = $true }
     $keyToStep = Get-GuidedStepKeyMap
-    $menuHint = @{
-        'services.disable' = '[3]'
-        'startup.list'     = '[4]'
-        'visual.profile'   = '[5]'
-        'power.plan'       = '[6]'
-        'disk.clean'       = '[2]'
-        'network.dns'      = '[8]'
-    }
     $rhArgs = @{ Report = $Report; PowerPlanGuid = $PowerPlanGuid; DnsOption = $DnsOption }
     if ($SkipCleanScan) { $rhArgs['SkipCleanScan'] = $true }
     $manual = @()
@@ -2580,9 +2598,12 @@ function Get-GuidedPlan {
         if ($keyToStep.ContainsKey($key)) { $sid = [string]$keyToStep[$key] }
         if ($sid -and $covered.ContainsKey($sid)) { continue }
 
-        $menu = '[16]'
-        if ($menuHint.ContainsKey($key))      { $menu = [string]$menuHint[$key] }
-        elseif ([string]$r.domain -eq 'disk') { $menu = '[2]' }
+        # 三端导航目标：CLI 用菜单编号，GUI / WebUI 用自己的页面键，不再向新手展示 CLI 编号
+        $navKey = [string]$r.domain
+        $nav    = Get-GuidedNavTarget -Key $navKey -End 'Cli'
+        $menu   = if ($nav) { $nav } else { '[16]' }
+        $navGui = Get-GuidedNavTarget -Key $navKey -End 'Gui'
+        $navWeb = Get-GuidedNavTarget -Key $navKey -End 'Web'
 
         $manual += [PSCustomObject]@{
             id       = [string]$r.id
@@ -2593,6 +2614,8 @@ function Get-GuidedPlan {
             target   = [string]$r.target
             impact   = [string]$r.impact
             menu     = $menu
+            navGui   = $navGui
+            navWeb   = $navWeb
             auto     = [bool]$r.auto
         }
     }

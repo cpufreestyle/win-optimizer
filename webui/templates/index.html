@@ -1228,7 +1228,6 @@ function renderGuidedPlan(d){
     h += '</div>';
   }
   h += `<div class="grid">
-  h += `<div class="grid">
     <div class="stat"><div class="k">体检分</div><div class="v">${esc(d.score)} 分</div>
       <div class="muted" style="margin-top:4px">${esc(d.grade||'')}${d.beforeScore!=null?(' · 上次 '+esc(d.beforeScore)+' 分'):''}</div></div>
     <div class="stat"><div class="k">推荐组合包</div><div class="v">${esc(p.title||p.name||'')}</div>
@@ -1272,11 +1271,20 @@ function renderGuidedPlan(d){
     if(d.manual && d.manual.length){
       h += `<h3 style="margin-top:14px">也可单独处理（向导不执行）</h3>
         <div class="table-wrap"><table>
-        <thead><tr><th>严重</th><th>菜单</th><th>问题</th><th>目标</th></tr></thead><tbody>
-        ${d.manual.map(m=>`<tr>
-          <td>${badge((m.severity==='High'?'高':(m.severity==='Medium'?'中':'低')),sev(m.severity))}</td>
-          <td>${esc(m.menu)}</td><td>${esc(m.title)}</td><td class="muted">${esc(m.target)}</td>
-        </tr>`).join('')}
+        <thead><tr><th>严重</th><th>问题</th><th>去哪处理</th><th>目标</th></tr></thead><tbody>
+        ${d.manual.map(m=>{
+          const page = m.navWeb || '';
+          const label = m.navWeb ? '去该页面' : m.menu;
+          const cell = page
+            ? btn(label,'ghost',(()=>goPage(page)))
+            : '<span class="muted">'+esc(m.menu||'')+'</span>';
+          return `<tr>
+            <td>${badge((m.severity==='High'?'高':(m.severity==='Medium'?'中':'低')),sev(m.severity))}</td>
+            <td>${esc(m.title)}</td>
+            <td>${cell}</td>
+            <td class="muted">${esc(m.target)}</td>
+          </tr>`;
+        }).join('')}
         </tbody></table></div>`;
     }
   }
