@@ -134,6 +134,9 @@ PC-Optimizer-7thGen/
 │       ├── Network.ps1       #   网络优化
 │       ├── Backup.ps1        #   备份与恢复
 │       ├── Update.ps1        #   系统更新控制
+│       ├── Health.ps1        #   系统体检
+│       ├── Guided.ps1        #   一键向导页
+│       ├── GuidedActions.ps1 #   一键向导动作
 │       └── About.ps1         #   关于
 ├── webui/                    # Web 管理界面（Flask + WebMCP）
 │   ├── app.py                #   Flask Web 服务（启动后浏览器访问）
@@ -303,7 +306,7 @@ Compact.exe /CompactOS:never
   - `StartAll.bat` 改为兼容壳：提权后直接转调 `Start.bat`，不再维护第二份菜单。
 - 文档：README「快速开始」由 5 种并列方式收敛为 1 个主推路径 + 1 张「其它启动方式」对照表，
   「推荐使用流程」由 6 步压缩为向导 1 步。
-- 测试：Pester 257 / 257 通过（向导相关 31 条：lib 逻辑、GUI 页面渲染与白名单接线、首次说明状态机、侧边栏首屏适配）
+- 测试：Pester 260 / 260 通过（向导相关 34 条：lib 逻辑、GUI 页面渲染与白名单接线、首次说明状态机、侧边栏首屏适配、向导标签与映射）
 - **四端入口补齐（同轮续）**
   - WebUI：`webui/ps/17_guided.ps1` + `/api/guided/{plan,apply,rerun}` + 侧栏首位「🧭 一键向导」页；
     概览页读取失败时改为可操作提示（权限说明 + 去向导诊断 + 重试）。
