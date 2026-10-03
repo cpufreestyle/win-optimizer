@@ -3047,3 +3047,156 @@ Describe 'Optimize.Core publisher signature guard (P4-1, shared by CLI/GUI/WebUI
         ($lines -join "`n") | Should -Match 'RenamedSysTray'
     }
 }
+
+# ============================================================
+#  一键向导（P5 简化流程）：体检 -> 推荐组合包 -> 只读步骤清单 -> 复检对比
+#  三端（CLI 菜单 [0] / GUI / WebUI）共用 Get-GuidedPlan + Format-GuidedPlan，
+#  这里锁死「推荐规则、降级不抛错、渲染非空、只读」四条契约。
+# ============================================================
+Describe 'Optimize.Core guided one-click plan (shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+
+        function New-TestIssue {
+            param([string]$Id, [string]$Severity = 'Medium', [string]$Remediation = '')
+            return [PSCustomObject]@{
+                id = $Id; severity = $Severity; title = "问题 $Id"
+                detail = 'd'; suggestion = 's'; remediation = $Remediation; penalty = 5
+            }
+        }
+        function New-TestReport {
+            param($Issues, [int]$Score = 70, [string]$Grade = '一般', $Metrics = $null)
+            if (-not $Metrics) { $Metrics = [PSCustomObject]@{ cleanableMB = 0; startupCount = 0 } }
+            return [PSCustomObject]@{
+                timestamp = '2026-10-03 10:00:00'; host = 'TEST'; version = '3.11.0'
+                score = $Score; grade = $Grade; metrics = $Metrics; bench = $null; issues = @($Issues)
+            }
+        }
+    }
+
+    It 'recommends minimal when the report has no issues' {
+        $rep = New-TestReport -Issues @() -Score 96 -Grade '优秀'
+        $sug = Get-GuidedProfileSuggestion -Report $rep
+        $sug.name     | Should -Be 'minimal'
+        $sug.diskOnly | Should -BeFalse
+    }
+
+    It 'recommends minimal (disk only) when every issue is disk related' {
+        $rep = New-TestReport -Issues @((New-TestIssue -Id 'disk.space' -Severity 'High')) -Score 55 -Grade '较差'
+        $sug = Get-GuidedProfileSuggestion -Report $rep
+        $sug.name     | Should -Be 'minimal'
+        $sug.diskOnly | Should -BeTrue
+    }
+
+    It 'recommends the balanced profile for mixed software issues' {
+        $rep = New-TestReport -Issues @((New-TestIssue -Id 'power.balanced' -Remediation 'power.plan')) -Score 64
+        $sug = Get-GuidedProfileSuggestion -Report $rep
+        $sug.name     | Should -Be 'old_balanced'
+        $sug.diskOnly | Should -BeFalse
+    }
+
+    It 'never throws and keeps ok when an explicit profile does not exist' {
+        $rep = New-TestReport -Issues @((New-TestIssue -Id 'power.balanced' -Remediation 'power.plan'))
+        $gbad = Get-GuidedPlan -Report $rep -ProfileName 'no_such_profile'
+        $gbad.ok                    | Should -BeTrue
+        $gbad.profile.matched       | Should -BeFalse
+        $gbad.profile.explicit      | Should -BeTrue
+        $gbad.error                 | Should -Match 'no_such_profile'
+        @($gbad.steps).Count        | Should -Be 0
+        @(Format-GuidedPlan -Plan $gbad).Count | Should -BeGreaterThan 0
+    }
+
+    It 'reports ok=false with an error when the health check fails' {
+        Mock Get-SystemHealthReport { $null }
+        $gfail = Get-GuidedPlan
+        $gfail.ok    | Should -BeFalse
+        $gfail.error | Should -Not -BeNullOrEmpty
+        @(Format-GuidedPlan -Plan $gfail).Count | Should -Be 0
+    }
+
+    It 'honours an explicit profile and lists its steps read-only' {
+        $rep = New-TestReport -Issues @((New-TestIssue -Id 'power.balanced' -Remediation 'power.plan'))
+        $g = Get-GuidedPlan -Report $rep -ProfileName 'gaming'
+        $g.ok                | Should -BeTrue
+        $g.profile.name      | Should -Be 'gaming'
+        $g.profile.matched   | Should -BeTrue
+        @($g.steps).Count    | Should -BeGreaterThan 0
+        $g.summary.stepCount | Should -Be @($g.steps).Count
+    }
+
+    It 'splits steps into auto and manual by risk/auto flags' {
+        $rep = New-TestReport -Issues @((New-TestIssue -Id 'power.balanced' -Remediation 'power.plan'))
+        $g = Get-GuidedPlan -Report $rep
+        @($g.steps | Where-Object { -not $_.auto -or $_.risk -eq 'high' }).Count | Should -Be $g.summary.manualSteps
+        @($g.steps | Where-Object { $_.auto -and $_.risk -ne 'high' }).Count    | Should -Be $g.summary.autoSteps
+        ($g.summary.autoSteps + $g.summary.manualSteps) | Should -Be @($g.steps).Count
+    }
+
+    It 'lists problems the profile cannot cover as manual entries' {
+        $rep = New-TestReport -Issues @(
+            (New-TestIssue -Id 'memory.low' -Severity 'High')
+            (New-TestIssue -Id 'startup.many' -Severity 'Medium' -Remediation 'startup.list')
+        ) -Score 62
+        $g = Get-GuidedPlan -Report $rep
+        $g.ok | Should -BeTrue
+        @($g.manual).Count | Should -BeGreaterThan 0
+        @($g.manual | Where-Object { $_.id -eq 'memory.low' }).Count | Should -Be 1
+    }
+
+    It 'returns a shaped object with the report attached for later comparison' {
+        $rep = New-TestReport -Issues @((New-TestIssue -Id 'power.balanced' -Remediation 'power.plan'))
+        $g = Get-GuidedPlan -Report $rep
+        $g.report       | Should -Not -BeNullOrEmpty
+        $g.report.score | Should -Be $rep.score
+        foreach ($name in 'ok','version','profile','score','issues','steps','manual','summary','powerPlan','dns','report') {
+            @($g.PSObject.Properties.Name) | Should -Contain $name
+        }
+    }
+
+    It 'stays read-only: never touches the system beyond the provided report' {
+        $rep = New-TestReport -Issues @((New-TestIssue -Id 'power.balanced' -Remediation 'power.plan'))
+        Mock Disable-Services { throw 'must not run' }
+        Mock Set-PowerPlan    { throw 'must not run' }
+        Mock Set-VisualEffectProfile { throw 'must not run' }
+        Mock Invoke-NetworkOptimization { throw 'must not run' }
+        { Get-GuidedPlan -Report $rep } | Should -Not -Throw
+    }
+
+    It 'composes existing domain functions instead of re-implementing them' {
+        $rep = New-TestReport -Issues @((New-TestIssue -Id 'power.balanced' -Remediation 'power.plan'))
+        Mock Get-HealthRemediationPlan { @() }
+        Mock Get-ProfilePlan { [PSCustomObject]@{ ok = $true; name = 'old_balanced'; title = '老机均衡'; desc = 'x'; steps = @(); error = $null } }
+        $null = Get-GuidedPlan -Report $rep
+        Assert-MockCalled -CommandName 'Get-HealthRemediationPlan' -Times 1 -Scope It
+        Assert-MockCalled -CommandName 'Get-ProfilePlan' -Times 1 -Scope It
+    }
+
+    It 'renders a readable preview for a healthy plan' {
+        $rep = New-TestReport -Issues @((New-TestIssue -Id 'power.balanced' -Remediation 'power.plan'))
+        $g = Get-GuidedPlan -Report $rep
+        $text = (@(Format-GuidedPlan -Plan $g) -join [char]10)
+        $text | Should -Match '一键向导'
+        $text | Should -Match '组合包'
+        $text | Should -Match '体检分'
+    }
+
+    It 'gates risky steps with a manual-confirmation marker' {
+        $rep = New-TestReport -Issues @((New-TestIssue -Id 'power.balanced' -Remediation 'power.plan'))
+        $g = Get-GuidedPlan -Report $rep -ProfileName 'gaming'
+        $text = (@(Format-GuidedPlan -Plan $g) -join [char]10)
+        $text | Should -Match '需人工确认'
+        $text | Should -Match '\[\*\]'
+    }
+
+    It 'renders nothing for null or failed plans' {
+        @(Format-GuidedPlan -Plan $null).Count | Should -Be 0
+        @(Format-GuidedPlan -Plan ([PSCustomObject]@{ ok = $false; error = 'x' })).Count | Should -Be 0
+    }
+
+    It 'falls back to built-in profiles when the report object is bare' {
+        $rep = [PSCustomObject]@{ timestamp = 'x'; score = 70; grade = 'g'; metrics = $null; issues = @() }
+        $g = Get-GuidedPlan -Report $rep
+        $g.ok | Should -BeTrue
+        @($g.steps).Count | Should -BeGreaterThan 0
+    }
+}
