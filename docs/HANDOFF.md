@@ -31,16 +31,16 @@
 > ✅ **2026-09-26**：P3-1 智能建议一键应用闭环已合并（PR #21）并随 v3.9.0 发布（见 §3.13）。
 > ✅ **2026-09-26**：P4-1 启动项建议签名厂商否决已落地（见 §3.14），当前 `main` 工作区为 v3.10.0 发布态。
 
-> ✅ **2026-10-03 现状**：`main` @ `246ec51` = v3.10.0 发布态（PR #25 已合并）。Roadmap（FEATURE-IDEAS）
+> ✅ **2026-10-03 现状**：`main` @ `6724f7b` = v3.10.0 + UI 苹果风（PR #25、PR #26 均已合并）。Roadmap（FEATURE-IDEAS）
 > 的 P0 / P1 / P2 / P3 / P4 已全部收口；`origin/main` 与本地一致。**当前无待合并 PR**。
 
-- **UI 苹果风改动已入库到分支 `codex/ui-apple-style`**（浅色主题 + 5 处布局撞车修复 + 概览容错，见 §3.15 / §3.16 / §3.17 / §3.19）：
+- **UI 苹果风改动已合并入 `main`**（PR #26 / merge commit `6724f7b`：浅色主题 + 5 处布局撞车修复 + EXE 漏页 + 概览容错，见 §3.15 / §3.16 / §3.17 / §3.18 / §3.19）：
   `Build-EXE.ps1`、`OptimizeGUI.ps1`、`PC-Optimizer.exe`、`README.md`、`.gitignore`、`docs/HANDOFF.md`、
   `gui/pages/{About,Backup,Clean,Dashboard,Health,Services,Startup}.ps1`、`webui/ps/01_system_info.ps1`、`webui/templates/index.html`。
-  真机验证已完成并推送，等待 PR 合并（`main` 受保护，需在 GitHub 手动点 Merge）。
+  真机验证与 CI 均已通过并合并；功能分支 `codex/ui-apple-style` 已删除（本地 + 远端）。
 - 入库时**不要用裸 `git add -A`**：本地还留着 `.codex-*` 临时脚本与截图。`.gitignore` 已补 `.codex-*`
   规则（§3.17），正常情况下会被忽略；但显式列举改动文件最稳妥。
-- `main` **受保护**，所有改动必须经 PR 合入，且需在 GitHub 手动点「Merge」（当前账号无自动 merge 权限）。
+- `main` **受保护**，所有改动必须经 PR 合入；`gh pr merge <n> --auto --squash` 实测可在 CI 通过后自动完成合并（2026-10-03 PR #26，无需网页操作）。
 - **判断远端真实 HEAD 一律以 `git ls-remote` 为准**（tracking ref 不一定反映真实远端状态）。
 
 ## 3. 近期完成的大块工作
@@ -364,7 +364,7 @@ GUI 侧要点：harness dot-source 真实前导段 + 主窗体 UI 段构建**真
 - **EXE 重建**：`PC-Optimizer.exe` 重新编译（667,648 字节），二进制 UTF-16LE 段确认含
   `FromArgb(0, 122, 255)`、`Reposition-PageControls`、`$yDisk + 4 + $cardSysHeight + 12` 等本次固化的配色与布局串。
 
-**入库**：改动提交到分支 `codex/ui-apple-style` 并推送、开 PR；`main` 受保护，最终由维护者点 Merge。
+**入库**：已合并 —— 分支 `codex/ui-apple-style` 推送后开 PR #26，CI `validate` 通过并合并为 `6724f7b`；功能分支随后删除（本地 + 远端）。
 
 **旁注（沙箱假故障）**：把 WebUI 放在 Codex 沙箱里跑时，`/api/overview` 会整页显示
 「获取失败 拒绝访问」——因为沙箱内所有 `Get-CimInstance` 都被拒绝（`IsInRole(Administrator)=False`）。
