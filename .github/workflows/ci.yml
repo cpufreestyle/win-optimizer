@@ -34,6 +34,12 @@ jobs:
           if ($res.FailedCount -gt 0) { Write-Error "Pester 失败 $($res.FailedCount) 项"; exit 1 }
           Write-Host "Pester 通过：$($res.PassedCount) 项"
 
+      - name: Run Python tests (WebUI / MCP)
+        shell: pwsh
+        run: |
+          python -m pip install --quiet pytest
+          python -m pytest webui/test_mcp_tools.py -v
+
       - name: Run PSScriptAnalyzer (report only, non-blocking)
         shell: pwsh
         run: |

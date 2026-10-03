@@ -290,6 +290,56 @@ def _register_mcp_tools(server):
         return run_ps("10_block_update.ps1", "-Action", str(action))
 
     @server.tool()
+    def guided_plan(name: str = "", skip_clean_scan: bool = False) -> dict:
+        """一键向导：体检后给出推荐组合包、只读步骤清单、需人工确认项与前后对比基线。"""
+        args = ["-Action", "plan"]
+        if name:
+            args += ["-Profile", str(name)]
+        if skip_clean_scan:
+            args.append("-SkipCleanScan")
+        return run_ps("17_guided.ps1", *args, timeout=1800)
+
+    @server.tool()
+    def guided_apply(name: str = "", dry_run: bool = False, force: bool = False,
+                     skip_clean_scan: bool = False,
+                     create_restore_point: bool = False) -> dict:
+        """按推荐（或指定）组合包执行一键向导；默认跳过高风险/需人工确认步骤，每域执行前自动备份。"""
+        args = ["-Action", "apply"]
+        if name:
+            args += ["-Profile", str(name)]
+        if dry_run:
+            args.append("-DryRun")
+        if force:
+            args.append("-Force")
+        if skip_clean_scan:
+            args.append("-SkipCleanScan")
+        args += ["-CreateRestorePoint", str(bool(create_restore_point)).lower()]
+        return run_ps("17_guided.ps1", *args, timeout=1800)
+
+    @server.tool()
+    def guided_rerun(before: str = "") -> dict:
+        """向导执行后复检，并与 before（体检报告 JSON）做前后对比。"""
+        args = ["-Action", "rerun"]
+        if before:
+            args += ["-FromB64", base64.b64encode(str(before).encode("utf-8")).decode("ascii")]
+        return run_ps("17_guided.ps1", *args, timeout=1800)
+
+    @server.tool()
+    def guided_export(before: str = "", after: str = "", fmt: str = "html") -> dict:
+        """把向导前后两份体检报告导出为可分享报告。fmt: html / markdown。"""
+        args = ["-Action", "export"]
+        if before:
+            args += ["-BeforeB64", base64.b64encode(str(before).encode("utf-8")).decode("ascii")]
+        if after:
+            args += ["-AfterB64", base64.b64encode(str(after).encode("utf-8")).decode("ascii")]
+        if fmt not in ("html", "markdown"):
+            fmt = "html"
+        args += ["-Format", fmt]
+        return run_ps("17_guided.ps1", *args, timeout=600)
+        """屏蔽 Windows 更新（如 24H2）。action: status / apply / restore。"""
+        return run_ps("10_block_update.ps1", "-Action", str(action))
+
+    @server.tool()
     def update_manual(action: str = "status") -> dict:
         """手动更新模式（不自动下载/安装/重启）。action: status / apply / restore。"""
         return run_ps("11_manual_mode.ps1", "-Action", str(action))
