@@ -452,11 +452,13 @@ $sepLine.Size = New-Object System.Drawing.Size(180, 2)
 $sepLine.BackColor = $Theme.BgPanel
 $sidePanel.Controls.Add($sepLine)
 
-# 侧边栏按钮（高度46，间距4，共10个按钮=500px，从Y=88到Y=588）
+# 侧边栏按钮（高度40，间距3；13 个按钮共 559px，从 Y=88 到 Y=644）
+# 几何值收紧是为了让第 13 项「关于」也留在 720px 窗口首屏内（sidePanel.AutoScrollMinSize=680），
+# 否则加「一键向导」后最后一项要滚动才看得见。
 $script:NavButtons = @{}
 $btnY = 88
-$btnH = 46
-$btnGap = 4
+$btnH = 40
+$btnGap = 3
 $navItems = @(
     @{Key="Dashboard"; Text="系统仪表盘"}
     @{Key="Guided";    Text="一键向导"}
