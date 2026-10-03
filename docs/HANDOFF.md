@@ -540,6 +540,15 @@ v3.10.0（667,648 字节，构建于 PR #26）。`Start.bat` 的 `[E] EXE 程序
    上一轮的 `Guided.ps1` 都踩过）。现在由 `Describe 'GUI guided wizard page'` 的两条白名单用例守住。
 3. 版本号单一来源是 `config/optimization.json`（当前 3.11.0），`Build-EXE.ps1` 会读它生成四段式 EXE 文件版本。
 
+### 4.3 WebUI 路由盘点：46 条路由与前端调用的对应关系（2026-10-03 续）
+
+盘点 webui/app.py 的 46 条 /api/* 路由与 index.html 实际发起的 42 处调用，结论：
+
+- 前端调用的路由全部存在，无 404 风险；也无同一路径加方法组合的重复注册。
+- 4 条路由前端不调用，但都不是死代码：/api/health/plan、/api/health/tips、/api/health/trend 的数据其实已包含在 /api/health 的返回里（15_health.ps1 -Action scan 同时输出 tips 与 trend，前端正是从 d.trend 渲染 sparkline），独立路由主要服务 MCP 工具；/api/stream 是 SSE，走 api() 之外的通道。
+
+维护提示：不要因为前端没调这三条就把前端改去调 /api/health/trend，那会多跑一次 PowerShell 拿同样数据。
+
 ---
 
 ---
