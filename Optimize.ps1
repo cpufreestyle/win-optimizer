@@ -218,6 +218,14 @@ function Show-OptimizePlanPreview {
 # 只读地渲染一份向导计划（供菜单 [0] 与 -GuidedPlan 共用）
 function Show-GuidedPlanPreview {
     param([object]$Preview, [switch]$WithHint)
+   if ($Preview -and $Preview.onboarding) {
+       Write-Host ""
+       Write-Host "  [$($Preview.onboarding.title)]" -ForegroundColor Yellow
+       foreach ($line in @($Preview.onboarding.lines)) {
+           Write-Host "    - $line" -ForegroundColor DarkGray
+       }
+       Write-Host ""
+   }
     foreach ($line in @(Format-GuidedPlan -Plan $Preview)) {
         Write-Host $line -ForegroundColor DarkGray
     }
@@ -245,6 +253,10 @@ function Invoke-GuidedOptimization {
     Write-Host ""
     Show-GuidedPlanPreview -Preview $guidedPreview
     Write-Host ""
+   # 说明只讲一次：展示完就落状态，用户这次取消也不会再被追问
+   if ($guidedPreview.onboarding) {
+       $null = Set-OnboardingHintShown
+   }
 
     if (-not $guidedPreview.profile.matched) {
         Write-Host "  推荐组合包不可用，请改用菜单 [16] 手动选择。" -ForegroundColor Red

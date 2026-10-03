@@ -607,8 +607,11 @@ try/catch 里，任何一组抛异常都会走到 catch 分支，整页退回 ok
   cd <项目根>
   Invoke-Pester -Path ./tests/Optimize.Core.Tests.ps1
   ```
-  当前 **250 个用例**（2026-10-03 实测 250 通过 / 0 失败；含各域「编号稳定 / 必须备份 / 行为契约」断言，其中 6 条是 CompactOS 契约用例、
-  1 条用 Mock 覆盖「无活动网卡」分支、15 条覆盖一键向导 lib 逻辑、9 条覆盖 GUI 一键向导页（含导出按钮与导出动作）。
+  当前 **256 个用例**（2026-10-03 实测 256 通过 / 0 失败；含各域「编号稳定 / 必须备份 / 行为契约」断言，其中 6 条是 CompactOS 契约用例、
+  1 条用 Mock 覆盖「无活动网卡」分支、15 条覆盖一键向导 lib 逻辑、9 条覆盖 GUI 一键向导页（含导出按钮与导出动作）、
+  6 条覆盖首次运行一次性说明（onboarding）的状态读写与降级行为）。
+  向导首次进入时 lib 会附带 `onboarding` 段（解释管理员权限 / 重启 / 可回滚），状态记在
+  `%LOCALAPPDATA%\PC-Optimizer-7thGen\onboarding.json`；CLI / GUI / WebUI 任一端点掉即落状态。
   > ⚠️ **分离进程跑 Pester 的两个坑**（2026-10-03 实测踩到）：
   > 1. 用 `Start-Process -WindowStyle Hidden` 起子进程时，`$env:PSModulePath` 有时会丢掉系统模块路径，
   >    导致 `New-Guid` / `Get-AuthenticodeSignature` 找不到，**成片假失败（本次 75 条）**；

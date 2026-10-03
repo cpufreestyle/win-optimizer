@@ -1197,6 +1197,17 @@ async function scanGuided(){
   log('体检完成：'+d.score+' 分（'+d.grade+'），推荐组合包：'+(d.profile&&d.profile.title||''));
 }
 
+async function dismissGuidedOnboarding(){
+  try {
+    await api('/api/guided/onboarding-dismiss',{method:'POST',body:{}});
+    if(guidedPlan){ guidedPlan.onboarding = null; }
+    renderGuidedPlan(guidedPlan);
+    log('已收起首次说明，之后不再显示');
+  } catch(e){
+    log('操作失败：'+e,'err');
+  }
+}
+
 function renderGuidedPlan(d){
   const p = d.profile || {};
   const s = d.summary || {};
@@ -1205,6 +1216,18 @@ function renderGuidedPlan(d){
   const rt = r=>r==='high'?'高危':(r==='medium'?'中危':(r==='low'?'低危':'无风险'));
   const sev = v=>v==='High'?'err':(v==='Medium'?'warn':'ok');
   let h = '';
+  if(d.onboarding){
+    const ob = d.onboarding;
+    const items = (ob.lines||[]).map(x=>'<li>'+esc(x)+'</li>').join('');
+    h += '<div class="card" style="border-left:3px solid #f0a020;margin-bottom:12px">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:center">';
+    h += '<b>' + esc(ob.title||'第一次用？三件事先说清楚') + '</b>';
+    h += btn('知道了','ghost',dismissGuidedOnboarding);
+    h += '</div>';
+    h += '<ul class="muted" style="margin:6px 0 0;padding-left:18px">' + items + '</ul>';
+    h += '</div>';
+  }
+  h += `<div class="grid">
   h += `<div class="grid">
     <div class="stat"><div class="k">体检分</div><div class="v">${esc(d.score)} 分</div>
       <div class="muted" style="margin-top:4px">${esc(d.grade||'')}${d.beforeScore!=null?(' · 上次 '+esc(d.beforeScore)+' 分'):''}</div></div>

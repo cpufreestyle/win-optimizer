@@ -865,6 +865,12 @@ def api_guided_export():
     return jsonify(run_ps("17_guided.ps1", *args, timeout=600))
 
 
+@app.route("/api/guided/onboarding-dismiss", methods=["POST"])
+def api_guided_onboarding_dismiss():
+    """用户点掉首次说明后落状态，之后 plan 不再返回 onboarding 段。"""
+    return jsonify(run_ps("17_guided.ps1", "-Action", "dismiss_onboarding", timeout=120))
+
+
 def start_mcp_background(port: int = 5001):
     """在后台线程启动 MCP (WebMCP) SSE server，供 AI 客户端调用优化功能。
 
