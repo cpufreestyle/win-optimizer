@@ -45,7 +45,8 @@
 > `Get-GuidedNavTarget`，每条 `manual` 附 `menu` / `navGui` / `navWeb`；GUI 不再提示「主菜单对应编号」
 > （GUI 没有编号菜单），WebUI 表头「菜单」改为「去哪处理」并给「去该页面」按钮。
 > 顺带修掉 WebUI 向导页一处重复 `<div class="grid">`，并把 `disk.space` 从 `[2]` 修正为 `[7] 磁盘优化`、
-> `memory.low` 从兜底 `[16]` 修正为 `[15] 一键体检`。Pester **268 / 268**（新增 8 个导航映射用例）。
+> `memory.low` 从兜底 `[16]` 修正为 `[15] 一键体检`。版本号随之从 3.11.0 推到 **3.11.1**，
+> `config/optimization.json`（单一来源）与 `Start.bat` 的 `APP_VER` 同步，Pester **268 / 268**（新增 8 个导航映射用例）。
 
 - **UI 苹果风改动已合并入 `main`**（PR #26 / merge commit `6724f7b`：浅色主题 + 5 处布局撞车修复 + EXE 漏页 + 概览容错，见 §3.15 / §3.16 / §3.17 / §3.18 / §3.19）：
   `Build-EXE.ps1`、`OptimizeGUI.ps1`、`PC-Optimizer.exe`、`README.md`、`.gitignore`、`docs/HANDOFF.md`、
@@ -545,7 +546,7 @@ v3.10.0（667,648 字节，构建于 PR #26）。`Start.bat` 的 `[E] EXE 程序
    否则 `Start.bat` 的 `[E]` 分支会把用户导向旧界面。
 2. `Build-EXE.ps1` 的 `$pageFiles` 是白名单，新增页面文件忘了加就会漏页（§3.18 的 `Health.ps1`、
    上一轮的 `Guided.ps1` 都踩过）。现在由 `Describe 'GUI guided wizard page'` 的两条白名单用例守住。
-3. 版本号单一来源是 `config/optimization.json`（当前 3.11.0），`Build-EXE.ps1` 会读它生成四段式 EXE 文件版本。
+3. 版本号单一来源是 `config/optimization.json`（当前 3.11.1），`Build-EXE.ps1` 会读它生成四段式 EXE 文件版本。
 
 ### 4.3 WebUI 路由盘点：46 条路由与前端调用的对应关系（2026-10-03 续）
 
