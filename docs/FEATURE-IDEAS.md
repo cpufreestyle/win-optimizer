@@ -341,7 +341,8 @@ CLI 主菜单加 `[0] 一键向导`，`-Guided` 直达、`-GuidedPlan` 只读预
 **下一步（未做）**：
 - ~~GUI 仪表盘与 WebUI 增加「一键向导」入口（同一份 `Get-GuidedPlan` JSON，前端只渲染）。~~
   WebUI 与 GUI 均已落地：WebUI 是 `webui/ps/17_guided.ps1` + `/api/guided/{plan,apply,rerun}` + 侧栏「🧭 一键向导」页；
-  GUI 是 `gui/pages/Dashboard.ps1` 的「一键向导（推荐）」按钮（`Show-GuidedWizard`：体检 → 推荐 → 确认 → 执行 → 前后对比）。
+  GUI 是专用向导页 `gui/pages/Guided.ps1` + `gui/pages/GuidedActions.ps1`（侧边栏「一键向导」/ 仪表盘按钮进入：
+  体检分卡片、推荐理由、步骤表、需人工项、执行与前后对比同页展示）。
 - 向导完成后可选「一键导出对比报告」（复用 P1-2 的 `Export-HealthReport`），把「优化成效」变成可分享产物。
 - 首次运行时用一次性提示解释「为什么需要管理员 / 为什么建议重启」，减少中途放弃。
 

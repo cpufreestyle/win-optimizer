@@ -459,6 +459,7 @@ $btnH = 46
 $btnGap = 4
 $navItems = @(
     @{Key="Dashboard"; Text="系统仪表盘"}
+    @{Key="Guided";    Text="一键向导"}
     @{Key="Health";    Text="系统体检"}
     @{Key="Clean";     Text="垃圾清理"}
     @{Key="Services";  Text="服务优化"}
@@ -595,7 +596,8 @@ $pageLoader = @(
     "gui/pages/Dashboard.ps1", "gui/pages/Clean.ps1", "gui/pages/Services.ps1",
     "gui/pages/Startup.ps1", "gui/pages/Visual.ps1", "gui/pages/Power.ps1",
     "gui/pages/Disk.ps1", "gui/pages/Network.ps1", "gui/pages/Backup.ps1",
-    "gui/pages/Update.ps1", "gui/pages/About.ps1", "gui/pages/Health.ps1", "gui/UpdateCheck.ps1"
+    "gui/pages/Update.ps1", "gui/pages/About.ps1", "gui/pages/Health.ps1", "gui/UpdateCheck.ps1",
+    "gui/pages/Guided.ps1", "gui/pages/GuidedActions.ps1"
 )
 foreach ($pf in $pageLoader) {
     $pfPath = Join-Path $script:ProjectRoot $pf
@@ -700,6 +702,13 @@ $pageHealth = New-Page "Health"
 $script:Pages["Health"] = $pageHealth
 
 
+# ============================================================
+#  页面 12: 一键向导
+# ============================================================
+$pageGuided = New-Page "Guided"
+$script:Pages["Guided"] = $pageGuided
+
+
 
 # ============================================================
 #  日志面板
@@ -766,6 +775,7 @@ Build-BackupPage
 Build-UpdatePage
 Build-AboutPage
 Build-HealthPage
+Build-GuidedPage
 
 # 将所有页面添加到页面宿主（pagesHost 位于标题栏之下、日志之上，互不遮挡）
 foreach ($key in $script:Pages.Keys) {
@@ -778,6 +788,7 @@ foreach ($key in $script:Pages.Keys) {
 # ============================================================
 $script:HeaderTitles = @{
     "Dashboard" = "系统仪表盘"
+    "Guided"    = "一键向导"
     "Health"    = "系统体检"
     "Clean"     = "垃圾清理"
     "Services"  = "服务优化"
