@@ -3200,3 +3200,164 @@ Describe 'Optimize.Core guided one-click plan (shared by CLI/GUI/WebUI)' {
         @($g.steps).Count | Should -BeGreaterThan 0
     }
 }
+Describe 'GUI guided wizard page (shared by sidebar and dashboard entry)' {
+    BeforeAll {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
+        $root = if (Test-Path (Join-Path $PWD.Path 'gui\pages\Guided.ps1')) { $PWD.Path } else { Split-Path $PSScriptRoot -Parent }
+        $script:Theme = @{
+            Accent = [System.Drawing.ColorTranslator]::FromHtml('#0A84FF')
+            AccentDark = [System.Drawing.ColorTranslator]::FromHtml('#0060DF')
+            AccentHover = [System.Drawing.ColorTranslator]::FromHtml('#0060DF')
+            Success = [System.Drawing.ColorTranslator]::FromHtml('#30D158')
+            Warning = [System.Drawing.ColorTranslator]::FromHtml('#FF9F0A')
+            Error = [System.Drawing.ColorTranslator]::FromHtml('#FF453A')
+            BgCard = [System.Drawing.ColorTranslator]::FromHtml('#1C1C1E')
+            BgDark = [System.Drawing.ColorTranslator]::FromHtml('#000000')
+            BgPanel = [System.Drawing.ColorTranslator]::FromHtml('#2C2C2E')
+            SideHover = [System.Drawing.ColorTranslator]::FromHtml('#2C2C2E')
+            ButtonText = [System.Drawing.ColorTranslator]::FromHtml('#FFFFFF')
+            TextBright = [System.Drawing.ColorTranslator]::FromHtml('#FFFFFF')
+            TextMain = [System.Drawing.ColorTranslator]::FromHtml('#EBEBF5')
+            TextDim = [System.Drawing.ColorTranslator]::FromHtml('#98989D')
+        }
+        $script:Fonts = @{
+            Title = (New-Object System.Drawing.Font('Microsoft YaHei UI', 20, [System.Drawing.FontStyle]::Bold))
+            Header = (New-Object System.Drawing.Font('Microsoft YaHei UI', 14, [System.Drawing.FontStyle]::Bold))
+            Sub = (New-Object System.Drawing.Font('Microsoft YaHei UI', 11))
+            Body = (New-Object System.Drawing.Font('Microsoft YaHei UI', 10))
+            Small = (New-Object System.Drawing.Font('Microsoft YaHei UI', 9))
+            Mono = (New-Object System.Drawing.Font('Consolas', 9))
+        }
+        function New-Label {
+            param($t, $x, $y, $w, $h, $f, $c)
+            $l = New-Object System.Windows.Forms.Label
+            $l.Text = $t
+            $l.Location = New-Object System.Drawing.Point($x, $y)
+            $l.Size = New-Object System.Drawing.Size($w, $h)
+            if ($c) { $l.ForeColor = $c }
+            return $l
+        }
+        function New-Button {
+            param($t, $x, $y, $w = 160, $h = 40, $c = $null, $fs = 10)
+            $b = New-Object System.Windows.Forms.Button
+            $b.Text = $t
+            $b.Location = New-Object System.Drawing.Point($x, $y)
+            $b.Size = New-Object System.Drawing.Size($w, $h)
+            $b.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+            $b.FlatAppearance.BorderSize = 0
+            if ($c) { $b.BackColor = $c; $b.ForeColor = $Theme.ButtonText }
+            return $b
+        }
+        function Write-Log { param($m, $l = 'INFO') }
+        function Invoke-UIRefresh { }
+        $script:Pages = @{}
+        $script:NavButtons = @{}
+        $script:HeaderTitles = @{ Guided = '一键向导' }
+        $script:HeaderLabel = New-Label '标题' 0 0 400 28 $Fonts.Sub $Theme.TextBright
+        $script:ProjectRoot = $root
+        $script:GuidedPlan = $null
+        $script:GuidedBefore = $null
+        $script:GuidedBusy = $false
+        $script:GuidedBackBtn = $null
+        $script:CurrentPage = $null
+        . (Join-Path $root 'lib\Optimize.Core.ps1')
+        . (Join-Path $root 'gui\pages\Dashboard.ps1')
+        . (Join-Path $root 'gui\pages\Guided.ps1')
+        . (Join-Path $root 'gui\pages\GuidedActions.ps1')
+        $script:GuidedPage = New-Object System.Windows.Forms.Panel
+        $script:GuidedPage.AutoScroll = $true
+        $script:GuidedPage.Visible = $false
+        $script:Pages['Guided'] = $script:GuidedPage
+        function New-FakePlan {
+            param([int]$Score = 66, [string]$Grade = '建议优化')
+            $step = [PSCustomObject]@{ action = '禁用服务'; target = 'DiagTrack'; auto = $true; risk = 'low' }
+            $manual = [PSCustomObject]@{ id = 'memory.low'; action = '加内存条'; impact = '开机更慢' }
+            return [PSCustomObject]@{
+                ok = $true; score = $Score; grade = $Grade
+                powerPlan = '高性能模式'; dns = 'Cloudflare'
+                steps = @($step, $step); manual = @($manual)
+                report = [PSCustomObject]@{ score = $Score }
+                profile = [PSCustomObject]@{ name = 'old_balanced'; title = '老机均衡'; reason = '体检 66 分'; explicit = $false }
+            }
+        }
+        function Get-Descendants {
+            param($Controls, [type]$Type)
+            $found = @()
+            foreach ($c in @($Controls)) {
+                if ($c -is $Type) { $found += $c }
+                if ($c -and $c.Controls) { $found += (Get-Descendants -Controls $c.Controls -Type $Type) }
+            }
+            return $found
+        }
+    }
+    BeforeEach {
+        $script:GuidedPage.Controls.Clear()
+        $script:GuidedPlan = $null
+        $script:GuidedBefore = $null
+        $script:GuidedBusy = $false
+    }
+    It 'renders the not-yet-scanned state before any health check' {
+        Build-GuidedPage
+        $texts = (@(Get-Descendants -Controls $script:GuidedPage.Controls -Type ([System.Windows.Forms.Label])) | ForEach-Object { $_.Text }) -join ' '
+        $texts | Should -Match '尚未体检'
+        $btns = @(Get-Descendants -Controls $script:GuidedPage.Controls -Type ([System.Windows.Forms.Button]))
+        @($btns | Where-Object { $_.Text -match '开始体检并推荐' }).Count | Should -Be 1
+    }
+    It 'renders score, recommendation and both action buttons once a plan exists' {
+        $script:GuidedPlan = New-FakePlan
+        $script:GuidedBefore = $script:GuidedPlan.report
+        Build-GuidedPage -KeepPlan
+        $texts = (@(Get-Descendants -Controls $script:GuidedPage.Controls -Type ([System.Windows.Forms.Label])) | ForEach-Object { $_.Text }) -join ' '
+        $texts | Should -Match '66'
+        $texts | Should -Match '老机均衡'
+        $script:TxtGuidedInfo.Text | Should -Match '推荐理由'
+        $script:TxtGuidedInfo.Text | Should -Match '高性能模式'
+        $btns = @(Get-Descendants -Controls $script:GuidedPage.Controls -Type ([System.Windows.Forms.Button]))
+        @($btns | Where-Object { $_.Text -match '按方案执行优化' }).Count | Should -Be 1
+        @($btns | Where-Object { $_.Text -match '重新体检' }).Count | Should -Be 1
+    }
+    It 'shows one table row per planned step with a risk column' {
+        $script:GuidedPlan = New-FakePlan
+        $script:GuidedBefore = $script:GuidedPlan.report
+        Build-GuidedPage -KeepPlan
+        $grids = @(Get-Descendants -Controls $script:GuidedPage.Controls -Type ([System.Windows.Forms.DataGridView]))
+        @($grids).Count | Should -Be 1
+        $cols = ($grids[0].Columns | ForEach-Object { $_.HeaderText }) -join '|'
+        $cols | Should -Match '将要做什么'
+        $cols | Should -Match '风险'
+        $grids[0].Rows.Count | Should -Be @($script:GuidedPlan.steps).Count
+    }
+    It 'labels safe steps as safe and high-risk or manual steps as skipped' {
+        Show-GuidedStepRisk ([PSCustomObject]@{ action = 'a'; risk = 'low'; auto = $true }) | Should -Be '安全'
+        Show-GuidedStepRisk ([PSCustomObject]@{ action = 'a'; risk = 'medium'; auto = $true }) | Should -Be '中风险'
+        Show-GuidedStepRisk ([PSCustomObject]@{ action = 'a'; risk = 'high'; auto = $true }) | Should -Be '默认跳过'
+        Show-GuidedStepRisk ([PSCustomObject]@{ action = 'a'; risk = 'low'; auto = $false }) | Should -Be '默认跳过'
+        Show-GuidedStepRisk $null | Should -Be ''
+    }
+    It 'routes the dashboard button to the wizard page and selects it' {
+        $script:NavButtons['Guided'] = New-Button '一键向导' 0 0 200 46 $Theme.Accent
+        $script:Pages['Dashboard'] = New-Object System.Windows.Forms.Panel
+        $script:Pages['Dashboard'].Visible = $true
+        $script:GuidedPage.Visible = $false
+        { Show-GuidedPageFromDashboard } | Should -Not -Throw
+        $script:GuidedPage.Visible | Should -BeTrue
+        $script:Pages['Dashboard'].Visible | Should -BeFalse
+        $script:CurrentPage | Should -Be 'Guided'
+        $script:HeaderLabel.Text | Should -Be '一键向导'
+    }
+    It 'keeps the wizard page listed in the EXE build whitelist' {
+        $exe = Get-Content (Join-Path $root 'Build-EXE.ps1') -Raw
+        $exe | Should -Not -BeNullOrEmpty
+        $exe | Should -Match 'pages/Guided.ps1'
+        $exe | Should -Match 'pages/GuidedActions.ps1'
+    }
+    It 'keeps the wizard page in the GUI dot-source loader and nav entry' {
+        $gui = Get-Content (Join-Path $root 'OptimizeGUI.ps1') -Raw
+        $gui | Should -Not -BeNullOrEmpty
+        $gui | Should -Match 'gui/pages/Guided.ps1'
+        $gui | Should -Match 'gui/pages/GuidedActions.ps1'
+        $gui | Should -Match 'Key="Guided"'
+        $gui | Should -Match '一键向导'
+    }
+}
