@@ -3362,6 +3362,18 @@ Describe 'GUI guided wizard page (shared by sidebar and dashboard entry)' {
         $gui | Should -Match 'Key="Guided"'
         $gui | Should -Match '一键向导'
     }
+    It 'keeps every sidebar nav item inside the first screen' {
+        # 加「一键向导」后侧边栏有 13 项；几何值若放松，最后一项会被推到滚动区外
+        $gui = Get-Content (Join-Path $root 'OptimizeGUI.ps1') -Raw
+        $navCount = ([regex]::Matches($gui, '@\{Key="[A-Za-z]+";')).Count
+        $navCount | Should -BeGreaterThan 11
+        $h  = [int]([regex]::Match($gui, '\$btnH = (\d+)').Groups[1].Value)
+        $g  = [int]([regex]::Match($gui, '\$btnGap = (\d+)').Groups[1].Value)
+        $y0 = [int]([regex]::Match($gui, '\$btnY = (\d+)').Groups[1].Value)
+        $min = [int]([regex]::Match($gui, 'AutoScrollMinSize = New-Object System\.Drawing\.Size\(0, (\d+)\)').Groups[1].Value)
+        $lastBottom = $y0 + ($navCount * ($h + $g)) - $g
+        $lastBottom | Should -BeLessOrEqual $min
+    }
     It 'offers the export button only after a real before/after pair exists' {
         # 只有体检没执行：不应出现导出入口
         $script:GuidedPlan = New-FakePlan
