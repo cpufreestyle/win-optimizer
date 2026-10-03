@@ -323,6 +323,39 @@ WebUI `-Action tips` 带出 `vetoed`，前端在建议表下方列出被保护�
 
 ## P5（降低学习成本 / 上手成本，v3.11）
 
+### P5-2 向导「需人工确认」清单的按端导航 —— 已实现（2026-10-04）
+
+**痛点**：一键向导会把组合包覆盖不到的问题列成「也可单独处理」，但每条只带 **CLI 主菜单编号**
+（`[3]` / `[16]`）。GUI 侧边栏与 WebUI 侧栏都没有编号菜单，新手在这两端看到 `[3]` 只会更困惑——
+而向导的初衷正是「不用看懂任何东西」。诊断证据：
+- `gui/pages/Guided.ps1` 原文案是「（主菜单对应编号可手动处理）」，GUI 里根本不存在「主菜单编号」；
+- `Get-GuidedPlan` 的 `$menuHint` 按 `actionKey` 映射，纯建议域（`memory.low` / `disk.space`）
+  没有 actionKey 命中，只能落到兜底的 `[16] 优化组合包`——内存不足被指向组合包，越看越糊涂；
+- `disk.space` 原来被指向 `[2] 垃圾清理`，而磁盘空间问题的正确去处是 `[7] 磁盘优化`。
+
+**方案**：lib 新增 `Get-GuidedNavMap` / `Get-GuidedNavTarget [-End Cli|Gui|Web]`，
+在**三端唯一数据源 lib** 里集中维护「域 -> 三端导航目标」，`Get-GuidedPlan` 给每条 `manual`
+附上 `menu`（CLI）/ `navGui`（GUI 页面键）/ `navWeb`（WebUI data-page）三个字段，各端只渲染自己那一份。
+
+**落点**：
+- lib：`Get-GuidedNavMap`（9 个域：services / startup / visual / power / disk / network / clean /
+  profiles / memory）、`Get-GuidedNavTarget`（未知键返回空串，非法端名抛 `ParameterBindingValidationException`）；
+  `Get-GuidedPlan` 删除 `$menuHint` 并改为按 `domain` 查映射，`manual` 项新增 `navGui` / `navWeb`。
+- CLI：`Format-GuidedPlan` 继续用 `menu`，行为不变（编号仍然真实存在）。
+- GUI：`gui/pages/Guided.ps1` 新增页面键 -> 中文名小表，把「（主菜单对应编号可手动处理）」
+  换成「→ 请到左侧『服务优化』页面手动处理」；文本框 70px 加到 104px 以容纳更长的文案。
+- WebUI：`webui/templates/index.html` 的 manual 表头「菜单」改为「去哪处理」，单元格改为
+  `btn('去该页面','ghost',()=>goPage(navWeb))`；顺带修掉一处重复的 `<div class="grid">`。
+
+**安全与红线**：纯展示层映射，零写操作；不新增任何系统操作面；Win7 红线未触及
+（只动 lib 的纯函数与三端渲染）。
+
+**测试**：新增 8 个 Pester 用例（三端键齐全 / CLI 编号与主菜单一致 / GUI 与 WebUI 不泄漏
+编号 / 未知键返回空串 / 非法端名抛错 / memory 纯建议域也有去处 / `manual` 三字段齐备 /
+`startup.many` 精确指向 Startup+startup），全量 **268 / 268** 通过；真机验证 WebUI
+`/api/guided/plan` 返回 `navGui=Disk navWeb=disk`，前端渲染出「去哪处理」表头与「去该页面」按钮，
+且 `class="grid"` 计数从 2 回到 1。
+
 ### P5-1 一键向导（体检 → 推荐 → 预览 → 执行 → 前后对比）—— 已实现（2026-10-03）
 
 **痛点**：功能已经够多（16 个菜单项 + 4 个组合包 + 3 套前端），但**默认路径上缺少一个「不用看懂任何东西」的入口**。
@@ -362,7 +395,7 @@ CLI 主菜单加 `[0] 一键向导`，`-Guided` 直达、`-GuidedPlan` 只读预
 4. P0-3（组合包，编排面最大）
 5. P1-1、P1-2、P1-3（已实现）
 6. ✅ P2 三项全部落地：智能降级建议、MCP `optimize_plan` dry-run、开机耗时基线 bench（细则见上）。
-7. ✅ P5-1 一键向导落地（v3.11.0）；P5 剩余项按社区反馈排期。
+7. ✅ P5-1 一键向导落地（v3.11.0）；✅ P5-2 向导按端导航落地（2026-10-04）；P5 剩余项按社区反馈排期。
 
 每步都走「集成分支 + PR」流程（见 HANDOFF §2），PR 前确认：Pester 151+ 全绿、
 `*.ps1` 全 BOM、`config/optimization.schema.json` 同步更新、GUI 改动真机点验。

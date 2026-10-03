@@ -41,6 +41,12 @@
  仪表盘按钮均可进入），体检 → 推荐 → 步骤表 → 执行 → 前后对比在同一页内完成；
  至此 CLI / `Start.bat` / WebUI / GUI 四端入口齐全。
 
+> ➕ **2026-10-04 续**：向导「需人工确认」清单改为按端导航（P5-2）。lib 新增 `Get-GuidedNavMap` /
+> `Get-GuidedNavTarget`，每条 `manual` 附 `menu` / `navGui` / `navWeb`；GUI 不再提示「主菜单对应编号」
+> （GUI 没有编号菜单），WebUI 表头「菜单」改为「去哪处理」并给「去该页面」按钮。
+> 顺带修掉 WebUI 向导页一处重复 `<div class="grid">`，并把 `disk.space` 从 `[2]` 修正为 `[7] 磁盘优化`、
+> `memory.low` 从兜底 `[16]` 修正为 `[15] 一键体检`。Pester **268 / 268**（新增 8 个导航映射用例）。
+
 - **UI 苹果风改动已合并入 `main`**（PR #26 / merge commit `6724f7b`：浅色主题 + 5 处布局撞车修复 + EXE 漏页 + 概览容错，见 §3.15 / §3.16 / §3.17 / §3.18 / §3.19）：
   `Build-EXE.ps1`、`OptimizeGUI.ps1`、`PC-Optimizer.exe`、`README.md`、`.gitignore`、`docs/HANDOFF.md`、
   `gui/pages/{About,Backup,Clean,Dashboard,Health,Services,Startup}.ps1`、`webui/ps/01_system_info.ps1`、`webui/templates/index.html`。
@@ -649,9 +655,10 @@ v3.10.0（667,648 字节，构建于 PR #26）。`Start.bat` 的 `[E] EXE 程序
   cd <项目根>
   Invoke-Pester -Path ./tests/Optimize.Core.Tests.ps1
   ```
-  当前 **260 个用例**（2026-10-04 实测 260 通过 / 0 失败；含各域「编号稳定 / 必须备份 / 行为契约」断言，其中 6 条是 CompactOS 契约用例、
+  当前 **268 个用例**（2026-10-04 实测 268 通过 / 0 失败；含各域「编号稳定 / 必须备份 / 行为契约」断言，其中 6 条是 CompactOS 契约用例、
   1 条用 Mock 覆盖「无活动网卡」分支、15 条覆盖一键向导 lib 逻辑、9 条覆盖 GUI 一键向导页（含导出按钮与导出动作）、
-  6 条覆盖首次运行一次性说明（onboarding）的状态读写与降级行为）。
+  6 条覆盖首次运行一次性说明（onboarding）的状态读写与降级行为、
+  8 条覆盖 `Get-GuidedNavMap` / `Get-GuidedNavTarget` 的三端导航映射）。
   向导首次进入时 lib 会附带 `onboarding` 段（解释管理员权限 / 重启 / 可回滚），状态记在
   `%LOCALAPPDATA%\PC-Optimizer-7thGen\onboarding.json`；CLI / GUI / WebUI 任一端点掉即落状态。
   > ⚠️ **分离进程跑 Pester 的两个坑**（2026-10-03 实测踩到）：

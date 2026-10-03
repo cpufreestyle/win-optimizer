@@ -142,6 +142,20 @@ function Build-GuidedPage {
     $page.Controls.Add($dgv)
     $y += 160
 
+    # 侧边栏页面 Key -> 显示名（与 OptimizeGUI.ps1 的 $navItems 一致，用于把「去哪处理」说清楚）
+    $script:GuidedNavLabels = @{
+        'Services'  = '服务优化'
+        'Startup'   = '启动项'
+        'Visual'    = '视觉效果'
+        'Power'     = '电源计划'
+        'Disk'      = '磁盘优化'
+        'Network'   = '网络优化'
+        'Clean'     = '垃圾清理'
+        'Dashboard' = '优化组合包'
+        'Backup'    = '备份恢复'
+        'Health'    = '系统体检'
+    }
+
     # --- 需人工确认项 ---
     $manual = @()
     if ($KeepPlan -and $script:GuidedPlan) { $manual = @($script:GuidedPlan.manual) }
@@ -150,7 +164,7 @@ function Build-GuidedPage {
 
     $txtManual = New-Object System.Windows.Forms.TextBox
     $txtManual.Location = New-Object System.Drawing.Point(20, $y)
-    $txtManual.Size = New-Object System.Drawing.Size(760, 70)
+    $txtManual.Size = New-Object System.Drawing.Size(760, 104)
     $txtManual.Font = $Fonts.Small
     $txtManual.ForeColor = $Theme.TextMain
     $txtManual.BackColor = $Theme.BgCard
@@ -160,14 +174,22 @@ function Build-GuidedPage {
     $txtManual.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
     if ($manual.Count -gt 0) {
         $lines = @()
-        foreach ($m in $manual) { $lines += ("· " + $m.action + "（主菜单对应编号可手动处理）") }
+        # GUI 没有编号菜单，直接告诉用户「去左侧哪个页面」；navGui 来自 lib 的三端映射
+        foreach ($m in $manual) {
+            $where = '备份恢复'
+            if ($m.PSObject.Properties.Name -contains 'navGui' -and $m.navGui) {
+                $k = [string]$m.navGui
+                if ($script:GuidedNavLabels.ContainsKey($k)) { $where = [string]$script:GuidedNavLabels[$k] }
+            }
+            $lines += ('· ' + $m.action + ' → 请到左侧「' + $where + '」页面手动处理')
+        }
         $txtManual.Text = ($lines -join "`r`n")
     } else {
         $txtManual.Text = "没有需要你手动处理的项目。"
     }
     $txtManual.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
     $page.Controls.Add($txtManual)
-    $y += 82
+    $y += 116
 
     # --- 操作按钮 ---
     if ($KeepPlan -and $script:GuidedPlan) {

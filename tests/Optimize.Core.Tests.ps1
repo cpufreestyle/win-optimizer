@@ -3512,3 +3512,104 @@ Describe 'Optimize.Core guided one-click plan (shared by CLI/GUI/WebUI)' {
         Format-RestoreDetails -Details $null -Fallback 'nothing' | Should -Be 'nothing'
     }
 }
+
+Describe 'Optimize.Core guided navigation targets for every front end' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+
+        function New-TestIssue {
+            param([string]$Id, [string]$Severity = 'Medium', [string]$Remediation = '')
+            return [PSCustomObject]@{
+                id = $Id; severity = $Severity; title = "问题 $Id"
+                detail = 'd'; suggestion = 's'; remediation = $Remediation; penalty = 5
+            }
+        }
+
+        function New-TestReport {
+            param($Issues, [int]$Score = 70, [string]$Grade = '一般', $Metrics = $null)
+            if (-not $Metrics) { $Metrics = [PSCustomObject]@{ cleanableMB = 0; startupCount = 0 } }
+            return [PSCustomObject]@{
+                timestamp = '2026-10-03 10:00:00'; host = 'TEST'; version = '3.11.0'
+                score = $Score; grade = $Grade; metrics = $Metrics; bench = $null; issues = @($Issues)
+            }
+        }
+    }
+
+    It 'Get-GuidedNavMap keeps CLI / GUI / Web keys for every domain' {
+        $map = Get-GuidedNavMap
+        # memory 是纯建议域（向导不执行它），但同样必须给出可点击的去处
+        foreach ($k in 'services','startup','visual','power','disk','network','clean','profiles','memory') {
+            $map.ContainsKey($k) | Should -BeTrue
+            [string]$map[$k]['Cli'] | Should -Match '^\[\d+\]$'
+            [string]$map[$k]['Gui'] | Should -Not -BeNullOrEmpty
+            [string]$map[$k]['Web'] | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    It 'CLI targets match the real main-menu numbers' {
+        (Get-GuidedNavTarget -Key 'services' -End 'Cli') | Should -Be '[3]'
+        (Get-GuidedNavTarget -Key 'startup'  -End 'Cli') | Should -Be '[4]'
+        (Get-GuidedNavTarget -Key 'visual'   -End 'Cli') | Should -Be '[5]'
+        (Get-GuidedNavTarget -Key 'power'    -End 'Cli') | Should -Be '[6]'
+        (Get-GuidedNavTarget -Key 'disk'     -End 'Cli') | Should -Be '[7]'
+        (Get-GuidedNavTarget -Key 'network'  -End 'Cli') | Should -Be '[8]'
+        (Get-GuidedNavTarget -Key 'clean'    -End 'Cli') | Should -Be '[2]'
+        (Get-GuidedNavTarget -Key 'profiles' -End 'Cli') | Should -Be '[16]'
+        (Get-GuidedNavTarget -Key 'memory'   -End 'Cli') | Should -Be '[15]'
+    }
+
+    It 'GUI and Web targets never leak CLI menu numbers' {
+        foreach ($k in (Get-GuidedNavMap).Keys) {
+            [string](Get-GuidedNavTarget -Key $k -End 'Gui') | Should -Not -Match '\['
+            [string](Get-GuidedNavTarget -Key $k -End 'Web') | Should -Not -Match '\['
+        }
+    }
+
+    It 'returns an empty string for unknown keys instead of throwing' {
+        Get-GuidedNavTarget -Key 'no-such-domain' -End 'Cli' | Should -Be ''
+        Get-GuidedNavTarget -Key 'no-such-domain' -End 'Gui' | Should -Be ''
+        Get-GuidedNavTarget -Key 'no-such-domain' -End 'Web' | Should -Be ''
+    }
+
+    It 'rejects an unknown end' {
+        { Get-GuidedNavTarget -Key 'services' -End 'Bogus' } | Should -Throw
+    }
+
+    It 'manual entries carry a target per front end' {
+        $rep = New-TestReport -Issues @(
+            (New-TestIssue -Id 'startup.many' -Severity 'Medium' -Remediation 'startup.list')
+        ) -Score 62
+        $g = Get-GuidedPlan -Report $rep -ProfileName 'minimal'
+        @($g.manual).Count | Should -BeGreaterThan 0
+        foreach ($m in @($g.manual)) {
+            $m.PSObject.Properties.Name -contains 'menu'   | Should -BeTrue
+            $m.PSObject.Properties.Name -contains 'navGui' | Should -BeTrue
+            $m.PSObject.Properties.Name -contains 'navWeb' | Should -BeTrue
+            [string]$m.menu | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    It 'startup manual entry points at the startup page on GUI and Web' {
+        $rep = New-TestReport -Issues @(
+            (New-TestIssue -Id 'startup.many' -Severity 'Medium' -Remediation 'startup.list')
+        ) -Score 62
+        $g = Get-GuidedPlan -Report $rep -ProfileName 'minimal'
+        $entry = @($g.manual | Where-Object { $_.id -eq 'startup.many' })[0]
+        [string]$entry.navGui | Should -Be 'Startup'
+        [string]$entry.navWeb | Should -Be 'startup'
+        [string]$entry.menu   | Should -Be '[4]'
+    }
+
+    It 'advice-only entries still resolve to a usable target' {
+        $rep = New-TestReport -Issues @(
+            (New-TestIssue -Id 'memory.low' -Severity 'High')
+            (New-TestIssue -Id 'disk.space' -Severity 'Medium')
+        ) -Score 55
+        $g = Get-GuidedPlan -Report $rep -ProfileName 'minimal'
+        foreach ($m in @($g.manual)) {
+            [string]$m.menu | Should -Not -BeNullOrEmpty
+            [string]$m.navGui | Should -Not -BeNullOrEmpty
+            [string]$m.navWeb | Should -Not -BeNullOrEmpty
+        }
+    }
+}
