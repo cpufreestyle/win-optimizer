@@ -3457,3 +3457,58 @@ Describe 'Optimize.Core guided onboarding hint (one-time explanation)' {
     }
 }
 }
+
+Describe 'Optimize.Core guided one-click plan (shared by CLI/GUI/WebUI)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+
+        function New-TestIssue {
+            param([string]$Id, [string]$Severity = 'Medium', [string]$Remediation = '')
+            return [PSCustomObject]@{
+                id = $Id; severity = $Severity; title = "问题 $Id"
+                detail = 'd'; suggestion = 's'; remediation = $Remediation; penalty = 5
+            }
+        }
+
+        function New-TestReport {
+            param($Issues, [int]$Score = 70, [string]$Grade = '一般', $Metrics = $null)
+            if (-not $Metrics) { $Metrics = [PSCustomObject]@{ cleanableMB = 0; startupCount = 0 } }
+            return [PSCustomObject]@{
+                timestamp = '2026-10-03 10:00:00'; host = 'TEST'; version = '3.11.0'
+                score = $Score; grade = $Grade; metrics = $Metrics; bench = $null; issues = @($Issues)
+            }
+        }
+    }
+
+    It 'maps profile step ids to health remediation codes' {
+        $map = Get-GuidedStepKeyMap
+        $map['services.disable'] | Should -Be 'services'
+        $map['startup.list']     | Should -Be 'startup'
+        $map['power.plan']       | Should -Be 'power'
+        $map['network.dns']      | Should -Be 'network'
+        # 每个 key 都要能对应到一个修复动作码，否则 manual 归类会漏
+        foreach ($k in $map.Keys) { $map[$k] | Should -Not -BeNullOrEmpty }
+    }
+
+    It 'labels risk and severity with Chinese fallbacks' {
+        Format-GuidedRiskLabel 'high'   | Should -Be '高危'
+        Format-GuidedRiskLabel 'medium' | Should -Be '中危'
+        Format-GuidedRiskLabel 'low'    | Should -Be '低危'
+        Format-GuidedRiskLabel ''       | Should -Be '无风险'
+        Format-GuidedRiskLabel 'bogus'  | Should -Be '无风险'
+        Format-GuidedSeverityLabel 'High'   | Should -Be '高'
+        Format-GuidedSeverityLabel 'Medium' | Should -Be '中'
+        Format-GuidedSeverityLabel 'Low'    | Should -Be '低'
+        Format-GuidedSeverityLabel 'Nope'   | Should -Be '-'
+    }
+
+    It 'formats restore details from mixed shapes and falls back when empty' {
+        Format-RestoreDetails -Details @('plain text') | Should -Be 'plain text'
+        Format-RestoreDetails -Details @([PSCustomObject]@{ name = 'svc'; result = 'ok' }) | Should -Be 'svc: ok'
+        Format-RestoreDetails -Details @([PSCustomObject]@{ result = 'only-result' }) | Should -Be 'only-result'
+        Format-RestoreDetails -Details @([PSCustomObject]@{ name = 'only-name' }) | Should -Be 'only-name'
+        Format-RestoreDetails -Details @($null, 'after-null') | Should -Be 'after-null'
+        Format-RestoreDetails -Details @() -Fallback 'nothing' | Should -Be 'nothing'
+        Format-RestoreDetails -Details $null -Fallback 'nothing' | Should -Be 'nothing'
+    }
+}
