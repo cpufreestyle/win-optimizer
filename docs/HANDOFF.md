@@ -37,7 +37,8 @@
 > 🔄 **2026-10-03 续**：v3.11.0「一键向导」已落地（PR 合并中，见 §3.20），
 > 目标是把新手路径从「先读懂 16 个菜单项」压缩成「启动器回车 + 一次 Y 确认」。
 > CLI（`Optimize.ps1 [0]` / `-Guided` / `-GuidedPlan`）、`Start.bat` 默认项与 **WebUI 一键向导页** 均已可用；
-> 仅剩 GUI 仪表盘未接向导入口（纯渲染，lib 无需改动）。
+ **2026-10-03 补齐**：`gui/pages/Dashboard.ps1` 组合包卡片新增「一键向导（推荐）」按钮，
+ 弹窗式走完体检 → 推荐 → 确认 → 执行 → 前后对比；至此 CLI / `Start.bat` / WebUI / GUI 四端入口齐全。
 
 - **UI 苹果风改动已合并入 `main`**（PR #26 / merge commit `6724f7b`：浅色主题 + 5 处布局撞车修复 + EXE 漏页 + 概览容错，见 §3.15 / §3.16 / §3.17 / §3.18 / §3.19）：
   `Build-EXE.ps1`、`OptimizeGUI.ps1`、`PC-Optimizer.exe`、`README.md`、`.gitignore`、`docs/HANDOFF.md`、
@@ -474,7 +475,11 @@ try/catch 里，任何一组抛异常都会走到 catch 分支，整页退回 ok
 （`GET /api/guided/plan`、`POST /api/guided/apply`、`POST /api/guided/rerun`），前端 `index.html` 新增侧栏首位的
 「🧭 一键向导」页（体检分 / 推荐组合包 / 推荐理由 / 待处理项 / 电源计划 / DNS / 步骤表 / 人工项表，支持预演与前后对比）。
 报告 JSON 通过 `-FromB64`（Base64）传递，绕开 `powershell -File` 参数被引号拆分的问题。
-**已知限制**：仅剩 GUI 仪表盘未接向导入口（纯渲染复用 `Get-GuidedPlan` JSON，lib 无需改动）；WebUI 概览容错见 §3.19。
+
+**GUI 亦已接向导**：`gui/pages/Dashboard.ps1` 的组合包卡片新增「一键向导（推荐）」按钮，
+点击后弹窗式完成体检 → 展示推荐与步骤 → 用户确认一次 → 执行 → 复检并弹前后得分对比；
+数据与执行仍全部走 lib 的 `Get-GuidedPlan` / `Invoke-Profile` / `Compare-HealthReports`，未新增写操作路径。
+**已知限制**：GUI 的向导提示是弹窗形式（`MessageBox`），不如 WebUI 的步骤表直观，可后续升级为专用向导页（纯渲染，lib 无需改动）；WebUI 概览容错见 §3.19。
 
 
 ## 4. 三端文件地图（按域）
@@ -484,6 +489,7 @@ try/catch 里，任何一组抛异常都会走到 catch 分支，整页退回 ok
 | 域 | CLI | GUI 页面 | WebUI ps | 共享 lib |
 |----|-----|----------|----------|----------|
 | 系统信息 / 仪表盘 | 01-SystemInfo.ps1 | Dashboard.ps1 | 01_system_info.ps1 | `Get-SystemInfo` 等 |
+| 一键向导 | `Optimize.ps1 [0]` / `-Guided` | Dashboard.ps1（按钮） | 17_guided.ps1 | `Get-GuidedPlan` / `Invoke-Profile` / `Compare-HealthReports` |
 | 临时文件清理 | 02-CleanTemp.ps1 | Clean.ps1 | 02_clean.ps1 | `Get-CleanTargets`/`Get-FolderSize` |
 | 服务优化 | 03-DisableServices.ps1 | Services.ps1 | 03_services.ps1 | `Get-ServiceList`/`Set-ServiceMode` |
 | 启动项 | 04-StartupOptimize.ps1 | Startup.ps1 | 04_startup.ps1 | `Get-StartupItems` 等 |
@@ -658,4 +664,4 @@ try/catch 里，任何一组抛异常都会走到 catch 分支，整页退回 ok
    「一键优化组合包」（P0-3）、「优化回滚向导」（P0-4）、「定时体检 + 趋势报告」（P1-1）均已落地（见 §3.4、§3.5、§3.6）。
 7. ✅ v3.11.0 一键向导（P5-1）已落地：CLI `[0]` / `-Guided` / `-GuidedPlan` + `Start.bat` 默认项
    + WebUI「一键向导」页（`17_guided.ps1` + `/api/guided/{plan,apply,rerun}`，见 §3.20）。
-   未做且优先级最高的收尾：把同一份 `Get-GuidedPlan` 接到 GUI 仪表盘（纯渲染，lib 无需改动）。
+   未做且优先级最高的收尾：GUI 的弹窗式向导可升级为专用向导页（纯渲染，`Get-GuidedPlan` / `Invoke-Profile` 无需改动）。
