@@ -115,6 +115,7 @@
 <div class="layout">
   <div class="sidebar">
     <div class="brand">PC-Optimizer<br><span style="font-size:11px;font-weight:500;letter-spacing:.01em;color:var(--dim)">7thGen · WebUI</span></div>
+    <div class="nav-item" data-page="guided">🧭 一键向导</div>
     <div class="nav-item active" data-page="overview">📊 系统概览</div>
     <div class="nav-item" data-page="health">🩺 系统体检</div>
     <div class="nav-item" data-page="clean">🧹 垃圾清理</div>
@@ -175,6 +176,13 @@ function bindBtns(root){
 }
 function badge(text,type='info'){ return `<span class="badge ${type}">${esc(text)}</span>`; }
 
+// 跳转到指定页面（供概览失败等场景直接给出下一步操作）
+function goPage(name){
+  const n = $$('.nav-item').find(x=>x.dataset.page===name);
+  if(n){ n.click(); return; }
+  (pages[name]||renderOverview)();
+}
+
 // ---------------- 概览 ----------------
 async function renderOverview(){
   content.innerHTML = `<div class="page-title">系统概览</div>
@@ -185,7 +193,10 @@ async function renderOverview(){
   try{
     const d = await api('/api/overview');
     if(!d.ok && !d.osName && (!d.disks || !d.disks.length)){
-      $('#ov').innerHTML='<span class="badge err">获取失败</span> '+esc(d.error||((d.errors||[]).join('；')));
+      $('#ov').innerHTML = "<div><span class='badge err'>获取失败</span> " + esc(d.error||((d.errors||[]).join('；'))) + "</div>"
+        + "<div class='muted' style='margin:8px 0'>读取系统信息失败通常是权限不足。请用管理员身份重新启动（双击 Start.bat / StartAll.bat 会自动请求管理员权限）；若仍失败可到「一键向导」诊断。</div>"
+        + "<div class='row'>" + btn('去一键向导诊断并修复','green',function(){ goPage('guided'); }) + btn('重试','ghost',function(){ renderOverview(); }) + "</div>";
+      bindBtns($('#ov'));
       return;
     }
     let warn = (d.errors&&d.errors.length)?`<div class="k" style="margin-bottom:10px;color:var(--yellow)">${badge('部分数据不可用','warn')} ${esc(d.errors.join('；'))}</div>`:'';
@@ -1144,12 +1155,199 @@ async function runProfile(dryRun){
   if(d.dryRun){ log('预演完成，未修改任何设置'); }
   else { log(d.ok?'执行完成，全部成功':'执行完成，有失败项，详见结果', d.ok?'':'err'); log('如需撤销，可到「备份恢复」页按域恢复或一键回滚'); }
 }
+
+// ---------------- 一键向导 ----------------
+// 与 CLI `Optimize.ps1 -Guided` 同源：体检 -> 推荐 -> 预览 -> 执行 -> 复检。
+// 页面打开即只读体检（不改动系统），确认后才执行，执行默认跳过需人工确认 / 高风险步骤。
+let guidedPlan = null;
+let guidedBusy = false;
+
+async function renderGuided(autoScan=true){
+  content.innerHTML = `<div class="page-title">一键向导</div>
+    <div class="page-sub">不用挑菜单：自动体检 -> 推荐组合包 -> 预览 -> 执行 -> 自动复检，每步执行前自动备份</div>
+    <div class="card">
+      <div class="row">
+        ${btn('重新体检','ghost',()=>renderGuided())}
+        <label><input type="checkbox" id="cbGuidedRp"> 执行前创建系统还原点（较慢，更稳妥）</label>
+        <label><input type="checkbox" id="cbGuidedForce"> 包含需人工确认 / 高风险步骤</label>
+      </div>
+      <div id="gplan" class="muted" style="margin-top:8px">加载中…</div>
+    </div>
+    <div class="card" id="gresCard" style="display:none"><h3>执行与复检结果</h3><div id="gres"></div></div>
+    <div class="card"><h3>操作日志</h3><div class="log" id="logbox"></div></div>`;
+  bindBtns(content);
+  if(autoScan){ await scanGuided(); }
+}
+
+async function scanGuided(){
+  guidedPlan = null;
+  const box = $('#gplan');
+  box.innerHTML = badge('体检中…','info') + ' 正在扫描系统（统计可清理空间约十几秒）…';
+  const d = await api('/api/guided/plan');
+  if(!d.ok){
+    box.innerHTML = `<div>${badge('体检失败','err')} ${esc(d.error||'未知错误')}</div>
+      <div class="muted" style="margin:8px 0">若是「拒绝访问」，请用管理员身份重新启动（双击 Start.bat / StartAll.bat 会自动请求管理员权限），再点「重新体检」。</div>
+      <div class="row">${btn('重试','ghost',scanGuided)}</div>`;
+    bindBtns(box);
+    log('体检失败：'+(d.error||''),'err');
+    return;
+  }
+  guidedPlan = d;
+  renderGuidedPlan(d);
+  log('体检完成：'+d.score+' 分（'+d.grade+'），推荐组合包：'+(d.profile&&d.profile.title||''));
+}
+
+function renderGuidedPlan(d){
+  const p = d.profile || {};
+  const s = d.summary || {};
+  const box = $('#gplan');
+  const rk = r=>r==='high'?'err':(r==='medium'?'warn':'ok');
+  const rt = r=>r==='high'?'高危':(r==='medium'?'中危':(r==='low'?'低危':'无风险'));
+  const sev = v=>v==='High'?'err':(v==='Medium'?'warn':'ok');
+  let h = '';
+  h += `<div class="grid">
+    <div class="stat"><div class="k">体检分</div><div class="v">${esc(d.score)} 分</div>
+      <div class="muted" style="margin-top:4px">${esc(d.grade||'')}${d.beforeScore!=null?(' · 上次 '+esc(d.beforeScore)+' 分'):''}</div></div>
+    <div class="stat"><div class="k">推荐组合包</div><div class="v">${esc(p.title||p.name||'')}</div>
+      <div class="muted" style="margin-top:4px">${esc(p.desc||'')}</div></div>
+  </div>`;
+  if(p.reason){ h += `<div class="muted" style="margin-top:8px">推荐理由：${esc(p.reason)}</div>`; }
+  h += `<div class="muted" style="margin-top:8px">待处理 ${esc(s.pendingIssues||0)} 项（高 ${esc(s.high||0)} / 中 ${esc(s.medium||0)} / 低 ${esc(s.low||0)}）${s.cleanableMB!=null?(' · 预计可回收约 '+esc(s.cleanableMB)+' MB'):''}</div>`;
+  if(d.powerPlan){ h += `<div class="muted">电源计划：${esc(d.powerPlan)}</div>`; }
+  if(d.dns){ h += `<div class="muted">DNS：${esc(d.dns)}</div>`; }
+
+  if(p.matched===false){
+    h += `<div class="alert" style="margin-top:10px">推荐组合包「${esc(p.title||p.name)}」不可用：${esc(d.error||'')}。请到「优化组合包」页手动选择。</div>`;
+    h += `<div class="row">${btn('去优化组合包','ghost',()=>goPage('profiles'))}</div>`;
+  } else {
+    const steps = d.steps || [];
+    if(!steps.length){
+      h += `<div class="alert" style="margin-top:10px">该系统当前无需改动，体检结果见「系统体检」页。</div>`;
+      h += `<div class="row">${btn('查看系统体检','ghost',()=>goPage('health'))}</div>`;
+    } else {
+      h += `<h3 style="margin-top:14px">将要执行（${steps.length} 步，每步执行前自动备份）</h3>
+        <div class="table-wrap"><table>
+        <thead><tr><th>风险</th><th>域</th><th>动作</th><th>执行方式</th></tr></thead><tbody>
+        ${steps.map(st=>{
+          const gated = (!st.auto) || st.risk==='high';
+          return `<tr>
+            <td>${badge(rt(st.risk),rk(st.risk))}</td>
+            <td>${esc(st.domain)}</td>
+            <td>${esc(st.action)}</td>
+            <td>${gated?'<span class="badge warn">需人工确认，向导默认跳过</span>':'自动执行'}</td>
+          </tr>`;
+        }).join('')}
+        </tbody></table></div>`;
+      const auto = (s.autoSteps!=null?s.autoSteps:steps.filter(st=>st.auto&&st.risk!=='high').length);
+      if(auto===0){
+        h += `<div class="alert" style="margin-top:10px">推荐组合包全部为需人工确认的步骤，向导不代为执行，请到「优化组合包」页逐个确认。</div>
+          <div class="row">${btn('去优化组合包','ghost',()=>goPage('profiles'))}</div>`;
+      } else {
+        h += `<div class="row" style="margin-top:12px">${btn('确认执行','green',()=>runGuided())}${btn('仅预演（不修改）','yellow',()=>runGuided(true))}${btn('查看组合包详情','ghost',()=>goPage('profiles'))}</div>`;
+      }
+    }
+    if(d.manual && d.manual.length){
+      h += `<h3 style="margin-top:14px">也可单独处理（向导不执行）</h3>
+        <div class="table-wrap"><table>
+        <thead><tr><th>严重</th><th>菜单</th><th>问题</th><th>目标</th></tr></thead><tbody>
+        ${d.manual.map(m=>`<tr>
+          <td>${badge((m.severity==='High'?'高':(m.severity==='Medium'?'中':'低')),sev(m.severity))}</td>
+          <td>${esc(m.menu)}</td><td>${esc(m.title)}</td><td class="muted">${esc(m.target)}</td>
+        </tr>`).join('')}
+        </tbody></table></div>`;
+    }
+  }
+  box.innerHTML = h;
+  bindBtns(box);
+}
+
+async function runGuided(dryRun=false){
+  if(guidedBusy){ return; }
+  if(!guidedPlan || !guidedPlan.ok){ log('请先完成体检','err'); return; }
+  const rp = !!($('#cbGuidedRp') && $('#cbGuidedRp').checked);
+  const force = !!($('#cbGuidedForce') && $('#cbGuidedForce').checked);
+  if(!dryRun){
+    const msg = '即将按推荐组合包「'+((guidedPlan.profile&&guidedPlan.profile.title)||'')+'」执行优化。\n'
+      + '每个域执行前会自动备份；'+(force ? '已勾选高风险步骤，会一并执行禁用全部启动项 / CompactOS 等操作。\n' : '需人工确认 / 高风险步骤会保持跳过。\n')
+      + (rp?'执行前会尝试创建系统还原点。\n':'')
+      + '确认执行？';
+    if(!confirm(msg)) return;
+  }
+  guidedBusy = true;
+  const resBox = $('#gres'); const card = $('#gresCard');
+  card.style.display=''; resBox.innerHTML = badge(dryRun?'预演中…':'执行中…','info')+' 请稍候，不要关闭本页…';
+  log((dryRun?'预演':'执行')+'一键向导：'+((guidedPlan.profile&&guidedPlan.profile.name)||''));
+  try{
+    const d = await api('/api/guided/apply',{method:'POST',body:{name:(guidedPlan.profile&&guidedPlan.profile.name)||'',dry_run:dryRun,force:force,create_restore_point:rp}});
+    let h = '';
+    if(!d.ok && !d.results){
+      h = badge('失败','err')+' '+esc(d.error||'执行失败');
+      resBox.innerHTML = h; log('执行失败：'+(d.error||''),'err'); return;
+    }
+    h += `<div class="muted">${esc(d.title||d.name||'')}${d.forced?'（含高风险步骤）':''}</div>`;
+    if(!dryRun){
+      if(d.restorePoint){
+        h += d.restorePoint.ok ? `<div class="muted" style="margin-top:6px">${badge('还原点已创建','ok')} ${esc(d.restorePoint.name||'')}</div>`
+          : `<div class="muted" style="margin-top:6px">${badge('还原点创建失败','warn')} ${esc(d.restorePoint.error||'')}</div>`;
+      }
+      const res = d.results||[];
+      if(res.length){
+        h += `<div class="table-wrap" style="margin-top:8px"><table>
+          <thead><tr><th>域</th><th>动作</th><th>结果</th></tr></thead><tbody>
+          ${res.map(x=>`<tr><td>${esc(x.domain)}</td><td>${esc(x.action)}</td>
+            <td>${x.ok?badge('成功','ok'):badge('失败','err')}<div class="muted">${esc(x.summary||'')}${x.error?(' · '+esc(x.error)):''}</div></td></tr>`).join('')}
+          </tbody></table></div>`;
+      }
+      const sk = d.skipped||[];
+      if(sk.length){
+        h += `<div class="alert" style="margin-top:10px">已跳过 ${sk.length} 步：${sk.map(x=>esc(x.action)+'（'+esc(x.reason)+'）').join('；')}</div>`;
+      }
+    }
+    resBox.innerHTML = h;
+    (d.results||[]).forEach(x=>log((x.ok?'[成功] ':'[失败] ')+x.domain+'：'+(x.summary||'')+(x.error?(' 错误：'+x.error):'')));
+    (d.skipped||[]).forEach(x=>log('[跳过] '+x.domain+' —— '+x.reason));
+
+    if(dryRun){ log('预演完成，未修改任何设置'); return; }
+
+    // 执行完成 -> 自动复检并与体检前对比（复用 plan 返回的 report）
+    log('执行完成，正在自动复检…');
+    const c = await api('/api/guided/rerun',{method:'POST',body:{from:guidedPlan.report}});
+    if(!c.ok){
+      resBox.innerHTML += `<div class="alert" style="margin-top:10px">复检失败：${esc(c.error||'')}，可到「系统体检」页手动查看。</div>`;
+      log('复检失败：'+(c.error||''),'err');
+    } else {
+      const cmp = c.compare;
+      let ch = `<h3 style="margin-top:14px">优化前后对比</h3>`;
+      if(cmp){
+        const delta = cmp.scoreDelta||0;
+        const sign = delta>0?('+'+delta):(''+delta);
+        ch += `<div class="grid">
+          <div class="stat"><div class="k">优化前</div><div class="v">${esc(cmp.beforeScore)} 分</div></div>
+          <div class="stat"><div class="k">优化后</div><div class="v">${esc(cmp.afterScore)} 分</div>
+            <div class="muted" style="margin-top:4px">${badge(sign,(delta>0?'ok':(delta<0?'err':'info')))}</div></div>
+        </div>`;
+        if((cmp.resolved||[]).length){ ch += `<div style="margin-top:8px"><b>已解决</b><ul>${cmp.resolved.map(i=>'<li>'+esc(i.title)+'</li>').join('')}</ul></div>`; }
+        if((cmp.new||[]).length){ ch += `<div style="margin-top:8px"><b>新增问题</b><ul>${cmp.new.map(i=>'<li>'+esc(i.title)+'</li>').join('')}</ul></div>`; }
+        if(!(cmp.resolved||[]).length && !(cmp.new||[]).length){ ch += `<div class="muted" style="margin-top:6px">问题清单无变化。</div>`; }
+      } else {
+        ch += `<div class="muted">复检完成：${esc(c.afterScore)} 分（${esc(c.afterGrade||'')}）</div>`;
+      }
+      ch += `<div class="muted" style="margin-top:8px">建议重启电脑使所有更改生效；如需回滚，可到「备份恢复」页按域恢复或一键回滚。</div>
+        <div class="row">${btn('重新体检','ghost',()=>renderGuided())}${btn('去备份恢复','ghost',()=>goPage('backup'))}</div>`;
+      resBox.innerHTML += ch;
+      bindBtns(resBox);
+      log('复检完成：'+c.afterScore+' 分'+(cmp?('（'+(cmp.scoreDelta>=0?'+':'')+cmp.scoreDelta+'）'):''),'ok');
+    }
+  } finally {
+    guidedBusy = false;
+  }
+}
 // ---------------- 路由 ----------------
 const pages = {
   overview:renderOverview, health:renderHealth, clean:renderClean, services:renderServices,
   startup:renderStartup, update:renderUpdate, visual:renderVisual,
   power:renderPower, disk:renderDisk, network:renderNetwork, backup:renderBackup,
-  profiles:renderProfiles
+  profiles:renderProfiles, guided:renderGuided
 };
 $$('.nav-item').forEach(n=>{
   n.onclick=()=>{

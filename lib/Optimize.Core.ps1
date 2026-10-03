@@ -2332,6 +2332,355 @@ function Invoke-HealthRemediation {
     if ($res.error) { $res.ok = $false }
     return $res
 }
+# ============================================================
+#  一键向导（Guided Onboarding，CLI / GUI / WebUI 三端共享）
+#
+#  背景：清理 / 服务 / 启动项 / 视觉 / 电源 / 磁盘 / 网络 / 组合包其实都已具备，
+#  新手真正的门槛是「先点哪个、要不要改、改坏了怎么办」。这里把
+#  「体检 -> 推荐组合包 -> 只读预览 -> 执行 -> 自动复检」串成一步。
+#
+#  设计约束（与项目既有约定一致）：
+#   1) 纯只读：Get-GuidedPlan 不碰系统，随时可预览；
+#   2) 预览与执行同源：steps 直接来自 Get-ProfilePlan，执行走 Invoke-Profile，
+#      两侧永远一致；manual 来自 Get-HealthRemediationPlan，只提示不执行；
+#   3) 只看 issue 的 id 判方向，与 issue 顺序无关（报告顺序变了结论不变）；
+#   4) 永远给得出确定结论：体检失败 / 无问题 / 组合包缺失都落到「最小干预」或空计划，
+#      不抛异常，三端不必各写兜底。
+#
+#  为什么默认只推「老机均衡」：它是组合包自己的定位（通用首选），覆盖的正是体检
+#  六类问题里的五类。纯磁盘问题是例外——那类问题清临时文件即可，不该顺手改服务
+#  与电源，故降级为「最小干预」并直接指向菜单 [2]。更激进的「游戏加速」与
+#  「静音省电」仍在菜单 [16] 可选，向导不替新手做这个决定。
+# ============================================================
+
+# 按体检结果推荐组合包（纯只读，不碰系统）。
+# 返回 @{ name; reason; diskOnly }
+function Get-GuidedProfileSuggestion {
+    param([object]$Report)
+
+    if (-not $Report) {
+        return [PSCustomObject]@{
+            name     = 'minimal'
+            reason   = '未能完成体检；本次只做最小干预（仅关闭遥测计划任务）'
+            diskOnly = $false
+        }
+    }
+
+    $issues = @($Report.issues)
+    if ($issues.Count -eq 0) {
+        return [PSCustomObject]@{
+            name     = 'minimal'
+            reason   = '体检未发现问题，无需大动；仅关闭遥测计划任务'
+            diskOnly = $false
+        }
+    }
+
+    $score = 0
+    if ($Report.PSObject.Properties.Name -contains 'score') { $score = [int]$Report.score }
+
+    # 纯磁盘问题：不动服务 / 电源 / DNS，先清临时文件即可
+    $nonDisk = @($issues | Where-Object { [string]$_.id -notlike 'disk.*' })
+    if ($nonDisk.Count -eq 0) {
+        return [PSCustomObject]@{
+            name     = 'minimal'
+            reason   = ('体检 {0} 分，问题集中在磁盘：先用菜单 [2] 清临时文件，不必改动服务与电源' -f $score)
+            diskOnly = $true
+        }
+    }
+
+    $reason = ''
+    if ($score -lt 60)     { $reason = ('体检仅 {0} 分（亟需优化），建议用组合包一次补齐' -f $score) }
+    elseif ($score -lt 75) { $reason = ('体检 {0} 分，建议用组合包一次补齐' -f $score) }
+    else                   { $reason = ('体检 {0} 分，仅需按组合包处理少量项目' -f $score) }
+
+    return [PSCustomObject]@{ name = 'old_balanced'; reason = $reason; diskOnly = $false }
+}
+
+# 组合包步骤 id -> 体检修复动作码（用于判断某条问题是否已被组合包覆盖）
+function Get-GuidedStepKeyMap {
+    return @{
+        'services.disable' = 'services'
+        'startup.list'     = 'startup'
+        'visual.profile'   = 'visual'
+        'power.plan'       = 'power'
+        'disk.clean'       = 'disk'
+        'network.dns'      = 'network'
+    }
+}
+
+# 一键向导计划：一次调用完成「体检 -> 推荐 -> 只读步骤清单 -> 预估收益」。
+#   Report         指定体检报告；省略时自动体检（可配合 -SkipCleanScan / -SkipBench 提速）
+#   ProfileName    指定组合包；省略时按体检结果自动推荐
+#   PowerPlanGuid  电源计划目标 GUID，省略时用高性能计划
+#   DnsOption      DNS 选项编号（见 Get-DnsOptions），默认 1 = Cloudflare
+# 返回 @{ ok; version; generatedAt; profile; score; grade; beforeScore; beforeTime;
+#         issues; steps; manual; recommendations; summary; powerPlan; dns; error }
+#   steps    即将执行的组合包步骤（与菜单 [16] 预览同源）
+#   manual   组合包不覆盖、需单独处理的问题（只提示，向导不执行）
+function Get-GuidedPlan {
+    param(
+        [object]$Report,
+        [string]$ProfileName = '',
+        [switch]$SkipCleanScan,
+        [switch]$SkipBench,
+        [string]$PowerPlanGuid = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c',
+        [int]$DnsOption = 1
+    )
+
+    $res = [PSCustomObject]@{
+        ok              = $true
+        version         = (Get-OptVersion)
+        generatedAt     = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        profile         = $null
+        score           = 0
+        grade           = ''
+        beforeScore     = $null
+        beforeTime      = $null
+        issues          = @()
+        steps           = @()
+        manual          = @()
+        recommendations = $null
+        report          = $null
+        summary         = $null
+        powerPlan       = ''
+        dns             = ''
+        error           = $null
+    }
+
+    if (-not $Report) {
+        try { $Report = Get-SystemHealthReport -SkipCleanScan:$SkipCleanScan -SkipBench:$SkipBench }
+        catch { $Report = $null }
+    }
+    if (-not $Report) {
+        $res.ok    = $false
+        $res.error = '体检失败，无法生成一键向导计划'
+        return $res
+    }
+    $res.report = $Report
+
+    # 上一次体检分：向导复检后可直接对比（无历史报告时为 $null）
+    try {
+        $prev = Get-PreviousHealthReport
+        if ($prev) {
+            $res.beforeScore = [int]$prev.score
+            $res.beforeTime  = [string]$prev.timestamp
+        }
+    } catch { }
+
+    # --- 选组合包 ---
+    $sug      = Get-GuidedProfileSuggestion -Report $Report
+    $explicit = -not [string]::IsNullOrWhiteSpace($ProfileName)
+    $pname    = if ($explicit) { $ProfileName.Trim() } else { $sug.name }
+    $plan     = Get-ProfilePlan -Name $pname
+
+    # 内置推荐值不存在（config 被改坏）时降级为空计划，向导仍可用
+    if (-not $plan.ok -and -not $explicit) {
+        $plan = [PSCustomObject]@{ ok = $false; name = $pname; title = $pname; desc = ''; steps = @(); error = $plan.error }
+    }
+    if (-not $plan.ok) { $res.error = [string]$plan.error }
+
+    $res.profile = [PSCustomObject]@{
+        name     = [string]$pname
+        title    = $(if ($plan.title) { [string]$plan.title } else { [string]$pname })
+        desc     = [string]$plan.desc
+        matched  = [bool]$plan.ok
+        explicit = [bool]$explicit
+        reason   = [string]$sug.reason
+        diskOnly = [bool]$sug.diskOnly
+    }
+    $res.steps = @($plan.steps)
+
+    # --- 体检结论 ---
+    $issues = @($Report.issues)
+    $res.issues = $issues
+    if ($Report.PSObject.Properties.Name -contains 'score') { $res.score = [int]$Report.score }
+    if ($Report.PSObject.Properties.Name -contains 'grade') { $res.grade = [string]$Report.grade }
+
+    # --- 组合包覆盖不到、需要单独处理的问题（只提示，不执行）---
+    $covered  = @{}
+    foreach ($st in @($res.steps)) { $covered[[string]$st.id] = $true }
+    $keyToStep = Get-GuidedStepKeyMap
+    $menuHint = @{
+        'services.disable' = '[3]'
+        'startup.list'     = '[4]'
+        'visual.profile'   = '[5]'
+        'power.plan'       = '[6]'
+        'disk.clean'       = '[2]'
+        'network.dns'      = '[8]'
+    }
+    $rhArgs = @{ Report = $Report; PowerPlanGuid = $PowerPlanGuid; DnsOption = $DnsOption }
+    if ($SkipCleanScan) { $rhArgs['SkipCleanScan'] = $true }
+    $manual = @()
+    foreach ($r in @(Get-HealthRemediationPlan @rhArgs)) {
+        $key = [string]$r.actionKey
+        $sid = ''
+        if ($keyToStep.ContainsKey($key)) { $sid = [string]$keyToStep[$key] }
+        if ($sid -and $covered.ContainsKey($sid)) { continue }
+
+        $menu = '[16]'
+        if ($menuHint.ContainsKey($key))      { $menu = [string]$menuHint[$key] }
+        elseif ([string]$r.domain -eq 'disk') { $menu = '[2]' }
+
+        $manual += [PSCustomObject]@{
+            id       = [string]$r.id
+            severity = [string]$r.severity
+            title    = [string]$r.title
+            domain   = [string]$r.domain
+            action   = [string]$r.action
+            target   = [string]$r.target
+            impact   = [string]$r.impact
+            menu     = $menu
+            auto     = [bool]$r.auto
+        }
+    }
+    $res.manual = $manual
+
+    # --- 智能建议（复用体检已量好的体积，不重复扫盘）---
+    try   { $res.recommendations = Get-SmartRecommendations -Report $Report -Top 3 -SkipCleanMeasure }
+    catch { $res.recommendations = $null }
+
+    # --- 汇总 ---
+    $riskRank = @{ 'high' = 3; 'medium' = 2; 'low' = 1; 'none' = 0 }
+    $topRisk  = ''
+    $topStep  = ''
+    foreach ($st in @($res.steps)) {
+        $rk = [string]$st.risk
+        if (-not $riskRank.ContainsKey($rk)) { $rk = 'none' }
+        $cur = 0
+        if ($topRisk -and $riskRank.ContainsKey($topRisk)) { $cur = [int]$riskRank[$topRisk] }
+        if ([int]$riskRank[$rk] -gt $cur) { $topRisk = $rk; $topStep = [string]$st.action }
+    }
+
+    $cleanableMB = $null
+    $startupCnt  = 0
+    if ($Report.metrics) {
+        if ($Report.metrics.PSObject.Properties.Name -contains 'cleanableMB') { $cleanableMB = $Report.metrics.cleanableMB }
+        if ($Report.metrics.PSObject.Properties.Name -contains 'startupCount') { $startupCnt = [int]$Report.metrics.startupCount }
+    }
+
+    # 主导域：按域统计问题条数，取最多者（并列时按域名字典序，保证确定性）
+    $domains = @{}
+    foreach ($i in $issues) {
+        $d = 'other'
+        $m = Resolve-HealthRemediation -Issue $i
+        if ($m -and $m.Domain) { $d = [string]$m.Domain }
+        if (-not $domains.ContainsKey($d)) { $domains[$d] = 0 }
+        $domains[$d] = [int]$domains[$d] + 1
+    }
+    $dominant = ''
+    $domCount = -1
+    foreach ($k in @($domains.Keys | Sort-Object)) {
+        if ([int]$domains[$k] -gt $domCount) { $domCount = [int]$domains[$k]; $dominant = [string]$k }
+    }
+
+    $res.summary = [PSCustomObject]@{
+        pendingIssues  = @($issues).Count
+        high           = @($issues | Where-Object { $_.severity -eq 'High' }).Count
+        medium         = @($issues | Where-Object { $_.severity -eq 'Medium' }).Count
+        low            = @($issues | Where-Object { $_.severity -eq 'Low' }).Count
+        dominantDomain = $dominant
+        cleanableMB    = $cleanableMB
+        startupCount   = $startupCnt
+        stepCount      = @($res.steps).Count
+        autoSteps      = @($res.steps | Where-Object { $_.auto -and $_.risk -ne 'high' }).Count
+        manualSteps    = @($res.steps | Where-Object { -not $_.auto -or $_.risk -eq 'high' }).Count
+        otherSteps     = @($manual).Count
+        topRisk        = $topRisk
+        topRiskStep    = $topStep
+    }
+
+    # --- 组合包会改动的目标（纯展示用；组合包不存在时留空）---
+    if ($plan.ok) {
+        $spec = Get-Profile -Name $pname
+        if ($spec) {
+            $guid = Get-ProfilePowerGuid -Key $spec.power
+            if ($guid) {
+                foreach ($x in @(Get-PowerPlanCatalog)) { if ($x.GUID -eq $guid) { $res.powerPlan = [string]$x.Title } }
+            }
+            if ($spec.dns -and $spec.dns -ne 'none') {
+                foreach ($o in @(Get-DnsOptions)) { if ($o.Key -ieq $spec.dns) { $res.dns = [string]$o.Label } }
+            }
+        }
+    }
+
+    return $res
+}
+
+# 风险级别 -> 中文（三端展示统一）
+function Format-GuidedRiskLabel {
+    param([string]$Risk)
+    switch ($Risk) {
+        'high'   { return '高危' }
+        'medium' { return '中危' }
+        'low'    { return '低危' }
+        default  { return '无风险' }
+    }
+}
+
+# 严重级别 -> 中文
+function Format-GuidedSeverityLabel {
+    param([string]$Severity)
+    switch ($Severity) {
+        'High'   { return '高' }
+        'Medium' { return '中' }
+        'Low'    { return '低' }
+        default  { return '-' }
+    }
+}
+
+# 把 Get-GuidedPlan 渲染成纯文本行（CLI / GUI 共用）。
+# 空计划 / 失败计划返回空数组，调用方无需判空。
+function Format-GuidedPlan {
+    param([object]$Plan)
+    $lines = @()
+    if (-not $Plan -or -not $Plan.ok) { return $lines }
+
+    $p = $Plan.profile
+    $s = $Plan.summary
+
+    $lines += '  一键向导：体检 -> 推荐 -> 预览 -> 执行 -> 自动复检'
+    if ($p -and -not $p.matched) {
+        $lines += ('  即将执行            : 组合包「{0}」不可用' -f $p.title)
+        if ($p.error) { $lines += ('  原因                : {0}' -f $p.error) }
+    } else {
+        $head = '组合包'
+        if ($p) { $head = ('组合包「{0}」' -f $p.title) }
+        if ($p -and $p.desc) { $head = ('{0}（{1}）' -f $head, $p.desc) }
+        $lines += ('  即将执行            : {0}' -f $head)
+    }
+    if ($p -and $p.reason) { $lines += ('  推荐理由            : {0}' -f $p.reason) }
+    $lines += ('  体检分              : {0} / 100（{1}）' -f $Plan.score, $Plan.grade)
+    if ($null -ne $Plan.beforeScore) {
+        $lines += ('  上次体检分          : {0}（{1}）' -f $Plan.beforeScore, $Plan.beforeTime)
+    }
+    $lines += ('  待处理问题          : {0} 项（高 {1} / 中 {2} / 低 {3}）' -f $s.pendingIssues, $s.high, $s.medium, $s.low)
+    if ($null -ne $s.cleanableMB) { $lines += ('  预计可回收          : 约 {0} MB' -f $s.cleanableMB) }
+    if ($s.topRiskStep) {
+        $lines += ('  最高风险步骤        : {0}（{1}）' -f $s.topRiskStep, (Format-GuidedRiskLabel -Risk $s.topRisk))
+    }
+
+    if (@($Plan.steps).Count -gt 0) {
+        $lines += '  |- 组合包步骤（每步执行前自动备份）：'
+        foreach ($st in @($Plan.steps)) {
+            $gated = (-not $st.auto) -or ($st.risk -eq 'high')
+            $mark  = if ($gated) { '[*]' } else { '[ ]' }
+            $note  = if ($gated) { '  需人工确认，向导默认跳过' } else { '' }
+            $lines += ('    {0} {1}  {2}{3}' -f $mark, $st.action, (Format-GuidedRiskLabel -Risk $st.risk), $note)
+        }
+    } else {
+        $lines += '  |- 组合包步骤：无（该系统当前无需改动）'
+    }
+
+    if (@($Plan.manual).Count -gt 0) {
+        $lines += '  |- 也可单独处理（菜单编号，向导不执行）：'
+        foreach ($m in @($Plan.manual)) {
+            $lines += ('    {0} {1} [{2}]  {3}' -f $m.menu, $m.title, (Format-GuidedSeverityLabel -Severity $m.severity), $m.target)
+        }
+    }
+
+    $lines += '  |- 执行完成后自动重新体检，并给出前后分数对比'
+    return $lines
+}
 
 # ============================================================
 #  备份元数据 manifest / 优化时间线 / 一键回滚

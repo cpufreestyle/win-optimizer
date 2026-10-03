@@ -5,6 +5,7 @@ PC-Optimizer-7thGen WebUI 后端
 import os
 import sys
 import json
+import base64
 import subprocess
 import webbrowser
 from flask import Flask, render_template, jsonify, request, send_from_directory, Response, stream_with_context
@@ -27,6 +28,8 @@ LONG_TASK_SCRIPTS = {
     "15_health.ps1",
     # optimize_plan 会统计可清理体积，耗时与体检同级
     "optimize_plan.ps1",
+    # 一键向导含体检 + 组合包执行，耗时与体检同级
+    "17_guided.ps1",
 }
 
 
@@ -787,6 +790,54 @@ def api_profile_apply():
         args.append("-Force")
     args += ["-CreateRestorePoint", str(bool(data.get("create_restore_point", False))).lower()]
     return jsonify(run_ps("16_profiles.ps1", *args, timeout=1800))
+
+
+# ---------------- 一键向导 Guided ----------------
+# 与 CLI `Optimize.ps1 -Guided` 同源：体检 -> 推荐 -> 预览 -> 执行 -> 复检。
+# plan 纯只读（不改动系统），apply / rerun 单次耗时可能达数分钟，统一给长超时。
+@app.route("/api/guided/plan")
+def api_guided_plan():
+    """一键向导只读计划（体检 + 推荐组合包 + 步骤预览），不改动系统。"""
+    args = ["-Action", "plan"]
+    name = str(request.args.get("name", "") or "")
+    if name:
+        args += ["-Profile", name]
+    if str(request.args.get("skip_clean_scan", "")).lower() in ("1", "true", "yes"):
+        args.append("-SkipCleanScan")
+    return jsonify(run_ps("17_guided.ps1", *args, timeout=1800))
+
+
+@app.route("/api/guided/apply", methods=["POST"])
+def api_guided_apply():
+    """按推荐的组合包执行优化；每步执行前自动备份，默认跳过高风险步骤。"""
+    data = request.get_json(silent=True) or {}
+    args = ["-Action", "apply"]
+    name = str(data.get("name", "") or "")
+    if name:
+        args += ["-Profile", name]
+    if data.get("force"):
+        args.append("-Force")
+    if data.get("dry_run"):
+        args.append("-DryRun")
+    if data.get("skip_clean_scan"):
+        args.append("-SkipCleanScan")
+    args += ["-CreateRestorePoint", str(bool(data.get("create_restore_point", False))).lower()]
+    return jsonify(run_ps("17_guided.ps1", *args, timeout=1800))
+
+
+@app.route("/api/guided/rerun", methods=["POST"])
+def api_guided_rerun():
+    """优化后复检，并与 plan 返回的 report 做前后对比。"""
+    data = request.get_json(silent=True) or {}
+    args = ["-Action", "rerun"]
+    frm = data.get("from")
+    if frm:
+        if not isinstance(frm, str):
+            frm = json.dumps(frm, ensure_ascii=False)
+        # 报告 JSON 含大量引号，直接作为 -File 参数会被 PowerShell 拆分；改用 Base64 传递
+        b64 = base64.b64encode(frm.encode("utf-8")).decode("ascii")
+        args += ["-FromB64", b64]
+    return jsonify(run_ps("17_guided.ps1", *args, timeout=1800))
 
 
 def start_mcp_background(port: int = 5001):

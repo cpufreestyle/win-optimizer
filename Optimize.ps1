@@ -16,7 +16,9 @@
 param(
     [switch]$Plan,               # 只读预览「全面优化将做什么」，不执行任何修改
     [string]$Profile = '',       # -Plan 时额外附上某个优化组合包的步骤预览
-    [switch]$SkipCleanScan       # -Plan 时跳过可清理空间统计（省十几秒）
+    [switch]$SkipCleanScan,      # -Plan 时跳过可清理空间统计（省十几秒）
+    [switch]$GuidedPlan,         # 只读预览「一键向导会怎么走」，不需要管理员权限
+    [switch]$Guided              # 直接进入一键向导（供启动器一键直达，跳过主菜单）
 )
 
 # ============================================================
@@ -124,6 +126,8 @@ function Show-Menu {
         Write-Host ""
 
         Write-Host " [优化选项]" -ForegroundColor Yellow
+        Write-Host "   [0]  一键向导（推荐）    — 体检+推荐+执行+复检，一步到位，新手选它" -ForegroundColor Green
+        Write-Host ""
         Write-Host "   [1]  系统信息检测        — 查看详细硬件与系统信息"
         Write-Host "   [2]  临时文件清理        — 清理系统/用户临时文件、缓存"
         Write-Host "   [3]  服务优化            — 禁用不必要的后台服务"
@@ -152,6 +156,7 @@ function Show-Menu {
         $choice = Read-Host "请输入选项"
 
         switch ($choice) {
+            "0" { Invoke-GuidedOptimization }
             "1" { Invoke-ScriptModule "01-SystemInfo.ps1" }
             "2" { Invoke-ScriptModule "02-CleanTemp.ps1" }
             "3" { Invoke-ScriptModule "03-DisableServices.ps1" }
@@ -204,6 +209,135 @@ function Show-OptimizePlanPreview {
     Read-Host "按回车键返回主菜单"
 }
 
+# ============================================================
+#  一键向导（新手入口）：体检 -> 推荐 -> 预览 -> 执行 -> 复检
+#  与菜单 [15] 体检 / [16] 组合包同源，只是把「该选哪个」交给程序判断，
+#  执行默认不传 -Force，因此高危步骤一律跳过，不会误删启动项或做整盘优化。
+# ============================================================
+
+# 只读地渲染一份向导计划（供菜单 [0] 与 -GuidedPlan 共用）
+function Show-GuidedPlanPreview {
+    param([object]$Preview, [switch]$WithHint)
+    foreach ($line in @(Format-GuidedPlan -Plan $Preview)) {
+        Write-Host $line -ForegroundColor DarkGray
+    }
+    if ($WithHint) {
+        Write-Host "  说明: 以上仅为预览。真要执行请在菜单选择 [0] 一键向导。" -ForegroundColor Yellow
+    }
+}
+
+function Invoke-GuidedOptimization {
+    Write-Log "开始一键向导..." "WARN"
+    Write-Host ""
+    Write-Host "================================================" -ForegroundColor Cyan
+    Write-Host "  一键向导（体检 -> 推荐 -> 执行 -> 自动复检）" -ForegroundColor Cyan
+    Write-Host "================================================" -ForegroundColor Cyan
+    Write-Host "  正在体检（统计可清理空间约十几秒）..." -ForegroundColor DarkGray
+
+    $guidedPreview = Get-GuidedPlan
+    if (-not $guidedPreview.ok) {
+        Write-Host "  体检失败: $($guidedPreview.error)" -ForegroundColor Red
+        Read-Host "按回车键返回主菜单"
+        return
+    }
+
+    # --- 把「推荐什么、将要做什么」一次讲清楚 ---
+    Write-Host ""
+    Show-GuidedPlanPreview -Preview $guidedPreview
+    Write-Host ""
+
+    if (-not $guidedPreview.profile.matched) {
+        Write-Host "  推荐组合包不可用，请改用菜单 [16] 手动选择。" -ForegroundColor Red
+        Read-Host "按回车键返回主菜单"
+        return
+    }
+    if (@($guidedPreview.steps).Count -eq 0) {
+        Write-Host "  该系统当前无需改动，体检结果见菜单 [15]。" -ForegroundColor Green
+        Read-Host "按回车键返回主菜单"
+        return
+    }
+    if ($guidedPreview.summary.autoSteps -eq 0) {
+        Write-Host "  推荐组合包全部为需人工确认的步骤，向导不代为执行。" -ForegroundColor Yellow
+        Write-Host "  请改用菜单 [16] 逐个确认。" -ForegroundColor Yellow
+        Read-Host "按回车键返回主菜单"
+        return
+    }
+
+    # --- 确认后执行；默认不传 -Force，高危步骤自动跳过 ---
+    $confirm = Read-Host "  确认按上述方案优化？(Y/N)"
+    if ($confirm -ne "Y" -and $confirm -ne "y") {
+        Write-Host "  已取消。" -ForegroundColor Gray
+        Read-Host "按回车键返回主菜单"
+        return
+    }
+
+    Write-Host ""
+    Write-Host "  正在执行（每步执行前自动备份，可在 [R] 恢复）..." -ForegroundColor Yellow
+    $runArgs = @{ Name = $guidedPreview.profile.name; BackupDir = $script:BackupDir }
+    $runResult = Invoke-Profile @runArgs
+
+    Write-Host ""
+    foreach ($r in @($runResult.results)) {
+        $mark  = if ($r.ok) { '[成功]' } else { '[失败]' }
+        $color = if ($r.ok) { 'Green' } else { 'Red' }
+        Write-Host ("  {0} {1} - {2}" -f $mark, $r.domain, $r.action) -ForegroundColor $color
+        if ($r.summary) { Write-Host "        $($r.summary)" -ForegroundColor DarkGray }
+        if ($r.backup)  { Write-Host "        备份: $(Split-Path -Leaf $r.backup)" -ForegroundColor DarkGray }
+        if ($r.error)   { Write-Host "        错误: $($r.error)" -ForegroundColor Red }
+    }
+    foreach ($s in @($runResult.skipped)) {
+        Write-Host ("  [跳过] {0} - {1}（{2}）" -f $s.domain, $s.action, $s.reason) -ForegroundColor Gray
+    }
+    if ($runResult.restorePoint) {
+        if ($runResult.restorePoint.ok) {
+            Write-Host "  [还原点] 已创建: $($runResult.restorePoint.name)" -ForegroundColor Green
+        } else {
+            Write-Host "  [还原点] 创建失败，继续执行: $($runResult.restorePoint.error)" -ForegroundColor Yellow
+        }
+    }
+    if ($runResult.error) { Write-Host "  $($runResult.error)" -ForegroundColor Yellow }
+    $okCount = @($runResult.results | Where-Object { $_.ok }).Count
+    Write-Log ("一键向导执行完成（组合包 {0}），成功 {1} 步，跳过 {2} 步" -f $guidedPreview.profile.name, $okCount, @($runResult.skipped).Count) "SUCCESS"
+
+    # --- 自动复检并给出前后对比 ---
+    Write-Host ""
+    Write-Host "  正在复检..." -ForegroundColor DarkGray
+    $afterReport = $null
+    try { $afterReport = Get-SystemHealthReport } catch { $afterReport = $null }
+
+    if ($afterReport) {
+        $cmp = Compare-HealthReports -Before $guidedPreview.report -After $afterReport
+        Write-Host ""
+        Write-Host "================================================" -ForegroundColor Cyan
+        Write-Host "  优化前后对比" -ForegroundColor Cyan
+        Write-Host "================================================" -ForegroundColor Cyan
+        if ($cmp) {
+            Write-Host ("  优化前: {0} 分  ->  优化后: {1} 分" -f $cmp.beforeScore, $cmp.afterScore) -ForegroundColor Gray
+            $sign = if ($cmp.scoreDelta -gt 0) { "+$($cmp.scoreDelta)" } else { "$($cmp.scoreDelta)" }
+            $dc   = if ($cmp.scoreDelta -gt 0) { 'Green' } elseif ($cmp.scoreDelta -lt 0) { 'Red' } else { 'Gray' }
+            Write-Host ("  分数变化: {0}" -f $sign) -ForegroundColor $dc
+            if (@($cmp.resolved).Count -gt 0) {
+                Write-Host "  已解决:" -ForegroundColor Green
+                foreach ($i in $cmp.resolved) { Write-Host ("    + {0}" -f $i.title) -ForegroundColor Green }
+            }
+            if (@($cmp.new).Count -gt 0) {
+                Write-Host "  新增问题:" -ForegroundColor Red
+                foreach ($i in $cmp.new) { Write-Host ("    - {0}" -f $i.title) -ForegroundColor Red }
+            }
+            if (@($cmp.resolved).Count -eq 0 -and @($cmp.new).Count -eq 0) {
+                Write-Host "  问题清单无变化。" -ForegroundColor Gray
+            }
+        }
+        try { $null = Save-HealthReport -Report $afterReport -BackupDir $script:BackupDir } catch { }
+    } else {
+        Write-Host "  复检失败，可稍后到菜单 [15] 手动查看结果。" -ForegroundColor Yellow
+    }
+
+    Write-Host ""
+    Write-Host "  向导完成！建议重启电脑使所有更改生效；如需回滚请用菜单 [R]。" -ForegroundColor Green
+    Read-Host "按回车键返回主菜单"
+}
+
 function Invoke-FullOptimization {
     Write-Log "开始一键全面优化..." "WARN"
     Write-Host ""
@@ -253,6 +387,18 @@ function Invoke-FullOptimization {
 #  入口
 # ============================================================
 
+# -GuidedPlan 是只读预览，不需要管理员权限；输出后直接退出
+if ($GuidedPlan) {
+    $guidedPreview = Get-GuidedPlan -SkipCleanScan:$SkipCleanScan
+    if (-not $guidedPreview.ok) { Write-Host "预览失败: $($guidedPreview.error)" -ForegroundColor Red; exit 1 }
+    Write-Host ""
+    Write-Host "================================================" -ForegroundColor Cyan
+    Write-Host "  一键向导预览（只读，不执行任何修改）" -ForegroundColor Cyan
+    Write-Host "================================================" -ForegroundColor Cyan
+    Show-GuidedPlanPreview -Preview $guidedPreview
+    exit 0
+}
+
 # -Plan 是只读预览，不需要管理员权限；输出后直接退出
 if ($Plan) {
     $planArgs = @{}
@@ -294,5 +440,5 @@ if (Test-Path $script:LogFile) {
     } catch {}
 }
 Write-Log "===== PC-Optimizer-7thGen v$Version 启动 ====="
-Show-Menu
+if ($Guided) { Invoke-GuidedOptimization } else { Show-Menu }
 Write-Log "===== 程序退出 ====="

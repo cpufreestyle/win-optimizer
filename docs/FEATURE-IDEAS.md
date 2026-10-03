@@ -321,6 +321,29 @@ WebUI `-Action tips` 带出 `vetoed`，前端在建议表下方列出被保护�
 **三端落点**：CLI / GUI 经 `Format-SmartRecommendations` 自动展示；WebUI `-Action tips` 新增
 `vetoed` 字段 + `index.html` 建议区展示，`/api/health/scan` 的 `tips` 内嵌对象同步生效。
 
+## P5（降低学习成本 / 上手成本，v3.11）
+
+### P5-1 一键向导（体检 → 推荐 → 预览 → 执行 → 前后对比）—— 已实现（2026-10-03）
+
+**痛点**：功能已经够多（16 个菜单项 + 4 个组合包 + 3 套前端），但**默认路径上缺少一个「不用看懂任何东西」的入口**。
+老机器用户第一次打开项目时面对的是「先读 README 的 5 种启动方式，再从 6 步流程里挑第 1 步」，
+而真正的价值（体检 + 组合包 + 前后对比）其实可以串成一条线。诊断证据：WebUI 概览在受限环境下只剩
+一句「获取失败 拒绝访问」，用户既不知道原因，也不知道下一步该做什么。
+
+**方案**：lib 新增只读编排 `Get-GuidedPlan`（+ `Get-GuidedProfileSuggestion` / `Format-GuidedPlan`），
+把「该用哪个组合包 + 会做哪些步骤 + 哪些必须人工确认 + 覆盖不到的问题去哪看」一次性算出来；
+CLI 主菜单加 `[0] 一键向导`，`-Guided` 直达、`-GuidedPlan` 只读预览；`Start.bat` 默认项即向导。
+详见 HANDOFF §3.20。
+
+**设计红线**：向导本身**零写操作**（只组合既有函数），执行仍走既有 `Invoke-Profile`，
+所以备份、还原点、高风险跳过、`[R]` 回滚这些既有安全机制**一条都不绕过**。
+
+**下一步（未做）**：
+- ~~GUI 仪表盘与 WebUI 增加「一键向导」入口（同一份 `Get-GuidedPlan` JSON，前端只渲染）。~~
+  WebUI 已落地（`webui/ps/17_guided.ps1` + `/api/guided/{plan,apply,rerun}` + 侧栏「🧭 一键向导」页）；仍缺 GUI 仪表盘入口。
+- 向导完成后可选「一键导出对比报告」（复用 P1-2 的 `Export-HealthReport`），把「优化成效」变成可分享产物。
+- 首次运行时用一次性提示解释「为什么需要管理员 / 为什么建议重启」，减少中途放弃。
+
 ## 建议实施顺序
 
 1. P0-1（半天，先消灭现存漂移，可作为独立 PR）
@@ -329,6 +352,7 @@ WebUI `-Action tips` 带出 `vetoed`，前端在建议表下方列出被保护�
 4. P0-3（组合包，编排面最大）
 5. P1-1、P1-2、P1-3（已实现）
 6. ✅ P2 三项全部落地：智能降级建议、MCP `optimize_plan` dry-run、开机耗时基线 bench（细则见上）。
+7. ✅ P5-1 一键向导落地（v3.11.0）；P5 剩余项按社区反馈排期。
 
 每步都走「集成分支 + PR」流程（见 HANDOFF §2），PR 前确认：Pester 151+ 全绿、
 `*.ps1` 全 BOM、`config/optimization.schema.json` 同步更新、GUI 改动真机点验。

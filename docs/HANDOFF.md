@@ -34,6 +34,11 @@
 > ✅ **2026-10-03 现状**：`main` @ `6724f7b` = v3.10.0 + UI 苹果风（PR #25、PR #26 均已合并）。Roadmap（FEATURE-IDEAS）
 > 的 P0 / P1 / P2 / P3 / P4 已全部收口；`origin/main` 与本地一致。**当前无待合并 PR**。
 
+> 🔄 **2026-10-03 续**：v3.11.0「一键向导」已落地（PR 合并中，见 §3.20），
+> 目标是把新手路径从「先读懂 16 个菜单项」压缩成「启动器回车 + 一次 Y 确认」。
+> CLI（`Optimize.ps1 [0]` / `-Guided` / `-GuidedPlan`）、`Start.bat` 默认项与 **WebUI 一键向导页** 均已可用；
+> 仅剩 GUI 仪表盘未接向导入口（纯渲染，lib 无需改动）。
+
 - **UI 苹果风改动已合并入 `main`**（PR #26 / merge commit `6724f7b`：浅色主题 + 5 处布局撞车修复 + EXE 漏页 + 概览容错，见 §3.15 / §3.16 / §3.17 / §3.18 / §3.19）：
   `Build-EXE.ps1`、`OptimizeGUI.ps1`、`PC-Optimizer.exe`、`README.md`、`.gitignore`、`docs/HANDOFF.md`、
   `gui/pages/{About,Backup,Clean,Dashboard,Health,Services,Startup}.ps1`、`webui/ps/01_system_info.ps1`、`webui/templates/index.html`。
@@ -429,6 +434,48 @@ try/catch 里，任何一组抛异常都会走到 catch 分支，整页退回 ok
 
 **顺带**：01_system_info.ps1 原有的 3 处裸 LF 一并归一到 CRLF（BOM 保持）；全仓库 76 个 .ps1 解析 0 错误。
 
+### 3.20 一键向导：把「新手流程」压缩成一件事（v3.11.0，2026-10-03）
+
+**背景**：主菜单已有 16 个编号 + `[B]/[R]/[P]/[Q]`，加上 README 里的 5 种启动方式、6 步推荐流程、
+4 个组合包——老机器用户（本项目的主要受众，多数不是开发者）面对的第一道门槛不是功能不够，
+而是**不知道先点哪个**。目标是：默认路径上「不需要做选择题」，但也**不牺牲**高级用户的细粒度控制。
+
+**方案（lib 只读 + 前端壳）**：
+
+| 层 | 落点 | 说明 |
+|----|------|------|
+| 推荐 | `Get-GuidedProfileSuggestion -Report` | 无问题 / 纯磁盘问题 → `minimal`（纯磁盘时 `diskOnly=$true`）；否则按体检分推荐 `old_balanced`，并给出理由（`<60` 亟需优化 / `<75` 建议一次补齐 / `>=75` 仅需少量） |
+| 计划 | `Get-GuidedPlan [-Report][-ProfileName][-SkipCleanScan][-PowerPlanGuid][-DnsOption]` | 把体检结论 + 组合包步骤 + 覆盖不到的问题合成一份**只读**计划，含 `steps` / `manual` / `summary` / `recommendations` / `report` |
+| 渲染 | `Format-GuidedPlan` + `Format-GuidedRiskLabel` / `Format-GuidedSeverityLabel` | CLI 直接打印；GUI / WebUI 可复用同一份数据 |
+| CLI | `Optimize.ps1 [0]` / `-Guided` / `-GuidedPlan` | `[0]` 进向导；`-Guided` 跳过菜单；`-GuidedPlan` 只读预览，**不需要管理员** |
+
+**关键设计约束**：
+
+- **只读分层**：`Get-GuidedPlan` 只组合既有函数（`Get-SystemHealthReport` / `Get-HealthRemediationPlan` /
+  `Get-ProfilePlan` / `Get-SmartRecommendations`），自己不碰系统；测试用 Mock 断言这些域函数**绝不被执行**（见 §6）。
+- **组合包覆盖不到的不能消失**：profile 覆盖不了的 issue 进 `manual`，附 `domain` / `impact` / 菜单编号，
+  不会因为「向导只跑组合包」而漏报。
+- **高风险默认不动**：向导调用 `Invoke-Profile` 时**不传** `-Force`，所以 `auto=$false` 或 `risk=highSupport`
+  的步骤自动进 `skipped` 并单独列出，符合项目「宁可漏，不可错」的既有取向。
+- **前后对比闭环**：`Get-GuidedPlan` 返回值带上 `report`（体检快照），向导执行后再体检一次，
+  直接走既有 `Compare-HealthReports` 出对比，无需重读 `backups/health/` 历史。
+- **不破坏既有编号**：主菜单 `[1]`~`[16]` 与 `[B]/[R]/[P]/[Q]` **一个都没改**，只新增 `[0]`，
+  老用户的肌肉记忆不受影响。
+
+**启动器收敛**：`Start.bat` 原有两套模式菜单（简易 / 完整）合并成一套，默认项就是一键向导
+（空输入、乱输入都回落到向导）；`StartAll.bat` 降级为兼容壳（提权后转调 `Start.bat`），
+不再维护第二份菜单——两份菜单并存本身就是一类学习成本与漂移源。
+
+**测试**：`tests/Optimize.Core.Tests.ps1` 新增 `Describe 'Optimize.Core guided one-click plan'`，
+15 个用例覆盖推荐规则边界 / 显式 profile 不存在时的不抛异常 / 健康检查失败降级 / auto 与 manual 计数一致性 /
+只读性（Mock 域函数必须未被调用）/ 渲染含 `需人工确认` 门控标记 / `null` 与失败计划渲染为空。
+
+**WebUI 已接向导**：新增 `webui/ps/17_guided.ps1`（`-Action plan|apply|rerun`）与 `app.py` 三条路由
+（`GET /api/guided/plan`、`POST /api/guided/apply`、`POST /api/guided/rerun`），前端 `index.html` 新增侧栏首位的
+「🧭 一键向导」页（体检分 / 推荐组合包 / 推荐理由 / 待处理项 / 电源计划 / DNS / 步骤表 / 人工项表，支持预演与前后对比）。
+报告 JSON 通过 `-FromB64`（Base64）传递，绕开 `powershell -File` 参数被引号拆分的问题。
+**已知限制**：仅剩 GUI 仪表盘未接向导入口（纯渲染复用 `Get-GuidedPlan` JSON，lib 无需改动）；WebUI 概览容错见 §3.19。
+
 
 ## 4. 三端文件地图（按域）
 
@@ -552,7 +599,13 @@ try/catch 里，任何一组抛异常都会走到 catch 分支，整页退回 ok
   cd <项目根>
   Invoke-Pester -Path ./tests/Optimize.Core.Tests.ps1
   ```
-  当前 **226 个用例**（2026-09-28 实测 226 通过 / 0 失败，入口 `_runtests.ps1`；含各域「编号稳定 / 必须备份 / 行为契约」断言，其中 6 条是 CompactOS 契约用例、1 条用 Mock 覆盖「无活动网卡」分支）。新增 lib 函数时务必补对应用例。
+  当前 **241 个用例**（2026-10-03 实测 241 通过 / 0 失败；含各域「编号稳定 / 必须备份 / 行为契约」断言，其中 6 条是 CompactOS 契约用例、1 条用 Mock 覆盖「无活动网卡」分支、15 条覆盖一键向导）。新增 lib 函数时务必补对应用例。
+  > ⚠️ **分离进程跑 Pester 的两个坑**（2026-10-03 实测踩到）：
+  > 1. 用 `Start-Process -WindowStyle Hidden` 起子进程时，`$env:PSModulePath` 有时会丢掉系统模块路径，
+  >    导致 `New-Guid` / `Get-AuthenticodeSignature` 找不到，**成片假失败（本次 75 条）**；
+  >    跑之前先在子进程里补齐 `$env:windir\System32\WindowsPowerShell\v1.0\Modules`。
+  > 2. 沙箱内（非提权）`Get-CimInstance` 被拒绝，环境相关用例会假失败；**必须提权跑**。
+  > 3. 只跑新增子集时用 `Invoke-Pester -Path tests\Optimize.Core.Tests.ps1 -FullNameFilter '*guided*'`，秒级返回且不受上述环境影响。
 - **只读 smoke**：直接 `& scripts/15-HealthCheck.ps1` 或 `& webui/ps/15_health.ps1` 看 JSON 输出；磁盘/网络等可用 `-WhatIf` 预演不改系统。
 - **Profiles 四态回归**：`& webui/ps/16_profiles.ps1 -Action list|plan`、`-Action apply -Name minimal -DryRun`（断言 `dryRun:true`）、`-Action apply -Name gaming -DryRun`（断言 `startup` 进 `skipped`）、`-Action apply -Name gaming -DryRun -Force`（断言全步骤跑完、`skipped` 为空）、坏名字返回 `ok:$false`。
 - **GUI 真机渲染 + 重叠审计**（2026-10-03 新增，改 GUI 布局/配色必跑）：
@@ -603,3 +656,6 @@ try/catch 里，任何一组抛异常都会走到 catch 分支，整页退回 ok
 6. Roadmap 功能项已全部收口：P0 / P1 / P2 均落地（P2 三项见 §3.9、§3.11、§3.12）。
    后续方向建议从社区反馈 / 新 Issue 里重新提炼（体体检报告的 bench 曲线已能为「要不要再优化」提供数据）。
    「一键优化组合包」（P0-3）、「优化回滚向导」（P0-4）、「定时体检 + 趋势报告」（P1-1）均已落地（见 §3.4、§3.5、§3.6）。
+7. ✅ v3.11.0 一键向导（P5-1）已落地：CLI `[0]` / `-Guided` / `-GuidedPlan` + `Start.bat` 默认项
+   + WebUI「一键向导」页（`17_guided.ps1` + `/api/guided/{plan,apply,rerun}`，见 §3.20）。
+   未做且优先级最高的收尾：把同一份 `Get-GuidedPlan` 接到 GUI 仪表盘（纯渲染，lib 无需改动）。
