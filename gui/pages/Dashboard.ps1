@@ -1,110 +1,4 @@
-﻿function Show-GuidedWizard {
-    <#
-    一键向导（Dashboard 入口）：与 CLI Optimize.ps1 -Guided、WebUI「一键向导」页完全同源。
-    流程 = 只读体检 -> 自动推荐组合包 -> 展示计划 -> 用户确认一次 -> 执行 -> 复检出前后对比。
-    向导本身不写系统：数据全部来自 lib 的 Get-GuidedPlan，执行仍走 Invoke-Profile（不传 -Force）。
-    #>
-    try { Add-Type -AssemblyName Microsoft.VisualBasic -ErrorAction SilentlyContinue } catch { }
-    if (-not ('Microsoft.VisualBasic.Interaction' -as [type])) {
-        [System.Windows.Forms.MessageBox]::Show("当前环境不支持输入框，请改用主菜单「0. 一键向导」。", "提示",
-            [System.Windows.Forms.MessageBox]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
-        return
-    }
-
-    $btn = $this
-    $btn.Enabled = $false
-    $btn.Text = "体检中..."
-    Invoke-UIRefresh
-    $plan = $null
-    try {
-        Write-Log "一键向导：正在体检并生成推荐方案..."
-        $plan = Get-GuidedPlan
-    } catch {
-        Write-Log "一键向导体检失败: $($_.Exception.Message)" "ERROR"
-        [System.Windows.Forms.MessageBox]::Show("体检失败：$($_.Exception.Message)`n`n通常是非管理员导致，请右键以管理员身份重新启动。", "一键向导",
-            [System.Windows.Forms.MessageBox]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
-        $btn.Enabled = $true
-        $btn.Text = "一键向导（推荐）"
-        return
-    }
-
-    if (-not $plan.ok) {
-        Write-Log "一键向导无法生成计划: $($plan.error)" "ERROR"
-        [System.Windows.Forms.MessageBox]::Show("无法生成优化方案：$($plan.error)", "一键向导",
-            [System.Windows.Forms.MessageBox]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
-        $btn.Enabled = $true
-        $btn.Text = "一键向导（推荐）"
-        return
-    }
-
-    $p = $plan.profile
-    $txt = @()
-    $txt += "体检得分：$($plan.score) 分（$($plan.grade)）"
-    if ($p) {
-        $txt += "推荐方案：$($p.title)（$($p.name)）"
-        if ($p.reason) { $txt += "推荐理由：$($p.reason)" }
-        if ($p.explicit) { $txt += "（你手动指定了该方案）" }
-    }
-    if ($plan.powerPlan) { $txt += "电源计划：$($plan.powerPlan)" }
-    if ($plan.dns)      { $txt += "DNS：$($plan.dns)" }
-    $txt += ""
-    if (@($plan.steps).Count -gt 0) {
-        $txt += "将执行的步骤（$(@($plan.steps).Count) 项）："
-        foreach ($s in @($plan.steps)) { $txt += "  - $($s.action) -> $($s.target)" }
-    }
-    if (@($plan.manual).Count -gt 0) {
-        $txt += ""
-        $txt += "需你自己处理的 $(@($plan.manual).Count) 项（向导不会动）："
-        foreach ($m in @($plan.manual)) { $txt += "  - $($m.action)" }
-    }
-    $txt += ""
-    $txt += "每个域执行前会自动备份，可到「备份恢复」页撤销。"
-    $txt += "确认开始执行？"
-    $ans = [System.Windows.Forms.MessageBox]::Show(($txt -join "`n"), "一键向导",
-        [System.Windows.Forms.MessageBox]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
-    if ($ans -ne [System.Windows.Forms.DialogResult]::Yes) {
-        Write-Log "一键向导：用户取消执行。" "WARN"
-        $btn.Enabled = $true
-        $btn.Text = "一键向导（推荐）"
-        return
-    }
-
-    try {
-        $bkDir = Join-Path $script:ProjectRoot "backups"
-        if (-not (Test-Path $bkDir)) { New-Item -ItemType Directory -Path $bkDir -Force | Out-Null }
-        # 与 CLI / WebUI 一致：不传 -Force，auto=$false 或 risk=high 的步骤由 lib 自动跳过
-        $r = Invoke-Profile -Name $p.name -BackupDir $bkDir
-        Show-ProfileReport -Result $r
-    } catch {
-        Write-Log "一键向导执行失败: $($_.Exception.Message)" "ERROR"
-        [System.Windows.Forms.MessageBox]::Show("执行失败：$($_.Exception.Message)", "一键向导",
-            [System.Windows.Forms.MessageBox]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
-        $btn.Enabled = $true
-        $btn.Text = "一键向导（推荐）"
-        return
-    }
-
-    # 前后对比：用 lib 的 Compare-HealthReports，与 CLI / WebUI 同一份实现
-    try {
-        if ($plan.report) {
-            $after = Get-SystemHealthReport
-            $cmp = Compare-HealthReports -Before $plan.report -After $after
-            if ($cmp) {
-                $line = "优化前后体检得分：$($cmp.beforeScore) -> $($cmp.afterScore)（$($cmp.scoreDelta)）"
-                Write-Log $line "SUCCESS"
-                [System.Windows.Forms.MessageBox]::Show($line, "一键向导结果",
-                    [System.Windows.Forms.MessageBox]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
-            }
-            try { Save-HealthReport -Report $after -BackupDir (Join-Path $script:ProjectRoot "backups\health") } catch { }
-        }
-    } catch {
-        Write-Log "一键向导复检失败: $($_.Exception.Message)" "WARN"
-    }
-    $btn.Enabled = $true
-    $btn.Text = "一键向导（推荐）"
-    Build-Dashboard
-}
-# 渲染优化组合包执行结果
+﻿# 渲染优化组合包执行结果
 function Show-ProfileReport {
     param($Result)
     if (-not $Result) { Write-Log "组合包未返回结果。" "ERROR"; return }
@@ -333,7 +227,7 @@ function Build-Dashboard {
     $btnProfile = New-Button "选择组合包" 16 62 150 30 $Theme.AccentDark 10
     # 一键向导：与 CLI Optimize.ps1 -Guided / WebUI「一键向导」同源，全部读 lib 的 Get-GuidedPlan
     $btnGuided = New-Button "一键向导（推荐）" 178 62 190 30 $Theme.Success 10
-    $btnGuided.Add_Click({ Show-GuidedWizard })
+    $btnGuided.Add_Click({ Show-GuidedPageFromDashboard })
     $cardProf.Controls.Add($btnGuided)
     $cardProf.Controls.Add((New-Label "不知道选哪个？先让工具体检并自动推荐，你只需确认一次" 382 66 370 22 $Fonts.Small $Theme.TextDim))
     $btnProfile.Add_Click({

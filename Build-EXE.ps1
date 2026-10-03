@@ -44,7 +44,8 @@ $pageFiles = @(
     "pages/Dashboard.ps1", "pages/Clean.ps1", "pages/Services.ps1",
     "pages/Startup.ps1", "pages/Visual.ps1", "pages/Power.ps1",
     "pages/Disk.ps1", "pages/Network.ps1", "pages/Backup.ps1",
-    "pages/Update.ps1", "pages/About.ps1", "pages/Health.ps1", "UpdateCheck.ps1"
+    "pages/Update.ps1", "pages/About.ps1", "pages/Health.ps1", "UpdateCheck.ps1",
+    "pages/Guided.ps1", "pages/GuidedActions.ps1"
 )
 foreach ($pf in $pageFiles) {
     $p = Join-Path $guiDir $pf
