@@ -193,9 +193,9 @@ function Build-BackupPage {
     $dgv.DefaultCellStyle.BackColor = $Theme.BgPanel
     $dgv.DefaultCellStyle.ForeColor = $Theme.TextMain
     $dgv.DefaultCellStyle.SelectionBackColor = $Theme.AccentDark
-    $dgv.DefaultCellStyle.SelectionForeColor = $Theme.TextBright
+    $dgv.DefaultCellStyle.SelectionForeColor = $Theme.ButtonText
     $dgv.ColumnHeadersDefaultCellStyle.BackColor = $Theme.BgCard
-    $dgv.ColumnHeadersDefaultCellStyle.ForeColor = $Theme.TextBright
+    $dgv.ColumnHeadersDefaultCellStyle.ForeColor = $Theme.TextMain
     $dgv.EnableHeadersVisualStyles = $false
     $dgv.Columns.Add("Time",  "时间")   | Out-Null
     $dgv.Columns.Add("Domain","域")     | Out-Null

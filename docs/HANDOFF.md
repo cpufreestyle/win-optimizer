@@ -2,6 +2,9 @@
 
 > 生成日期：2026-09-16
 > 最近复核：2026-09-26（实测：远端 `main` 与本地一致；PR #24（P4-1）已合并并随 v3.10.0 发布，见 §2 与 §3.14）
+> 最近复核：2026-10-03（浅色苹果风 UI 真机收口：GUI 12 页窗口级像素渲染逐页核对、WebUI 桌面视口真实浏览器截图、
+> 5 处既有布局撞车修复后七档窗口尺寸 0 重叠、测试套件 226/226 通过；见 §3.15 / §3.16 / §3.17 / §5.7 / §6）
+> 更早：2026-09-28（GUI 体检页/首页无头 harness 断言 22/22 通过、WebUI 后端 tips 复核通过、测试套件 226/226 通过）
 > 适用对象：接手 PC-Optimizer-7thGen 维护的开发者
 > 配套文档：`README.md`（用户向）、`docs/DEVELOPMENT.md`（开发向，本文不重复其中的架构 / 配置 / 版本 / SSH 说明）
 
@@ -28,21 +31,17 @@
 > ✅ **2026-09-26**：P3-1 智能建议一键应用闭环已合并（PR #21）并随 v3.9.0 发布（见 §3.13）。
 > ✅ **2026-09-26**：P4-1 启动项建议签名厂商否决已落地（见 §3.14），当前 `main` 工作区为 v3.10.0 发布态。
 
-> ✅ **2026-09-23 复核（实测，已推翻「main 严重落后」的旧结论）**：
-> - `git ls-remote origin refs/heads/main` 返回 `7cb9d17`，与本地 `main` **完全一致**——本地 `main` 并不落后，无需先同步。
->   判断远端真实 HEAD 一律以 `git ls-remote` 为准（tracking ref 不一定反映真实远端状态）。
-> - PR #5 / #6 / #7 **均仍未合并**：`refs/pull/{5,6,7}/head` 存在，`main` 自 PR #4 合并后未再前进，最新 tag 仍是 `v3.2.0`。
-> - 当前 checkout 在 `sync/v3.3.0-main`（`7268793`），其历史**已包含** PR #5/#6 合并，可直接用于合并 PR #7。
+> ✅ **2026-10-03 现状**：`main` @ `246ec51` = v3.10.0 发布态（PR #25 已合并）。Roadmap（FEATURE-IDEAS）
+> 的 P0 / P1 / P2 / P3 / P4 已全部收口；`origin/main` 与本地一致。**当前无待合并 PR**。
 
-- **当前工作分支：`sync/v3.3.0-main`**（v3.3.0 集成分支）
-  - 内容 = `main` + PR #5 + PR #6 完整合并（零冲突）+ 本轮收口改动。
-  - ⚠️ 远端原有的 `sync/v3.3.0-main` 是 09-15 的**陈旧快照**：当时本地 `perf` 分支只到 `f8a8f2f`，
-    因此缺 `23df87f`(网络) / `36126d0`(磁盘) / `bfd07e4`+`adbbe2c`(体检) / `dae7b29`(本文档) 四个提交，
-    且其发布说明里写的「44/44 测试通过」已过期（现为 87/87）。**本分支已重建并覆盖它**。
-- `main` **受保护**，所有改动必须经 PR 合入，且需手动在 GitHub 点「Merge」（无自动 merge 权限）。
-- **本集成分支开出的 PR：[**#7**](https://github.com/cpufreestyle/win-optimizer/pull/7)**（base `main`，待你手动 Merge）
-- PR #5 / #6 保留 OPEN：#7 合并后，GitHub 会自动关闭它们（其提交已全部可达）。
-  若你更倾向逐个合并，也可以直接按 `#5 → #6` 顺序在 GitHub 点合并，然后丢弃本分支。
+- **UI 苹果风改动已入库到分支 `codex/ui-apple-style`**（浅色主题 + 5 处布局撞车修复 + 概览容错，见 §3.15 / §3.16 / §3.17 / §3.19）：
+  `Build-EXE.ps1`、`OptimizeGUI.ps1`、`PC-Optimizer.exe`、`README.md`、`.gitignore`、`docs/HANDOFF.md`、
+  `gui/pages/{About,Backup,Clean,Dashboard,Health,Services,Startup}.ps1`、`webui/ps/01_system_info.ps1`、`webui/templates/index.html`。
+  真机验证已完成并推送，等待 PR 合并（`main` 受保护，需在 GitHub 手动点 Merge）。
+- 入库时**不要用裸 `git add -A`**：本地还留着 `.codex-*` 临时脚本与截图。`.gitignore` 已补 `.codex-*`
+  规则（§3.17），正常情况下会被忽略；但显式列举改动文件最稳妥。
+- `main` **受保护**，所有改动必须经 PR 合入，且需在 GitHub 手动点「Merge」（当前账号无自动 merge 权限）。
+- **判断远端真实 HEAD 一律以 `git ls-remote` 为准**（tracking ref 不一定反映真实远端状态）。
 
 ## 3. 近期完成的大块工作
 
@@ -302,7 +301,134 @@ P3-1 把「智能建议」变成一键可执行后，误关代价从「读一遍
 config 回退 / 厂商签名项被否决并带原因 / 第三方签名项照常推荐且带 publisher / 未签名不否决 /
 一键应用不碰签名项 / 「已保护」文案渲染），全量 **226/226** 通过。
 
+### 3.15 UI 改版：浅色「苹果风」主题（WebUI + GUI 同源配色）
+
+原 WebUI 是深色底 + 亮蓝，GUI 也是深色（`BgDark=(30,30,40)`）。本轮统一改成浅色苹果风。
+
+| 层 | 落点 | 说明 |
+|----|------|------|
+| WebUI | `webui/templates/index.html` 的 `:root` | `--bg:#f5f5f7` / `--panel:#fff` / `--panel2:#f2f2f7` / `--text:#1d1d1f` / `--dim:#6e6e73` / `--accent:#007aff`；卡片白底 + 细边 + 轻投影，系统字体栈（`-apple-system` / `Segoe UI` / `Microsoft YaHei UI`），补齐 `:focus-visible` 焦点环与 `prefers-reduced-motion` 降级；语义色用 Apple 深色变体（绿 `#248a3d` / 黄 `#9a6700` / 红 `#d70015` / 橙 `#c93400`）保证白底可读 |
+| GUI | `OptimizeGUI.ps1` 的 `$script:Theme` | 键名保持不变（只换配色语义，避免逐个改页面）：`BgDark`→窗口浅灰、`BgPanel`→次级面板浅灰、`BgCard`/`BgInput`→白、`Accent`→`#007AFF`、`TextMain`/`TextBright`→`#1D1D1F`、`TextDim`→`#6E6E73`、`Success/Warning/Error` 用上表同款深色变体 |
+| GUI | `New-Button` / 导航按钮 / `New-Card` 标题 / `LogTextBox` | 新增 `ButtonText=(255,255,255)`：强调色与彩色按钮白字，浅色主题下不掉对比度；卡片标题改用 `TextMain`（浅底上 `TextBright` 等于正文色，语义重复）；日志框硬编码的 `FromArgb(25,25,35)` 改为 `$Theme.BgCard` |
+| GUI | `gui/pages/{Services,Startup,Backup}.ps1` | DataGridView 选中行前景改 `ButtonText`（蓝底白字），表头前景改 `TextMain`（浅灰底深字） |
+| GUI | `gui/pages/About.ps1` | 「检查更新」按钮硬编码的 `Color::White` 改 `$Theme.ButtonText` |
+| 文档 | `README.md` | 「现代化深色主题」→ 浅色主题描述 |
+
+**验证（2026-10-03 升级到真机像素级）**：
+
+| 端 | 手段 | 结果 |
+|----|------|------|
+| WebUI | 真实浏览器桌面视口（1440×1000）headless 截图 | 浅色侧栏 + 白卡片 + `#007AFF` 强调色 + 系统字体，HTTP 200 / 57 KB |
+| WebUI | 窄屏 CSS 复核 | 导航由纵向堆叠改为三列，横向滚动条消失 |
+| GUI | **新增无头真机渲染 harness**（见 §3.16） | 12 个页面全部逐页出图并肉眼核对 |
+| GUI | 像素探针 | 复选框底 `#F5F5F7`、列表底 `#FFFFFF`，无「深色压深色」 |
+| EXE | `PC-Optimizer.exe` 重建（652 KB / v3.10.0） | 二进制内可检索到新主题与布局字符串 |
+
+GUI 侧要点：harness dot-source 真实前导段 + 主窗体 UI 段构建**真实控件树**，`$MainForm.Show()` 让窗口真正 realize 后再
+`DrawToBitmap` 逐页出图——窗口级渲染不再需要交互式桌面（原先「沙箱会杀掉窗口进程、只能验属性不能验像素」的限制已解除）。
+
 ---
+
+### 3.16 GUI 布局撞车修复（2026-10-03）
+
+浅色主题上线后做真机渲染时，发现 5 处**既有**控件重叠（与配色无关，属历史遗留）。同批一并修掉：
+
+| 页面 | 症状 | 修复 |
+|------|------|------|
+| Clean | `CleanListBox` 同时锚定 `Top\|Bottom\|Left\|Right`。`Reposition-PageControls` 每次重排都会把「靠左且宽度 ≥ 400」的控件宽度改成 `$maxW`，WinForms 把这次**宽度**变化当成一次纵向缩放，`Height` 随之按帧累加（实测 830 → 1814 → 2552 px），最终吞掉下方 3 个复选框、`BtnClean`/`BtnCancelClean` 与进度标签 | 去掉 `Bottom` 锚（只留 `Top\|Left\|Right`），高度固定 182（底边 338）；操作区上移到 340/372/424 |
+| Services | 表格底边 376 压住 `chkTelemetry`(y=366) 10 px | 表格高 280 → 240（底边 336） |
+| Startup | 表格底边 456 压住两个按钮(y=446) 10 px | 表格高 360 → 312（底边 408） |
+| Health | `BtnHealthExport`(x=350) 与 `chkHealthRp`(x=515)、右侧对比标签(x=340,w=440) 三方互相压字 | 操作行重排为 20/180/340/515，对比标签下移独占一行(y=762)，`lblTips` 772→796、`TxtHealthTips` 802→826、`BtnHealthApplyTips` 960→984 |
+| Dashboard | `btnFull` 写死 `$yDisk + 112`，比系统信息卡片底边还高 4 px | 改成与「刷新信息」同源：`$yDisk + 4 + $cardSysHeight + 12` |
+
+**教训（写进 §5）**：给控件加 `Anchor = Bottom` 之前，先确认它不会同时被 `Reposition-PageControls`
+改宽度；两者叠加会产生「每次 Resize 长高一点」的正反馈。
+
+**回归**：新增重叠审计（遍历每页顶层控件两两求交），窗口尺寸 900×640（MinSize）、1000×700、
+1024×720、1280×880、1400×1000、1600×900、1920×1080 **七档全部 0 重叠**；
+`Clean` 列表高度在连续 Resize 后稳定在 182（修复前一路涨到 2552）。测试套件 **226 例无回归**。
+
+### 3.17 UI 苹果风复核与工程性加固（2026-10-03 续）
+
+对 §3.15 / §3.16 同批改动做二次真机复核，并顺手补两处工程性隐患：
+
+- **重叠审计复跑**：窗口 900×640、1000×700、1024×720、1280×880、1400×1000、1600×900、1920×1080
+  七档**全部 0 重叠**（修复前为 11~12 处）。
+- **12 页真机渲染复查**：逐张目视确认清洁页底部 3 个复选框与「开始清理 / 取消 / 就绪」全部可见、
+  启动页表格不再压住两个按钮、仪表盘「一键全面优化」与系统信息卡不再叠字。
+  日志面板左侧竖排那条「清空」是 `btnClearLog`（`OptimizeGUI.ps1:730`），**不是缺陷**。
+- **换行归一**：13 个改动文件曾被编辑器混入裸 LF（`git diff` 会报 `LF will be replaced by CRLF`）。
+  已统一回 `CRLF`，并逐文件与 `HEAD` 比对确认 BOM 状态未变；解析器 0 错误。
+- **`.gitignore` 加固**：新增 `.codex-*` 规则。此前本地临时脚本/截图/日志只被 `_*.ps1`、`_*.png`
+  间接覆盖一部分，是裸 `git add -A` 误入库的隐患；已用 `git check-ignore` 验证命中。
+- **EXE 重建**：`PC-Optimizer.exe` 重新编译（667,648 字节），二进制 UTF-16LE 段确认含
+  `FromArgb(0, 122, 255)`、`Reposition-PageControls`、`$yDisk + 4 + $cardSysHeight + 12` 等本次固化的配色与布局串。
+
+**入库**：改动提交到分支 `codex/ui-apple-style` 并推送、开 PR；`main` 受保护，最终由维护者点 Merge。
+
+**旁注（沙箱假故障）**：把 WebUI 放在 Codex 沙箱里跑时，`/api/overview` 会整页显示
+「获取失败 拒绝访问」——因为沙箱内所有 `Get-CimInstance` 都被拒绝（`IsInRole(Administrator)=False`）。
+在沙箱外以普通用户（medium 完整性）运行同一脚本一切正常，属**测试环境假象**，不是产品缺陷。
+
+### 3.18 发布版 EXE 缺页修复：`Health.ps1` 从未被打进 `PC-Optimizer.exe`（2026-10-03 续）
+
+**症状**：仓库里入库的 `PC-Optimizer.exe`（274,432 字节）双击运行后**没有「系统体检」页**，
+且页面数是 11 个（README 写 11、About 页写 10，三处互相矛盾）。
+
+**根因**：`Build-EXE.ps1` 的 `$pageFiles` 白名单漏了 `pages/Health.ps1`。
+GUI 源码运行（`OptimizeGUI.ps1` 直接跑）走的是 `#region GUI-PAGE-LOADER` 里的 `$pageLoader`，
+那份列表**有** Health，所以源码运行正常；但构建 EXE 时该 region 会被剥离，
+真实页面清单以 `Build-EXE.ps1` 的 `$pageFiles` 为准 —— 于是「源码能看到的页，EXE 里没有」，
+形成一条只在发布物上暴露的静默缺陷。
+
+**证据**：对新旧 EXE 各做一次 UTF-16LE 解码后检索：
+
+| 二进制 | 字节数 | `Build-HealthPage` | `系统体检` |
+|--------|--------|--------------------|-----------|
+| `HEAD:PC-Optimizer.exe`（旧） | 274,432 | ❌ | ❌ |
+| 本次重建 | 667,648 | ✅ | ✅ |
+
+**修复**：`Build-EXE.ps1` 的 `$pageFiles` 补上 `"pages/Health.ps1"`（一行改动），重新编译。
+重建后 EXE 同时包含 `FromArgb(0, 122, 255)`、`FromArgb(245, 245, 247)`、`Reposition-PageControls`、
+`$yDisk + 4 + $cardSysHeight + 12` 等本次固化的配色与布局串，且 `GUI-PAGE-LOADER` 的 dot-source
+代码已按预期被剥离（EXE 内检索为空）。
+
+**教训**：EXE 页面清单与 `#region GUI-PAGE-LOADER` 的 `$pageLoader` 是**两份手工维护的列表**，
+必须同步。以后新增 GUI 页面，两处都要加；PR 前用「二进制检索页名」做一次交叉验证即可发现漏项。
+
+**旁注**：`PC-Optimizer.exe` 是按「发布资产」入库的，但 `release.yml` 只在打 `v*` tag 时才重新构建。
+也就是说**日常 push/PR 不会刷新仓库里那份 EXE** —— 本次这类漏页缺陷能长期存在而不被 CI 发现，正是这个原因。
+若希望仓库内 EXE 始终可信，建议后续在 CI 里加一步「构建后与入库 EXE 比对/覆盖」。
+
+---
+
+### 3.19 WebUI 系统概览容错（2026-10-03 续）
+
+**背景**：有用户截图显示 WebUI「系统概览」整页只剩一行红字「获取失败 拒绝访问」。
+
+**定位**：webui/ps/01_system_info.ps1 原本把 OS / CPU / 磁盘 / 显卡四组查询塞在同一个外层
+try/catch 里，任何一组抛异常都会走到 catch 分支，整页退回 ok=false + error=拒绝访问，
+前端于是什么都不显示。这次截图正是沙箱环境（见 §3.17 旁注）触发；但产品侧同样存在：
+某块磁盘被 BitLocker 锁定、显卡驱动异常等都可能让整页空白。
+
+**修复**：
+
+- 01_system_info.ps1 改为**分组容错**：OS/内存/运行时间、CPU、磁盘、显卡各自独立 try/catch，
+  失败只清空本组或降级该字段，并把「分组: 原因」收进 errors 数组；ok 仅在 errors 为空时为 true。
+  字段名/结构与旧版保持一致，向后兼容。
+- webui/templates/index.html 的 renderOverview() 配合：完全失败（无 osName 且无磁盘）仍是红字
+  「获取失败」并带上 errors 明细；部分失败则在顶部显示黄色「部分数据不可用 + 明细」，其余卡片照常渲染。
+
+**验证**（真机 Chrome，非沙箱）：
+
+| 场景 | 结果 |
+|------|------|
+| 正常 | ok=true，OS / CPU / 内存 / 5 块磁盘 / 4 个显卡全部显示 |
+| 全部失败（沙箱内实例 :5055） | 红字「获取失败 os: 拒绝访问；cpu: …；disks: …；gpus: …」 |
+| 仅磁盘失败（stub） | 黄字「部分数据不可用 disks: access-denied」，其余卡片正常 |
+
+**顺带**：01_system_info.ps1 原有的 3 处裸 LF 一并归一到 CRLF（BOM 保持）；全仓库 76 个 .ps1 解析 0 错误。
+
 
 ## 4. 三端文件地图（按域）
 
@@ -343,7 +469,16 @@ config 回退 / 厂商签名项被否决并带原因 / 第三方签名项照常�
 4. **DNS 选项编号稳定**（1=Cloudflare / 2=Google / 3=阿里 / 4=114 / 5=腾讯）：WebUI 前端 `index.html` 硬编码了编号，**只能改地址不能改编号**。地址可在 `config/optimization.json` 的 `dns_options` 覆盖。
 5. **网络适配器自动排除虚拟/隧道网卡**（Hyper-V、VPN、蓝牙等），避免误改导致断网。规则在 lib 网络段的 `$script:VirtualAdapterPatterns`。
 6. **所有修改类操作前自动备份到 `backups/`**（已 gitignore，不入库）；GUI 的 `[B]` 恢复、CLI 备份恢复脚本依赖它。
-7. **GUI 页面无法在此环境自动化测试**（WinForms 需交互式桌面）。新增/改动 GUI 页面后，务必在**真机点一遍**验证渲染与行为。
+7. **GUI 页面可以做窗口级像素渲染**（2026-10-03 更新，此前的「不可行」结论已推翻）。
+   关键：不要用 `CopyFromScreen`（沙箱里报句柄无效），改用 `Form.Show()` 把窗口真正 realize 之后再
+   `Form.DrawToBitmap()` —— 窗口可以放在屏外 `(-4000,-4000)` + `ShowInTaskbar=$false`，照样能出像素。
+   完整配方见 §6「GUI 真机渲染 + 重叠审计」。
+   ~~（旧结论：WinForms 需交互式桌面，沙箱会杀掉窗口进程，像素截图不可行）~~
+   另外，**页面构建逻辑可以无头真机执行**：取 `OptimizeGUI.ps1` 前 366 行 prelude → dot-source `lib/Optimize.Core.ps1` 与 `gui/pages/Xxx.ps1` →
+   自建 `$script:Pages` 与本地 `New-Page` → 调 `Build-XxxPage`，即可真实 render 出完整控件树；
+   按钮事件用反射 `$btn.GetType().GetMethod('OnClick', 'Instance,NonPublic,Public').Invoke($btn, [object[]][System.EventArgs]::Empty)` 触发，
+   **不要用 `PerformClick()`**（它依赖已创建的窗口句柄，无窗口时静默不触发，会误判成「功能坏了」）。
+   新增/改动 GUI 页面后务必这样跑一遍；跑这类 harness 必须**前台执行**，原因见第 22 条。
 8. **Pester 测试陷阱**：`{ $x = ... } | Should -Not -Throw` 的脚本块在子作用域执行，内部赋值**不会**回写父作用域，`$x` 一直是 `$null`。需断言结果时**直接调用**函数再断言。
 9. **Build-EXE 依赖 region 标记**：`OptimizeGUI.ps1` 中 `#region GUI-PAGE-LOADER` / `#endregion` 包裹页面 dot-source 加载段，编译时会被剥离（函数已内联）。**不要改名 / 删除这两个标记**。
 10. **CompactOS 默认必须关闭**：默认值唯一来源是 `config/optimization.json` 的 `disk.compact_os_default`（`false`）。**不要把任何一端改回无条件 `Compact.exe /CompactOS:always`** —— 压缩耗时长且回滚要再跑一次 `Compact.exe /CompactOS:never`。有 AST 用例守着 CLI，改动会让测试失败。
@@ -384,6 +519,30 @@ config 回退 / 厂商签名项被否决并带原因 / 第三方签名项照常�
     `$plan = Get-OptimizePlan ...` 直接抛「Cannot convert PSCustomObject to SwitchParameter」，而错误栈只指向调用行，极难定位。
     **加 `-Xxx` switch 前先全文搜一遍 `$xxx`**；已中招的就地改名（本次 `Optimize.ps1` 的 `$plan` → `$planPreview`）。
 
+22. **`Anchor = Bottom` + `Reposition-PageControls` 改宽度 = 每次 Resize 长高一点**（2026-10-03）：
+    `Reposition-PageControls` 会把每个「靠左且宽度 ≥ 400」的控件宽度重设为 `$maxW`。WinForms 的锚定是在
+    **Resize 事件**里按比例换算的，所以这次**宽度**变化会被折算成一次纵向缩放，`Bottom` 锚定的控件
+    `Height` 就会逐次累加——`CleanListBox` 实测 830 → 1814 → 2552 px，最后盖住整个操作区。
+    同理，`Right` 锚定的控件每轮也会因为「按比例换算」而漂移。
+    **规则：凡是被 `Reposition-PageControls` 命中（`Left ≤ 30` 且 `Width ≥ 400`）的控件，锚定只用 `Top|Left`**；
+    需要「撑满宽度」就让 `Reposition-PageControls` 去设 `Width`，不要靠 `Anchor`。
+
+23. **沙箱中「分离启动」的 PowerShell 子进程里 `Microsoft.PowerShell.Security` 导入失败**：用 `Start-Process powershell ...`
+    （后台 / 隐藏窗口）拉起的子进程导入该模块会报 TypeData 冲突（`System.Security.AccessControl.ObjectSecurity` 的
+    `AuditToString` / `AccessToString` / `Sddl` 等成员「已存在」），于是 `Get-AuthenticodeSignature` 不可用 →
+    `Get-FilePublisher` 静默返回空 → P4-1 的签名厂商否决（§3.14）整段失效，表现为「0 条已保护」，极易被误判成功能回归。
+    前台直接 `powershell -File ...` 的子进程完全正常（实测签名 `Valid`、publisher 正确）。
+    **结论：验证签名/证书相关行为必须前台执行，且断言要写死 vetoed 条数（本机为 4）**；失败方向是 fail-open
+    （publisher 空 → 不否决 → 退回打分推荐），不会误禁系统组件，无需改代码兜底。
+
+24. **PowerShell `[System.IO.File]::ReadAllLines` / `WriteAllText` 会悄悄改掉换行与 BOM**（2026-10-03）：
+    `ReadAllLines` 拆行后**丢掉行尾符**，用默认 `-join` 拼回去会得到全 `LF` 文件；`WriteAllText` 用
+    `new UTF8Encoding($true)` 才带 BOM、用 `$false` 则**剥掉 BOM**。改动 `*.ps1` 时如果走这条路，
+    很容易「只改了一行，diff 却整文件重写」，更严重的会给 `*.ps1` 去掉 BOM，导致 PS 5.1 把中文当 ANSI 读 → 乱码。
+     **规则**：改完一律用 `ReadAllBytes` + 手动去/补 BOM + `-replace "`r`n","`n" -replace "`n","`r`n"`
+    归一，然后断言 `bareLF=0`；仓库内 `.gitignore` 等非 `*.ps1` 文件按其**原有**约定（该文件无 BOM）保存，别一律加 BOM。
+    验证：`git diff` 不应出现「`-﻿# 编译产物` / `+# 编译产物`」这类 BOM 噪声，也不应出现整文件重写。
+
 ---
 
 ## 6. 如何验证改动
@@ -393,18 +552,34 @@ config 回退 / 厂商签名项被否决并带原因 / 第三方签名项照常�
   cd <项目根>
   Invoke-Pester -Path ./tests/Optimize.Core.Tests.ps1
   ```
-  当前 **151 个用例**（含各域「编号稳定 / 必须备份 / 行为契约」断言；其中 6 条是 CompactOS 契约用例、1 条用 Mock 覆盖「无活动网卡」分支）。新增 lib 函数时务必补对应用例。
+  当前 **226 个用例**（2026-09-28 实测 226 通过 / 0 失败，入口 `_runtests.ps1`；含各域「编号稳定 / 必须备份 / 行为契约」断言，其中 6 条是 CompactOS 契约用例、1 条用 Mock 覆盖「无活动网卡」分支）。新增 lib 函数时务必补对应用例。
 - **只读 smoke**：直接 `& scripts/15-HealthCheck.ps1` 或 `& webui/ps/15_health.ps1` 看 JSON 输出；磁盘/网络等可用 `-WhatIf` 预演不改系统。
 - **Profiles 四态回归**：`& webui/ps/16_profiles.ps1 -Action list|plan`、`-Action apply -Name minimal -DryRun`（断言 `dryRun:true`）、`-Action apply -Name gaming -DryRun`（断言 `startup` 进 `skipped`）、`-Action apply -Name gaming -DryRun -Force`（断言全步骤跑完、`skipped` 为空）、坏名字返回 `ok:$false`。
-- **提交前自检**：确认改动 `*.ps1` 均带 BOM、语法 0 错误（见第 5.1 的解析校验）。
+- **GUI 真机渲染 + 重叠审计**（2026-10-03 新增，改 GUI 布局/配色必跑）：
+  写一个临时 harness，用 `[System.IO.File]::ReadAllLines(..., UTF8)` 读 `OptimizeGUI.ps1`，按标记切三段拼成一个临时脚本：
+  `0 .. (if (-not (Test-Administrator)) 之前)` 的前导段（注意跳过顶层 `trap { }` 块）→ 补 `$script:ProjectRoot/ScriptsDir/BackupDir/LogFile`
+  + dot-source `lib\Optimize.Core.ps1` → `$MainForm = New-Object ...` 起到 `Start-BackgroundUpdateCheck` 之前的主窗体 UI 段。
+  dot-source 该临时脚本后：
+  1. **像素渲染**：`StartPosition=Manual` + `Location=(-4000,-4000)` + `ShowInTaskbar=$false` → `$MainForm.Show()` →
+     `DoEvents()` → 逐页设 `Visible` 并 `BringToFront()` → `$MainForm.DrawToBitmap($bmp, ...)` → 存 PNG。
+  2. **重叠审计**：遍历每页 `$page.Controls` 顶层控件两两求交（`Max(Left)`/`Min(Right)`…），任何 `w>0 且 h>0` 即报重叠。
+     跑 `900×640`（MinSize）`/1000×700/1024×720/1280×880/1400×1000/1600×900/1920×1080` 七档，**要求全 0**。
+  3. **锚定回归**：对 `CleanListBox` 这类宽控件连续 `Resize`，断言 `Height` **不随帧增长**（见 §5.22）。
+- **提交前自检**：确认改动 `*.ps1` 均带 BOM、语法 0 错误（见 §5.1 的解析校验）。
 
 ---
 
 ## 7. 待定决策 / 已知未完成
 
 - ~~**CLI 的 CompactOS 默认无条件执行**~~ → **已于 2026-09-18 收口**（见 §3.3）：三端统一为「显式开关、默认关闭」，默认来源 `config` 的 `disk.compact_os_default`。
-- **GUI 体检页 `gui/pages/Health.ps1` 仅做了静态校验（语法 + BOM + 接入一致性），未真机点验**，上线前需在真机确认渲染。
-- **GUI 首页 `gui/pages/Dashboard.ps1` 的「优化组合包」卡片同理仅做了静态校验**（语法 / BOM / CRLF / 引用完整性），InputBox 与 MessageBox 的交互路径需真机点验。
+- **GUI 体检页 `gui/pages/Health.ps1`：2026-09-28 已做无头真机点验（§5.7 harness）**——真实构建控件树（18 个控件）并用反射触发「开始体检」
+  跑完整链路（27.5 s，58/100「亟需优化」），22/22 断言通过：4 条「已保护」签名否决行、推荐项「签名:」字段、编号推荐无微软签名项泄漏、
+  指标 16 行、一键修复预览 21 行、与上次对比文案正常、递归 59 个控件无 U+FFFD。
+  剩余缺口（2026-10-03 更新）：~~窗口级像素渲染~~ 已解决（见 §3.15 / §6）；
+  仅剩 `MessageBox` / `InputBox` 模态交互路径与 UIA 点击需在交互式桌面人工确认。
+  **并已在 2026-10-03 完成全部 12 个页面的窗口级像素渲染并逐页肉眼核对（含本页 5 处布局撞车修复，见 §3.16）。**
+- **GUI 首页 `gui/pages/Dashboard.ps1` 同批无头真机点验通过**：递归 41 个控件，含「优化组合包」卡片标题与「选择组合包」按钮；
+  「选择组合包」点击后的 `InputBox` / `MessageBox` 交互路径仍需交互式桌面真机确认。
 - ~~既有缺陷：`webui/ps/02_clean.ps1` 在 dot-source lib 之前就调用 `Get-CleanTargets -Web`，导致 `/api/clean/scan` 报命令未找到~~ → **已修复**（2026-09-24）：
   lib dot-source 提前到 `Get-CleanTargets` 之前，并按 `16_profiles.ps1` 的模式补了一个“未找到共享核心库”的 JSON 兜底（而不是把 PowerShell 报错当成 JSON）。
   回归：`/api/clean/scan` 返回 `ok:true` + 6 个清理项（含预估大小）。
@@ -420,8 +595,9 @@ config 回退 / 厂商签名项被否决并带原因 / 第三方签名项照常�
 1. ✅ 合并 **PR [#7](https://github.com/cpufreestyle/win-optimizer/pull/7)**（`sync/v3.3.0-main` → `main`）；PR #5/#6 由 GitHub 自动关闭。
 2. ✅ 清理远端残留分支：`feat/optimizations`、`fix/cli-error-isolation-version`、`perf/folder-size-and-logging`、`release/v3.1.0` 与集成分支均已删除，远端只剩 `main`。
 3. ✅ 打 tag `v3.3.0`：Release workflow 成功，GitHub Release `v3.3.0` 已发布。
-4. 真机验收 GUI 体检页（§7）与新增的「体检趋势」「智能建议」显示
-   （WebUI SVG 趋势卡片 / 智能建议表格 / GUI 迷你图与建议面板 / CLI `-Trend`）。
+4. ✅（部分）真机验收 GUI 体检页（§7）与新增的「体检趋势」「智能建议」显示：2026-09-28 已用无头 harness + WebUI 后端 JSON 复核完成
+   （WebUI SVG 趋势卡片 / 智能建议表格 / GUI 迷你图与建议面板 / CLI `-Trend`）；
+~~仅剩窗口级像素渲染~~ 已于 2026-10-03 用无头 harness 完成（§3.15）；仅剩 `InputBox` / `MessageBox` 交互路径需在交互式桌面人工确认。
 5. ✅ P1 系列全部发布（P1-1 见 §3.6，P1-2→v3.5.0，P1-3→v3.6.0）；
    ✅ P2 智能降级建议已实现（§3.9），待随 v3.7.0 发布。
 6. Roadmap 功能项已全部收口：P0 / P1 / P2 均落地（P2 三项见 §3.9、§3.11、§3.12）。

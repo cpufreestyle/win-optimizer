@@ -15,16 +15,17 @@
 
     $script:DgvStartup = New-Object System.Windows.Forms.DataGridView
     $script:DgvStartup.Location = New-Object System.Drawing.Point(20, 96)
-    $script:DgvStartup.Size = New-Object System.Drawing.Size(760, 360)
+    # 高度收到 312：底边 408 必须留出按钮行（y=446）的空间
+    $script:DgvStartup.Size = New-Object System.Drawing.Size(760, 312)
     $script:DgvStartup.BackgroundColor = $Theme.BgPanel
     $script:DgvStartup.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
     $script:DgvStartup.DefaultCellStyle.BackColor = $Theme.BgInput
     $script:DgvStartup.DefaultCellStyle.ForeColor = $Theme.TextMain
     $script:DgvStartup.DefaultCellStyle.Font = $Fonts.Small
     $script:DgvStartup.DefaultCellStyle.SelectionBackColor = $Theme.Accent
-    $script:DgvStartup.DefaultCellStyle.SelectionForeColor = $Theme.TextBright
+    $script:DgvStartup.DefaultCellStyle.SelectionForeColor = $Theme.ButtonText
     $script:DgvStartup.ColumnHeadersDefaultCellStyle.BackColor = $Theme.BgPanel
-    $script:DgvStartup.ColumnHeadersDefaultCellStyle.ForeColor = $Theme.TextBright
+    $script:DgvStartup.ColumnHeadersDefaultCellStyle.ForeColor = $Theme.TextMain
     $script:DgvStartup.ColumnHeadersDefaultCellStyle.Font = $Fonts.Body
     $script:DgvStartup.EnableHeadersVisualStyles = $false
     $script:DgvStartup.AllowUserToAddRows = $false

@@ -165,7 +165,8 @@ function Build-Dashboard {
     $page.Controls.Add($btnRefresh)
 
     # --- 一键优化按钮 ---
-    $btnFull = New-Button "一键全面优化" 640 ([int]($yDisk + 112)) 140 36 $Theme.Success 10
+    # 与「刷新信息」同一操作行（原先写死 $yDisk + 112，比系统信息卡片底边还高 4px，会压住卡片）
+    $btnFull = New-Button "一键全面优化" 640 ([int]($yDisk + 4 + $cardSysHeight + 12)) 140 36 $Theme.Success 10
     $btnFull.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
     $btnFull.Add_Click({
         $result = [System.Windows.Forms.MessageBox]::Show(

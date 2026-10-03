@@ -179,24 +179,32 @@ function Clear-DnsClientCacheCompat {
 }
 
 # ============================================================
-#  颜色主题（深色主题）
+#  颜色主题（浅色苹果风）
 # ============================================================
+# 浅色苹果风主题：与 webui/templates/index.html 的 :root 变量保持同一套语义
+# 取值对齐 Apple 系统色（systemBlue #007AFF、systemGray6 #F2F2F7、label #1D1D1F 等），
+# 沿用原有键名（BgDark/BgCard/TextBright...）以免改动各页面，只换配色语义：
+#   BgDark   = 窗口底色（浅灰）      BgCard  = 卡片/输入框（白）
+#   BgPanel  = 次级面板（浅灰）      BgInput = 输入框/表格行（白）
+#   TextBright = 高对比标题文字      TextDim = 次要说明文字
+# ButtonText 单独给强调色/彩色按钮的前景，避免浅色主题下蓝底白字对比度下降
 $script:Theme = @{
-    BgDark       = [System.Drawing.Color]::FromArgb(30, 30, 40)
-    BgPanel      = [System.Drawing.Color]::FromArgb(45, 45, 58)
-    BgCard       = [System.Drawing.Color]::FromArgb(52, 52, 68)
-    BgInput      = [System.Drawing.Color]::FromArgb(60, 60, 78)
-    Accent       = [System.Drawing.Color]::FromArgb(0, 150, 255)
-    AccentDark   = [System.Drawing.Color]::FromArgb(0, 110, 200)
-    AccentHover  = [System.Drawing.Color]::FromArgb(0, 170, 255)
-    TextMain     = [System.Drawing.Color]::FromArgb(235, 235, 245)
-    TextDim      = [System.Drawing.Color]::FromArgb(160, 160, 180)
-    TextBright   = [System.Drawing.Color]::FromArgb(255, 255, 255)
-    Success      = [System.Drawing.Color]::FromArgb(80, 200, 120)
-    Warning      = [System.Drawing.Color]::FromArgb(255, 180, 60)
-    Error        = [System.Drawing.Color]::FromArgb(240, 90, 90)
-    SideActive   = [System.Drawing.Color]::FromArgb(0, 150, 255)
-    SideHover    = [System.Drawing.Color]::FromArgb(55, 55, 72)
+    BgDark       = [System.Drawing.Color]::FromArgb(245, 245, 247)
+    BgPanel      = [System.Drawing.Color]::FromArgb(242, 242, 247)
+    BgCard       = [System.Drawing.Color]::FromArgb(255, 255, 255)
+    BgInput      = [System.Drawing.Color]::FromArgb(255, 255, 255)
+    Accent       = [System.Drawing.Color]::FromArgb(0, 122, 255)
+    AccentDark   = [System.Drawing.Color]::FromArgb(0, 90, 200)
+    AccentHover  = [System.Drawing.Color]::FromArgb(10, 132, 255)
+    TextMain     = [System.Drawing.Color]::FromArgb(29, 29, 31)
+    TextDim      = [System.Drawing.Color]::FromArgb(110, 110, 115)
+    TextBright   = [System.Drawing.Color]::FromArgb(29, 29, 31)
+    ButtonText   = [System.Drawing.Color]::FromArgb(255, 255, 255)
+    Success      = [System.Drawing.Color]::FromArgb(36, 138, 61)
+    Warning      = [System.Drawing.Color]::FromArgb(154, 103, 0)
+    Error        = [System.Drawing.Color]::FromArgb(215, 0, 21)
+    SideActive   = [System.Drawing.Color]::FromArgb(0, 122, 255)
+    SideHover    = [System.Drawing.Color]::FromArgb(233, 233, 239)
 }
 
 # ============================================================
@@ -312,7 +320,8 @@ function New-Button {
     $btn.FlatAppearance.BorderSize = 0
     $btn.FlatAppearance.MouseOverBackColor = $Theme.AccentHover
     $btn.BackColor = if ($Color) { $Color } else { $Theme.Accent }
-    $btn.ForeColor = $Theme.TextBright
+    # 浅色主题下强调色/彩色按钮一律用白字，保持与 WebUI .btn 一致的对比度
+    $btn.ForeColor = $Theme.ButtonText
     $btn.Cursor = [System.Windows.Forms.Cursors]::Hand
     $btn.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
     return $btn
@@ -348,7 +357,7 @@ function New-Card {
     $lblTitle.Size = New-Object System.Drawing.Size([int]($W - 32), 28)
     $lblTitle.Text = $Title
     $lblTitle.Font = $Fonts.Header
-    $lblTitle.ForeColor = $Theme.TextBright
+    $lblTitle.ForeColor = $Theme.TextMain
     $lblTitle.BackColor = [System.Drawing.Color]::Transparent
     $card.Controls.Add($lblTitle)
 
@@ -477,7 +486,7 @@ foreach ($item in $navItems) {
             $script:NavButtons[$k].ForeColor = $Theme.TextDim
         }
         $s.BackColor = $Theme.Accent
-        $s.ForeColor = $Theme.TextBright
+        $s.ForeColor = $Theme.ButtonText
         $key = $s.Tag
         foreach ($pn in $script:Pages.Keys) {
             $script:Pages[$pn].Visible = ($pn -eq $key)
@@ -496,7 +505,7 @@ foreach ($item in $navItems) {
 
 # 默认选中仪表盘
 $script:NavButtons["Dashboard"].BackColor = $Theme.Accent
-$script:NavButtons["Dashboard"].ForeColor = $Theme.TextBright
+$script:NavButtons["Dashboard"].ForeColor = $Theme.ButtonText
 
 # ============================================================
 #  内容区域（右侧主面板）— 用 SplitContainer 上下分区，根除遮挡
@@ -734,7 +743,7 @@ $logSplit.Panel1.Controls.Add($btnClearLog)
 # 日志文本框
 $script:LogTextBox = New-Object System.Windows.Forms.RichTextBox
 $script:LogTextBox.Dock = [System.Windows.Forms.DockStyle]::Fill
-$script:LogTextBox.BackColor = [System.Drawing.Color]::FromArgb(25, 25, 35)
+$script:LogTextBox.BackColor = $Theme.BgCard
 $script:LogTextBox.ForeColor = $Theme.TextDim
 $script:LogTextBox.Font = $Fonts.Mono
 $script:LogTextBox.ReadOnly = $true
