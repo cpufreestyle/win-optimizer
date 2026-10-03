@@ -69,11 +69,11 @@
     $page.Controls.Add($script:TxtHealthRemediation)
 
     # 智能降级建议（P2）：体检只说「哪里有问题」，这里指出「先动哪个最划算」
-    $lblTips = New-Label "智能建议（先动哪个最划算）" 20 772 400 24 $Fonts.Sub $Theme.Accent
+    $lblTips = New-Label "智能建议（先动哪个最划算）" 20 796 400 24 $Fonts.Sub $Theme.Accent
     $page.Controls.Add($lblTips)
 
     $script:TxtHealthTips = New-Object System.Windows.Forms.TextBox
-    $script:TxtHealthTips.Location = New-Object System.Drawing.Point(20, 802)
+    $script:TxtHealthTips.Location = New-Object System.Drawing.Point(20, 826)
     $script:TxtHealthTips.Size = New-Object System.Drawing.Size(760, 150)
     $script:TxtHealthTips.Font = $Fonts.Body
     $script:TxtHealthTips.ForeColor = $Theme.TextMain
@@ -298,7 +298,10 @@
     $page.Controls.Add($script:BtnHealthFix)
 
     # 导出前后对比报告（自包含 HTML / Markdown，默认输出到桌面）
-    $script:BtnHealthExport = New-Button "导出对比报告" 350 716 150 40 $Theme.Success 11
+    # 操作行同一行只放 开始体检 / 一键修复 / 导出对比报告 / 还原点复选框：
+    # 20..170、180..330、340..490、515..780 —— 导出按钮原先放在 x=350，会压住
+    # 515 处的「执行前先建系统还原点」复选框以及右侧的对比状态文字。
+    $script:BtnHealthExport = New-Button "导出对比报告" 340 716 150 40 $Theme.Success 11
     $script:BtnHealthExport.Add_Click({
         try {
             $pick = [System.Windows.Forms.MessageBox]::Show(
@@ -331,7 +334,7 @@
     $page.Controls.Add($script:BtnHealthExport)
 
     # 一键应用智能建议（P3-1）：按体检建议直接禁用启动项，执行前自动备份
-    $script:BtnHealthApplyTips = New-Button "应用智能建议" 20 960 150 40 $Theme.Accent 11
+    $script:BtnHealthApplyTips = New-Button "应用智能建议" 20 984 150 40 $Theme.Accent 11
     $script:BtnHealthApplyTips.Enabled = $false
     $script:BtnHealthApplyTips.Add_Click({
         try {
@@ -395,8 +398,8 @@
     })
     $page.Controls.Add($script:BtnHealthApplyTips)
 
-    # 对比结果提示
-    $script:LblHealthCompare = New-Label "点击「开始体检」后，这里会显示与上一次体检的对比。" 340 726 440 24 $Fonts.Small $Theme.TextDim
+    # 对比结果提示：从操作行挪到操作行下方独占一行（原先 x=340 与 515 的复选框、350 的导出按钮互相压字）
+    $script:LblHealthCompare = New-Label "点击「开始体检」后，这里会显示与上一次体检的对比。" 20 762 760 24 $Fonts.Small $Theme.TextDim
     $script:LblHealthCompare.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
     $page.Controls.Add($script:LblHealthCompare)
 }

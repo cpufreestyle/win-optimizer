@@ -45,3 +45,5 @@ Desktop.ini
 
 # 本地智能体工作/记忆目录
 .workbuddy/
+# 本地智能体临时脚本/截图（.codex- 前缀，仅本地调试用）
+.codex-*

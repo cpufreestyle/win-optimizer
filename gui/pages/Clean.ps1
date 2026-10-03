@@ -30,9 +30,13 @@
 
     $script:CleanListBox = New-Object System.Windows.Forms.CheckedListBox
     $script:CleanListBox.Location = New-Object System.Drawing.Point(20, 156)
-    $script:CleanListBox.Size = New-Object System.Drawing.Size(760, 200)
-    # 跟随页面宽高变化自适应
-    $script:CleanListBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right -bor [System.Windows.Forms.AnchorStyles]::Bottom
+    # 高度固定为「列表首行 156 -> 操作区 340」之间的可用空间，避免列表盖住下方复选框/按钮
+    # 锚定只保留 Top|Left|Right（不要 Bottom）。原因：Reposition-PageControls 每次重排都会把
+    # 「靠左且宽度 >= 400」的控件宽度改成 $maxW，而 WinForms 会把锚定 Bottom 控件的这次宽度
+    # 变化当成一次纵向缩放，Height 随每次 Resize 累加（实测 830 -> 1814 -> 2552px），最终吞掉
+    # 下方复选框与按钮。去掉 Bottom 后高度只由本行数值决定。
+    $script:CleanListBox.Size = New-Object System.Drawing.Size(760, 182)
+    $script:CleanListBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
     $script:CleanListBox.BackColor = $Theme.BgInput
     $script:CleanListBox.ForeColor = $Theme.TextMain
     $script:CleanListBox.Font = $Fonts.Body
@@ -79,9 +83,9 @@
     $page.Controls.Add($script:ChkDump)
 
     # 执行按钮
-    $script:BtnClean = New-Button "开始清理" 20 386 200 44 $Theme.Success 11
+    $script:BtnClean = New-Button "开始清理" 20 372 200 44 $Theme.Success 11
     # 取消按钮：仅在清理进行中可用，解决大目录清理时界面长时间无响应且无法中断的问题
-    $script:BtnCancelClean = New-Button "取消" 240 386 120 44 $Theme.Accent 11
+    $script:BtnCancelClean = New-Button "取消" 240 372 120 44 $Theme.Accent 11
     $script:BtnCancelClean.Enabled = $false
     $script:CleanCancel = $false
     $script:BtnCancelClean.Add_Click({
@@ -89,7 +93,7 @@
         $script:LblCleanProgress.Text = "正在取消，等待当前项目收尾..."
     })
     # 进度提示：整体项目进度 [n/m] + 当前项目的百分比
-    $script:LblCleanProgress = New-Label "就绪" 20 438 760 24 $Fonts.Small $Theme.TextDim
+    $script:LblCleanProgress = New-Label "就绪" 20 424 760 24 $Fonts.Small $Theme.TextDim
     $script:LblCleanProgress.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 
     $script:BtnClean.Add_Click({

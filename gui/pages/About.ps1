@@ -61,7 +61,7 @@ Win7 兼容性:
     $btnCheckUpdate.Location = New-Object System.Drawing.Point(20, 552)
     $btnCheckUpdate.Size = New-Object System.Drawing.Size(140, 36)
     $btnCheckUpdate.Font = $Fonts.Body
-    $btnCheckUpdate.ForeColor = [System.Drawing.Color]::White
+    $btnCheckUpdate.ForeColor = $Theme.ButtonText
     $btnCheckUpdate.BackColor = $Theme.Accent
     $btnCheckUpdate.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnCheckUpdate.Cursor = [System.Windows.Forms.Cursors]::Hand

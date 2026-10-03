@@ -14,16 +14,17 @@
     # DataGridView
     $dgv = New-Object System.Windows.Forms.DataGridView
     $dgv.Location = New-Object System.Drawing.Point(20, 96)
-    $dgv.Size = New-Object System.Drawing.Size(760, 280)
+    # 高度收到 240：底边 336 必须留出遥测复选框（y=366）与按钮行（y=400）的空间
+    $dgv.Size = New-Object System.Drawing.Size(760, 240)
     $dgv.BackgroundColor = $Theme.BgPanel
     $dgv.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
     $dgv.DefaultCellStyle.BackColor = $Theme.BgInput
     $dgv.DefaultCellStyle.ForeColor = $Theme.TextMain
     $dgv.DefaultCellStyle.Font = $Fonts.Small
     $dgv.DefaultCellStyle.SelectionBackColor = $Theme.Accent
-    $dgv.DefaultCellStyle.SelectionForeColor = $Theme.TextBright
+    $dgv.DefaultCellStyle.SelectionForeColor = $Theme.ButtonText
     $dgv.ColumnHeadersDefaultCellStyle.BackColor = $Theme.BgPanel
-    $dgv.ColumnHeadersDefaultCellStyle.ForeColor = $Theme.TextBright
+    $dgv.ColumnHeadersDefaultCellStyle.ForeColor = $Theme.TextMain
     $dgv.ColumnHeadersDefaultCellStyle.Font = $Fonts.Body
     $dgv.EnableHeadersVisualStyles = $false
     $dgv.AllowUserToAddRows = $false
