@@ -3393,4 +3393,55 @@ Describe 'GUI guided wizard page (shared by sidebar and dashboard entry)' {
         $src | Should -Match 'GuidedBefore'
         $src | Should -Match 'GuidedAfter'
     }
+
+Describe 'Optimize.Core guided onboarding hint (one-time explanation)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+        $script:StateDir = Join-Path $TestDrive 'onboarding-state'
+        if (Test-Path $script:StateDir) { Remove-Item $script:StateDir -Recurse -Force -ErrorAction SilentlyContinue }
+        New-Item -ItemType Directory -Path $script:StateDir -Force | Out-Null
+    }
+
+    It 'is not shown before anything is recorded' {
+        Remove-Item (Join-Path $script:StateDir 'onboarding.json') -Force -ErrorAction SilentlyContinue
+        Test-OnboardingHintShown -StateDir $script:StateDir | Should -BeFalse
+    }
+
+    It 'stays hidden after being recorded as shown' {
+        Set-OnboardingHintShown -StateDir $script:StateDir | Should -BeTrue
+        Test-OnboardingHintShown -StateDir $script:StateDir | Should -BeTrue
+    }
+
+    It 'treats a corrupt state file as not shown rather than losing the hint forever' {
+        $file = Join-Path $script:StateDir 'onboarding.json'
+        [System.IO.File]::WriteAllText($file, '{ this is not json', (New-Object System.Text.UTF8Encoding($false)))
+        Test-OnboardingHintShown -StateDir $script:StateDir | Should -BeFalse
+    }
+
+    It 'explains admin rights, restart and rollback in the hint text' {
+        $lines = @(Get-OnboardingHintText)
+        @($lines).Count | Should -BeGreaterThan 0
+        $joined = ($lines -join ' ')
+        $joined | Should -Match '管理员'
+        $joined | Should -Match '重启'
+        $joined | Should -Match '备份'
+    }
+
+    It 'attaches the hint to the guided plan only while it is still unread' {
+        # Mock 掉状态读写，避免依赖本机 %LOCALAPPDATA%（否则第二次跑就会因为状态已被标记而失败）
+        $rep = [PSCustomObject]@{ timestamp = 'x'; score = 70; grade = 'g'; metrics = $null; issues = @() }
+        Mock Test-OnboardingHintShown { $false }
+        $fresh = Get-GuidedPlan -Report $rep
+        $fresh.onboarding | Should -Not -BeNullOrEmpty
+        $fresh.onboarding.shown | Should -BeFalse
+        @($fresh.onboarding.lines).Count | Should -BeGreaterThan 0
+    }
+
+    It 'omits the hint once the state says it was already shown' {
+        $rep = [PSCustomObject]@{ timestamp = 'x'; score = 70; grade = 'g'; metrics = $null; issues = @() }
+        Mock Test-OnboardingHintShown { $true }
+        $seen = Get-GuidedPlan -Report $rep
+        $seen.onboarding | Should -BeNullOrEmpty
+    }
+}
 }

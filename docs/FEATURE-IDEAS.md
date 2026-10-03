@@ -347,7 +347,12 @@ CLI 主菜单加 `[0] 一键向导`，`-Guided` 直达、`-GuidedPlan` 只读预
   **已落地（v3.11.0）**：GUI 向导页在拿到前后两份报告后出现「导出对比报告」按钮（`Invoke-GuidedExport`），
   WebUI 在复检后出现同名按钮（`/api/guided/export` + `17_guided.ps1 -Action export`）。
   两端都调 lib 的 `Export-HealthReport`，输出自包含 HTML / Markdown，不另写导出逻辑。
-- 首次运行时用一次性提示解释「为什么需要管理员 / 为什么建议重启」，减少中途放弃。
+- ~~首次运行时用一次性提示解释「为什么需要管理员 / 为什么建议重启」，减少中途放弃。~~
+  **已落地（v3.11.0）**：lib 新增 `Test-OnboardingHintShown` / `Set-OnboardingHintShown` / `Get-OnboardingHintText`，
+  状态记在 `%LOCALAPPDATA%\PC-Optimizer-7thGen\onboarding.json`（不污染版本库，也不被多用户目录互相覆盖）。
+  `Get-GuidedPlan` 仍处于首次时附带 `onboarding` 段：CLI 打印在计划前，GUI 用说明卡 + 「知道了」，
+  WebUI 在计划卡顶部出横幅 + 同名按钮；任一端点掉即落状态，之后不再出现。状态文件损坏时视为未读过，
+  宁可多说一次也不让说明永久消失。
 
 ## 建议实施顺序
 

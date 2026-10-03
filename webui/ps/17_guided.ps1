@@ -15,7 +15,7 @@
     Compare-HealthReports，与 CLI `Optimize.ps1 -Guided` 完全同源。
 #>
 param(
-    [ValidateSet("plan", "apply", "rerun", "export")]$Action = "plan",
+    [ValidateSet("plan", "apply", "rerun", "export", "dismiss_onboarding")]$Action = "plan",
     [ValidateSet("html", "markdown")]$Format = "html",
     [string]$Before = "",
     [string]$BeforeB64 = "",
@@ -77,6 +77,7 @@ try {
             dns             = $g.dns
             report          = $g.report
             lines           = $lines
+           onboarding      = $g.onboarding
         })
     }
     elseif ($Action -eq "apply") {
@@ -140,6 +141,11 @@ try {
                 }
             } else { $null })
         })
+    }
+    elseif ($Action -eq "dismiss_onboarding") {
+        # 用户点了「知道了」：把一次性说明标记为已读，之后 plan 不再返回它
+        $done = Set-OnboardingHintShown
+        Out-Json ([PSCustomObject]@{ ok = [bool]$done })
     }
     elseif ($Action -eq "export") {
         # 把前后两份体检报告导出成可分享的对比报告，复用 lib 的 Export-HealthReport

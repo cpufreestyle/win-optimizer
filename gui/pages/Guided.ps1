@@ -34,6 +34,11 @@ function Build-GuidedPage {
 
     if ($KeepPlan -and $script:GuidedPlan) {
         $p = $script:GuidedPlan.profile
+
+       # 首次运行的一次性说明：只说「为什么需要管理员 / 为什么建议重启 / 怎么反悔」
+       if ($script:GuidedPlan.onboarding) {
+           $cardScore.Controls.Add((New-Label $script:GuidedPlan.onboarding.title 560 22 200 24 $Fonts.Sub $Theme.Warning))
+       }
         $cardScore.Controls.Add((New-Label ("体检得分  " + $script:GuidedPlan.score + " 分") 16 12 300 40 $Fonts.Title $Theme.Accent))
         $cardScore.Controls.Add((New-Label ("等级：" + $script:GuidedPlan.grade) 330 22 260 24 $Fonts.Sub $Theme.TextBright))
         $planText = "尚未生成方案"
@@ -45,6 +50,38 @@ function Build-GuidedPage {
     }
 
     $y = 200
+
+    # --- 首次运行说明卡（只在 lib 报告 onboarding 时出现，点「知道了」即永久消失） ---
+    if ($KeepPlan -and $script:GuidedPlan -and $script:GuidedPlan.onboarding) {
+        $ob = $script:GuidedPlan.onboarding
+        $cardOb = New-Object System.Windows.Forms.Panel
+        $cardOb.Location = New-Object System.Drawing.Point(20, $y)
+        $cardOb.Size = New-Object System.Drawing.Size(760, 96)
+        $cardOb.BackColor = $Theme.BgPanel
+        $page.Controls.Add($cardOb)
+        $cardOb.Controls.Add((New-Label $ob.title 16 10 520 24 $Fonts.Sub $Theme.Warning))
+        $obLines = @($ob.lines) -join "`r`n"
+        $txtOb = New-Object System.Windows.Forms.TextBox
+        $txtOb.Location = New-Object System.Drawing.Point(16, 36)
+        $txtOb.Size = New-Object System.Drawing.Size(600, 52)
+        $txtOb.Font = $Fonts.Small
+        $txtOb.ForeColor = $Theme.TextMain
+        $txtOb.BackColor = $Theme.BgPanel
+        $txtOb.Multiline = $true
+        $txtOb.ReadOnly = $true
+        $txtOb.BorderStyle = [System.Windows.Forms.BorderStyle]::None
+        $txtOb.Text = $obLines
+        $cardOb.Controls.Add($txtOb)
+        $btnOk = New-Button "知道了" 640 50 100 32 $Theme.AccentDark 10
+        $btnOk.Add_Click({
+            $null = Set-OnboardingHintShown
+            $b = $this
+            $card = $b.Parent
+            if ($card) { $card.Visible = $false }
+        })
+        $cardOb.Controls.Add($btnOk)
+        $y += 112
+    }
 
     # --- 推荐理由 / 环境信息 ---
     if ($KeepPlan -and $script:GuidedPlan) {

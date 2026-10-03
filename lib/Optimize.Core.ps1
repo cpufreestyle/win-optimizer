@@ -573,6 +573,57 @@ function Get-OptBackupDir {
     return (Join-Path (Get-Location).Path 'backups')
 }
 
+# ---------------- 首次运行的一次性说明（onboarding） ----------------
+# 说明为什么需要管理员、为什么建议重启，减少新手中途放弃。
+# 状态记在 %LOCALAPPDATA% 而不是仓库内：不污染版本库，也不被多用户共享目录互相覆盖。
+function Get-OptStateDir {
+    param([string]$StateDir)
+    if ($StateDir) { return [System.IO.Path]::GetFullPath($StateDir) }
+    $base = $env:LOCALAPPDATA
+    if ([string]::IsNullOrWhiteSpace($base)) { $base = $env:TEMP }
+    return (Join-Path $base 'PC-Optimizer-7thGen')
+}
+
+function Get-OnboardingHintText {
+    param()
+    return @(
+        '为什么需要管理员权限：优化要改系统服务、启动项、电源计划和网络设置，这些都属于系统级配置，普通权限改不动。',
+        '为什么会建议重启：服务与启动项的改动要等下次登录才完全生效，部分设置重启前可能看起来没有变化。',
+        '可以随时反悔：每个域执行前都会自动备份，之后到备份恢复页可以按域恢复或一键回滚。'
+    )
+}
+
+function Test-OnboardingHintShown {
+    param([string]$StateDir)
+    $file = Join-Path (Get-OptStateDir $StateDir) 'onboarding.json'
+    if (-not (Test-Path -LiteralPath $file)) { return $false }
+    try {
+        $json = Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json
+        return [bool]$json.shown
+    } catch {
+        # 读不到或解析失败时当作没展示过，宁可多说一次也不要让说明永久消失
+        return $false
+    }
+}
+
+function Set-OnboardingHintShown {
+    param([string]$StateDir)
+    $dir = Get-OptStateDir $StateDir
+    try {
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $payload = [PSCustomObject]@{
+            shown   = $true
+            version = (Get-OptVersion)
+            shownAt = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        }
+        $file = Join-Path $dir 'onboarding.json'
+        [System.IO.File]::WriteAllText($file, ($payload | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 # 列出全部启动项：5 个注册表项 + 2 个启动文件夹 + WMI 系统启动命令（按名称去重）
 # 返回 @( @{Index;Name;Value;Scope;Source;Path} )
 function Get-StartupItems {
@@ -2444,6 +2495,7 @@ function Get-GuidedPlan {
         summary         = $null
         powerPlan       = ''
         dns             = ''
+        onboarding      = $null
         error           = $null
     }
 
@@ -2457,6 +2509,17 @@ function Get-GuidedPlan {
         return $res
     }
     $res.report = $Report
+
+    # 首次运行的一次性说明：读 %LOCALAPPDATA% 状态，仍处于首次时附带文本供三端展示
+    try {
+        if (-not (Test-OnboardingHintShown)) {
+            $res.onboarding = [PSCustomObject]@{
+                shown  = $false
+                title  = '第一次用？三件事先说清楚'
+                lines  = @(Get-OnboardingHintText)
+            }
+        }
+    } catch { }
 
     # 上一次体检分：向导复检后可直接对比（无历史报告时为 $null）
     try {
