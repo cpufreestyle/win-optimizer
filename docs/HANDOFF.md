@@ -507,6 +507,7 @@ try/catch 里，任何一组抛异常都会走到 catch 分支，整页退回 ok
 | 恢复自动更新 | 14-RestoreAutoUpdate.ps1 | Update.ps1 | 14_restore_autoupdate.ps1 | — |
 | 一键体检 | 15-HealthCheck.ps1 | Health.ps1 | 15_health.ps1 | `Get-SystemHealthReport` 等 |
 | 优化组合包 | 16-Profiles.ps1 | Dashboard.ps1（卡片） | 16_profiles.ps1 | `Get-Profiles` / `Get-ProfilePlan` / `Invoke-Profile` |
+| 一键向导 | `Optimize.ps1 [0]` / `-Guided` | Guided.ps1 + GuidedActions.ps1 | 17_guided.ps1 | `Get-GuidedPlan` / `Invoke-Profile` / `Compare-HealthReports` |
 
 更新相关域（10–14）在 GUI 中统一归入 `Update.ps1` 一个页面。
 
@@ -648,7 +649,7 @@ v3.10.0（667,648 字节，构建于 PR #26）。`Start.bat` 的 `[E] EXE 程序
   cd <项目根>
   Invoke-Pester -Path ./tests/Optimize.Core.Tests.ps1
   ```
-  当前 **257 个用例**（2026-10-03 实测 256 通过 / 0 失败；含各域「编号稳定 / 必须备份 / 行为契约」断言，其中 6 条是 CompactOS 契约用例、
+  当前 **260 个用例**（2026-10-04 实测 260 通过 / 0 失败；含各域「编号稳定 / 必须备份 / 行为契约」断言，其中 6 条是 CompactOS 契约用例、
   1 条用 Mock 覆盖「无活动网卡」分支、15 条覆盖一键向导 lib 逻辑、9 条覆盖 GUI 一键向导页（含导出按钮与导出动作）、
   6 条覆盖首次运行一次性说明（onboarding）的状态读写与降级行为）。
   向导首次进入时 lib 会附带 `onboarding` 段（解释管理员权限 / 重启 / 可回滚），状态记在
