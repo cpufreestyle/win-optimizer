@@ -607,7 +607,11 @@ try/catch 里，任何一组抛异常都会走到 catch 分支，整页退回 ok
   cd <项目根>
   Invoke-Pester -Path ./tests/Optimize.Core.Tests.ps1
   ```
-  当前 **241 个用例**（2026-10-03 实测 241 通过 / 0 失败；含各域「编号稳定 / 必须备份 / 行为契约」断言，其中 6 条是 CompactOS 契约用例、1 条用 Mock 覆盖「无活动网卡」分支、15 条覆盖一键向导）。新增 lib 函数时务必补对应用例。
+  当前 **249 个用例**（2026-10-03 实测 249 通过 / 0 失败；含各域「编号稳定 / 必须备份 / 行为契约」断言，其中 6 条是 CompactOS 契约用例、
+  1 条用 Mock 覆盖「无活动网卡」分支、15 条覆盖一键向导 lib 逻辑、**8 条覆盖 GUI 一键向导页**）。
+  GUI 那条 `Describe 'GUI guided wizard page'` 用 Windows Forms 真实控件树验证：空态 / 有方案态渲染、步骤表行数与计划一致、
+  风险标签分级、仪表盘跳转与页签选中，以及 `Build-EXE.ps1` / `OptimizeGUI.ps1` 两处白名单接线——
+  历史上「EXE 漏页」正是因为漏了白名单，现在由测试守住。新增 lib 函数时务必补对应用例。
   > ⚠️ **分离进程跑 Pester 的两个坑**（2026-10-03 实测踩到）：
   > 1. 用 `Start-Process -WindowStyle Hidden` 起子进程时，`$env:PSModulePath` 有时会丢掉系统模块路径，
   >    导致 `New-Guid` / `Get-AuthenticodeSignature` 找不到，**成片假失败（本次 75 条）**；
