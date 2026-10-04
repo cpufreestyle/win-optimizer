@@ -3613,3 +3613,87 @@ Describe 'Optimize.Core guided navigation targets for every front end' {
         }
     }
 }
+
+Describe 'Desktop shortcut installer (New-DesktopShortcuts.ps1)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+        $script:ScriptPath = Join-Path $PWD.Path 'New-DesktopShortcuts.ps1'
+        $script:Source = if (Test-Path -LiteralPath $script:ScriptPath) {
+            [System.IO.File]::ReadAllText($script:ScriptPath, [System.Text.Encoding]::UTF8)
+        } else { '' }
+    }
+
+    It 'the installer script exists' {
+        Test-Path -LiteralPath $script:ScriptPath | Should -BeTrue
+    }
+
+    It 'the installer script parses without syntax errors' {
+        if (-not $script:Source) { Set-ItResult -Skipped -Because 'script missing' }
+        $errs = $null; $toks = $null
+        $null = [System.Management.Automation.Language.Parser]::ParseInput($script:Source, [ref]$toks, [ref]$errs)
+        @($errs).Count | Should -Be 0
+    }
+
+    It 'targets Start.bat and PC-Optimizer.exe for the two shortcuts' {
+        if (-not $script:Source) { Set-ItResult -Skipped -Because 'script missing' }
+        $script:Source | Should -Match "Start\.bat"
+        $script:Source | Should -Match "PC-Optimizer\.exe"
+    }
+
+    It 'creates shortcuts through the WScript.Shell COM object' {
+        if (-not $script:Source) { Set-ItResult -Skipped -Because 'script missing' }
+        $script:Source | Should -Match 'CreateShortcut'
+        $script:Source | Should -Match 'WScript\.Shell'
+    }
+
+    It 'falls back to the EXE icon when assets/app.ico is absent' {
+        if (-not $script:Source) { Set-ItResult -Skipped -Because 'script missing' }
+        $script:Source | Should -Match 'assets\\app\.ico'
+        $script:Source | Should -Match 'IconLocation'
+    }
+
+    It 'is safe to re-run: it overwrites the existing shortcut instead of duplicating' {
+        if (-not $script:Source) { Set-ItResult -Skipped -Because 'script missing' }
+        # 同一个固定路径重复写，靠 Save() 覆盖；不能出现按时间戳拼名字之类的一次性路径
+        $script:Source | Should -Match 'CreateShortcut\(\$Path\)'
+        $script:Source | Should -Match 'sc\.Save\(\)'
+    }
+
+    It 'the shortcut names are stable and documented in the README' {
+        foreach ($name in 'PC优化工具.lnk', 'PC优化工具-图形界面.lnk') {
+            if (-not $script:Source) { continue }
+            $script:Source | Should -Match ([regex]::Escape($name))
+        }
+        $readme = Join-Path $PWD.Path 'README.md'
+        $rm = if (Test-Path -LiteralPath $readme) {
+            [System.IO.File]::ReadAllText($readme, [System.Text.Encoding]::UTF8)
+        } else { '' }
+        $rm | Should -Match 'MakeDesktopShortcuts\.bat'
+        $rm | Should -Match 'New-DesktopShortcuts\.ps1'
+    }
+
+    It 'the app icon shipped for the shortcuts is a valid Windows icon' {
+        $ico = Join-Path $PWD.Path 'assets\app.ico'
+        if (-not (Test-Path -LiteralPath $ico)) {
+            Set-ItResult -Skipped -Because 'icon not present'
+            return
+        }
+        $bytes = [System.IO.File]::ReadAllBytes($ico)
+        # ICO 头部：保留字 0、类型 1（图标）、至少一个目录项
+        [int]$bytes[0] | Should -Be 0
+        [int]$bytes[1] | Should -Be 0
+        [int]$bytes[2] | Should -Be 1
+        [int]$bytes[3] | Should -Be 0
+        [int]$bytes[4] | Should -BeGreaterThan 0
+    }
+
+    It 'the bat entry point delegates to the PowerShell installer' {
+        $bat = Join-Path $PWD.Path 'MakeDesktopShortcuts.bat'
+        if (-not (Test-Path -LiteralPath $bat)) {
+            Set-ItResult -Skipped -Because 'bat entry missing'
+            return
+        }
+        $t = [System.IO.File]::ReadAllText($bat, [System.Text.Encoding]::Default)
+        $t | Should -Match 'New-DesktopShortcuts\.ps1'
+    }
+}

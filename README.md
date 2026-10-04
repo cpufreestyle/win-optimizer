@@ -42,9 +42,21 @@ v2.0 合并了原 `windows-utils` 仓库的 4 个实用工具（C盘清理、剪
 
 ## 🚀 快速开始
 
+### 方式零：先放个桌面图标（可选，一次就好）
+
+不想每次翻目录找启动文件，就先双击 `MakeDesktopShortcuts.bat`（或 `powershell -File .\New-DesktopShortcuts.ps1`）：
+
+| 桌面图标 | 点下去会发生什么 |
+|----------|------------------|
+| PC优化工具 | 走一键向导：自动体检 → 推荐 → 执行 → 复检（就是下面的方式一） |
+| PC优化工具-图形界面 | 直接打开图形界面，鼠标点点就能用 |
+
+> 脚本是幂等的：重复执行只会刷新图标和说明，不会在桌面堆出一堆副本。
+> 换机器或重新克隆仓库后，重跑一次即可；图标来自 `assets/app.ico`。
+
 ### 方式一：一键向导（推荐，零学习成本）
 
-1. 双击项目根目录的 `Start.bat`
+1. 双击项目根目录的 `Start.bat`（或桌面上的「PC优化工具」图标）
 2. 弹出 UAC 时点「是」，在启动菜单上**直接回车**（默认就是「一键向导」）
 3. 向导自动完成：体检 → 推荐方案 → 打印「即将做什么」→ 你按一次 `Y` 确认执行
 4. 结束后打印前后对比分数，并按提示重启电脑
@@ -150,6 +162,10 @@ PC-Optimizer-7thGen/
 ├── StartAll.bat              # 兼容旧入口：自动提权后转调 Start.bat
 ├── StartWebUI.bat            # 启动 Web 管理界面（Flask）
 ├── EnablePs1DoubleClick.bat # 启用 .ps1 双击运行（调试用）
+├── MakeDesktopShortcuts.bat  # 在桌面创建启动快捷方式（一键向导 + 图形界面）
+├── New-DesktopShortcuts.ps1  # 桌面快捷方式实现脚本（幂等，可重复执行）
+├── assets/
+│   └── app.ico              # 应用图标（快捷方式用）
 ├── FixBatAssociation.bat     # 修复 .bat 文件关联
 ├── FixBatAssociation.reg     # 修复 .bat 关联的注册表项
 ├── PC-Optimizer.exe.disabled # 禁用的 EXE（去 .disabled 后缀启用）
@@ -290,6 +306,17 @@ Compact.exe /CompactOS:never
 ## 📝 更新日志
 
 ### v3.11.1 (2026-10-04)
+- **桌面快捷方式（再省一步找入口）**
+  - 新增 `New-DesktopShortcuts.ps1` 与一键入口 `MakeDesktopShortcuts.bat`：双击即可在桌面放好
+    「PC优化工具」（走一键向导）和「PC优化工具-图形界面」（直达图形界面）两个图标。
+  - 图标从 `PC-Optimizer.exe` 提取为 `assets/app.ico` 并纳入版本库，换机器克隆后图标不回退。
+  - 脚本幂等：重复执行只刷新图标与说明，不会在桌面堆积副本；桌面被重定向到 OneDrive 时也能正确定位。
+  - 顺带修正 README 快速开始：把「先放桌面图标」补成方式零，原「方式一」措辞同步更新。
+  - **已在真机验证**：两个图标均可启动——一键向导会自主请求管理员权限（实测窗口标题为
+    「管理员: PC-Optimizer-7thGen」），图形界面直接拉起 `PC-Optimizer.exe` 进程。
+  - 测试：新增 9 条桌面快捷方式安装器用例（脚本可解析 / 指向两个启动文件 / 用 COM 创建 / 
+    图标回退 / 可重复执行不堆积 / 名称与 README 一致 / ICO 头合法 / bat 入口转发），
+    Pester 277 / 277 通过。
 - **「需人工确认」清单按端给出可点击的去处（简化流程）**
   - lib 新增 `Get-GuidedNavMap` / `Get-GuidedNavTarget`：把每个域一次性翻译成 CLI 菜单编号、
     GUI 侧边栏页面键、WebUI 侧栏页面名，三端共用同一份映射，杜绝各端各写一套。

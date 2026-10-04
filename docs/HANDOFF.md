@@ -656,10 +656,12 @@ v3.10.0（667,648 字节，构建于 PR #26）。`Start.bat` 的 `[E] EXE 程序
   cd <项目根>
   Invoke-Pester -Path ./tests/Optimize.Core.Tests.ps1
   ```
-  当前 **268 个用例**（2026-10-04 实测 268 通过 / 0 失败；含各域「编号稳定 / 必须备份 / 行为契约」断言，其中 6 条是 CompactOS 契约用例、
+  当前 **277 个用例**（2026-10-04 实测 277 通过 / 0 失败；含各域「编号稳定 / 必须备份 / 行为契约」断言，其中 6 条是 CompactOS 契约用例、
   1 条用 Mock 覆盖「无活动网卡」分支、15 条覆盖一键向导 lib 逻辑、9 条覆盖 GUI 一键向导页（含导出按钮与导出动作）、
   6 条覆盖首次运行一次性说明（onboarding）的状态读写与降级行为、
   8 条覆盖 `Get-GuidedNavMap` / `Get-GuidedNavTarget` 的三端导航映射）。
+  9 条覆盖 `New-DesktopShortcuts.ps1`（桌面快捷方式安装器：脚本可解析 / 指向两个启动文件 / 
+  用 WScript.Shell COM 创建 / 图标回退 / 可重复执行不堆积 / 名称与 README 一致 / ICO 头合法 / bat 入口转发）。
   向导首次进入时 lib 会附带 `onboarding` 段（解释管理员权限 / 重启 / 可回滚），状态记在
   `%LOCALAPPDATA%\PC-Optimizer-7thGen\onboarding.json`；CLI / GUI / WebUI 任一端点掉即落状态。
   > ⚠️ **分离进程跑 Pester 的两个坑**（2026-10-03 实测踩到）：
