@@ -5,6 +5,8 @@
 > 最近复核：2026-10-03（浅色苹果风 UI 真机收口：GUI 12 页窗口级像素渲染逐页核对、WebUI 桌面视口真实浏览器截图、
 > 5 处既有布局撞车修复后七档窗口尺寸 0 重叠、测试套件 226/226 通过；见 §3.15 / §3.16 / §3.17 / §5.7 / §6）
 > 更早：2026-09-28（GUI 体检页/首页无头 harness 断言 22/22 通过、WebUI 后端 tips 复核通过、测试套件 226/226 通过）
+> 最近复核：2026-11-02（桌面图标品牌化：SVG 六尺寸 ICO + EXE 内嵌图标；快捷方式重建并清缓存；
+> Pester 278/278 通过；见 §3.21）
 > 适用对象：接手 PC-Optimizer-7thGen 维护的开发者
 > 配套文档：`README.md`（用户向）、`docs/DEVELOPMENT.md`（开发向，本文不重复其中的架构 / 配置 / 版本 / SSH 说明）
 
@@ -491,6 +493,21 @@ try/catch 里，任何一组抛异常都会走到 catch 分支，整页退回 ok
 **已知限制**：GUI 向导页的「重新体检」在长体检期间界面会短暂无响应，已在按钮上标注；WebUI 概览容错见 §3.19。
 
 
+### 3.21 桌面快捷方式品牌图标（v3.11.2，2026-11-02）
+
+此前 ssets/app.ico 是从 ps2exe 产物里提取的 PowerShell 默认图标（仅 32×32，766 字节），与「PC 优化」语义无关。
+本节把图标品牌化收口：
+
+1. 全新绘制 ssets/app.svg（512 viewBox，苹果风圆角方块，#3ba0ff → #0062d6 纵向渐变，
+   白色速度仪表盘 + 指针 + 底部速度线，与应用内 accent 同色系）。
+2. 用 cairosvg 渲染 512/256/128/64/48/32/16 七档 PNG，再用 PIL 合成六尺寸 ICO（约 26KB），
+   桌面缩放各档位都不糊。
+3. Build-EXE.ps1 的 Invoke-ps2exe 增加 -iconFile assets/app.ico（存在才传），
+   EXE 自身图标与快捷方式视觉统一；已重建 PC-Optimizer.exe 并用 ExtractIconEx 抽取验证。
+4. New-DesktopShortcuts.ps1 重建两个 .lnk，随后 ie4uinit -show 刷新 Windows 图标缓存。
+5. Pester 新增「ICO 多尺寸」用例（≥3 个目录项、含 256/48/16），共 **278 / 278** 通过。
+6. 版本号随四端一致性铁律从 3.11.1 推到 **3.11.2**（config / Start.bat / EXE ProductVersion / README）。
+
 ## 4. 三端文件地图（按域）
 
 > 命名约定：CLI = `NN-Name.ps1`，GUI 页面 = `gui/pages/Name.ps1`，WebUI = `NN_name.ps1`。
@@ -546,7 +563,7 @@ v3.10.0（667,648 字节，构建于 PR #26）。`Start.bat` 的 `[E] EXE 程序
    否则 `Start.bat` 的 `[E]` 分支会把用户导向旧界面。
 2. `Build-EXE.ps1` 的 `$pageFiles` 是白名单，新增页面文件忘了加就会漏页（§3.18 的 `Health.ps1`、
    上一轮的 `Guided.ps1` 都踩过）。现在由 `Describe 'GUI guided wizard page'` 的两条白名单用例守住。
-3. 版本号单一来源是 `config/optimization.json`（当前 3.11.1），`Build-EXE.ps1` 会读它生成四段式 EXE 文件版本。
+3. 版本号单一来源是 `config/optimization.json`（当前 3.11.2），`Build-EXE.ps1` 会读它生成四段式 EXE 文件版本。
 
 ### 4.3 WebUI 路由盘点：46 条路由与前端调用的对应关系（2026-10-03 续）
 

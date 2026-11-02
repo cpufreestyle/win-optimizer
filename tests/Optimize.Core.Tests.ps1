@@ -3687,6 +3687,27 @@ Describe 'Desktop shortcut installer (New-DesktopShortcuts.ps1)' {
         [int]$bytes[4] | Should -BeGreaterThan 0
     }
 
+    It 'the app icon carries multiple sizes for crisp desktop scaling' {
+        $ico = Join-Path $PWD.Path 'assets\app.ico'
+        if (-not (Test-Path -LiteralPath $ico)) {
+            Set-ItResult -Skipped -Because 'icon not present'
+            return
+        }
+        $bytes = [System.IO.File]::ReadAllBytes($ico)
+        $entryCount = [int]$bytes[4] -bor ([int]$bytes[5] -shl 8)
+        $entryCount | Should -BeGreaterOrEqual 3
+        $sizes = @()
+        for ($i = 0; $i -lt $entryCount; $i++) {
+            $offset = 6 + ($i * 16)
+            $w = [int]$bytes[$offset]
+            $w = if ($w -eq 0) { 256 } else { $w }
+            $sizes += $w
+        }
+        $sizes | Should -Contain 256
+        $sizes | Should -Contain 48
+        $sizes | Should -Contain 16
+    }
+
     It 'the bat entry point delegates to the PowerShell installer' {
         $bat = Join-Path $PWD.Path 'MakeDesktopShortcuts.bat'
         if (-not (Test-Path -LiteralPath $bat)) {
