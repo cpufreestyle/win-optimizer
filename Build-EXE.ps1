@@ -130,7 +130,12 @@ Write-Host ""
 Write-Host "  正在编译..." -ForegroundColor Yellow
 
 try {
-    Invoke-ps2exe -inputFile $compileInput -outputFile $outputFile -title "PC-Optimizer-7thGen" -version $exeVer -noConsole -requireAdmin -UNICODEEncoding
+    $iconPath = Join-Path $PSScriptRoot "assets\app.ico"
+    if (Test-Path -LiteralPath $iconPath) {
+        Invoke-ps2exe -inputFile $compileInput -outputFile $outputFile -title "PC-Optimizer-7thGen" -version $exeVer -iconFile $iconPath -noConsole -requireAdmin -UNICODEEncoding
+    } else {
+        Invoke-ps2exe -inputFile $compileInput -outputFile $outputFile -title "PC-Optimizer-7thGen" -version $exeVer -noConsole -requireAdmin -UNICODEEncoding
+    }
 } finally {
     if (Test-Path $tmpFile) { Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue }
 }

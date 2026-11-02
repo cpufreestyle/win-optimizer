@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3ba0ff"/>
+      <stop offset="1" stop-color="#0062d6"/>
+    </linearGradient>
+    <linearGradient id="needle" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e8f2ff"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 苹果风圆角方块底色 -->
+  <rect x="24" y="24" width="464" height="464" rx="108" fill="url(#bg)"/>
+  <rect x="24" y="24" width="464" height="464" rx="108" fill="none" stroke="#ffffff" stroke-opacity="0.22" stroke-width="3"/>
+
+  <!-- 顶部高光，营造轻微立体感 -->
+  <path d="M24 132 C24 72 72 24 132 24 L380 24 C440 24 488 72 488 132 L488 190 L24 190 Z" fill="#ffffff" fill-opacity="0.10"/>
+
+  <!-- 速度仪表盘外圈 -->
+  <path d="M 148 330 A 128 128 0 1 1 364 330" fill="none" stroke="#ffffff" stroke-opacity="0.30" stroke-width="30" stroke-linecap="round"/>
+
+  <!-- 已优化进度弧（从左下扫到右下）-->
+  <path d="M 148 330 A 128 128 0 1 1 330 402" fill="none" stroke="#ffffff" stroke-width="30" stroke-linecap="round"/>
+
+  <!-- 指针：指向高分区 -->
+  <g transform="translate(256 330) rotate(38)">
+    <rect x="-9" y="-108" width="18" height="126" rx="9" fill="url(#needle)"/>
+  </g>
+  <circle cx="256" cy="330" r="30" fill="#ffffff"/>
+  <circle cx="256" cy="330" r="12" fill="#0a6fe0"/>
+
+  <!-- 速度刻度 -->
+  <g fill="#ffffff" fill-opacity="0.85">
+    <circle cx="132" cy="330" r="11"/>
+    <circle cx="256" cy="202" r="11"/>
+    <circle cx="380" cy="330" r="11"/>
+  </g>
+
+  <!-- 底部速度线，象征“更快” -->
+  <g stroke="#ffffff" stroke-opacity="0.9" stroke-width="16" stroke-linecap="round">
+    <line x1="168" y1="418" x2="216" y2="418"/>
+    <line x1="238" y1="418" x2="286" y2="418"/>
+    <line x1="308" y1="418" x2="344" y2="418"/>
+  </g>
+</svg>

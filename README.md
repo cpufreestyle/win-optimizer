@@ -305,7 +305,13 @@ Compact.exe /CompactOS:never
 
 ## 📝 更新日志
 
-### v3.11.1 (2026-10-04)
+### v3.11.2 (2026-11-02)
+- **桌面快捷方式换上正经的品牌图标**
+  - 全新绘制 ssets/app.svg → 生成六尺寸 ssets/app.ico（256/128/64/48/32/16，约 26KB），
+    苹果风圆角方块 + 白色速度仪表盘指针 + 底部速度线，与应用内浅色主题同色系（#3ba0ff → #0062d6）。
+  - PC-Optimizer.exe 构建时自动内嵌同一图标（Build-EXE.ps1 新增 -iconFile），EXE 自身与快捷方式视觉统一。
+  - 两个桌面快捷方式已重建并触发 Windows 图标缓存刷新（ie4uinit -show）。
+  - Pester 新增 ICO 多尺寸校验用例，共 278 / 278 通过。 (2026-10-04)
 - **桌面快捷方式（再省一步找入口）**
   - 新增 `New-DesktopShortcuts.ps1` 与一键入口 `MakeDesktopShortcuts.bat`：双击即可在桌面放好
     「PC优化工具」（走一键向导）和「PC优化工具-图形界面」（直达图形界面）两个图标。
