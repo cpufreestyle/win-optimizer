@@ -63,7 +63,7 @@ if ($PSScriptRoot) {
 $script:ScriptsDir  = Join-Path $script:ProjectRoot "scripts"
 $script:BackupDir   = Join-Path $script:ProjectRoot "backups"
 $script:LogFile     = Join-Path $script:ProjectRoot "optimize.log"
-$script:Version     = "3.11.0"  # 占位初值；运行时由 lib 的 Get-OptVersion 覆盖（见下方第 578 行）
+$script:Version     = if (Get-Command Get-OptVersion -ErrorAction SilentlyContinue) { Get-OptVersion } else { "3.11.0" }
 
 # ============================================================
 #  Win7 兼容性检测
@@ -572,7 +572,10 @@ $script:Pages = @{}
 $coreLib = Join-Path $script:ProjectRoot "lib\Optimize.Core.ps1"
 if (Test-Path $coreLib) { . $coreLib }
 # 版本号单一来源：运行时从 config/optimization.json 读取（回退保留 $script:Version 初值）
-if (Get-Command Get-OptVersion -ErrorAction SilentlyContinue) { $script:Version = Get-OptVersion }
+if (Get-Command Get-OptVersion -ErrorAction SilentlyContinue) {
+    $script:Version = Get-OptVersion
+    if ($MainForm) { $MainForm.Text = "PC-Optimizer-7thGen  v$($script:Version)" }
+}
 # 兜底：共享库异常不可用时提供最小实现，避免 Get-FolderSize 未定义导致崩溃
 if (-not (Get-Command Get-FolderSize -ErrorAction SilentlyContinue)) {
     function Get-FolderSize {

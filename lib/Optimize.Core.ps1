@@ -50,6 +50,19 @@ function Get-OptVersion {
     return "3.1.0"
 }
 
+# 取本机名：优先环境变量 COMPUTERNAME，缺失时回退 .NET MachineName
+# （沙箱、服务或计划任务上下文可能剥离该环境变量，导致 manifest / WMI 路径拿到空值）
+function Get-OptHostName {
+    if ($env:COMPUTERNAME) { return $env:COMPUTERNAME }
+    return [Environment]::MachineName
+}
+
+# 取当前用户名：优先环境变量 USERNAME，缺失时回退 .NET UserName
+function Get-OptUserName {
+    if ($env:USERNAME) { return $env:USERNAME }
+    return [Environment]::UserName
+}
+
 # 返回可禁用服务列表: @( @{Name; Desc; Level} )
 # Level 统一为 "安全禁用" / "建议禁用"
 function Get-ServiceList {
@@ -195,7 +208,7 @@ function Backup-TelemetryTaskStates {
     }
     [PSCustomObject]@{
         date  = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-        host  = $env:COMPUTERNAME
+        host  = (Get-OptHostName)
         tasks = $rows
     } | ConvertTo-Json -Depth 4 | Set-Content -Path $backupFile -Encoding UTF8
     Write-BackupManifest -BackupFile $backupFile -Domain 'telemetry' -ItemCount $rows.Count | Out-Null
@@ -1008,7 +1021,7 @@ function Backup-PowerPlan {
     try {
         [PSCustomObject]@{
             date       = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-            host       = $env:COMPUTERNAME
+            host       = (Get-OptHostName)
             activeGuid = $activeGuid
             activeName = $activeName
             query      = $query
@@ -1992,7 +2005,7 @@ function Get-SystemHealthReport {
         $bench = Get-SystemBench -StartupCount $startups.Count -AutoServices $autoSvc.Count
     }
 
-    $hostName = $env:COMPUTERNAME
+    $hostName = Get-OptHostName
     return [PSCustomObject]@{
         timestamp = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         host      = $hostName
@@ -2810,8 +2823,8 @@ function Write-BackupManifest {
             time     = $now.ToString('yyyy-MM-ddTHH:mm:ss')
             items    = [int]$ItemCount
             bytes    = [long]$file.Length
-            host     = $env:COMPUTERNAME
-            user     = $env:USERNAME
+            host     = (Get-OptHostName)
+            user     = (Get-OptUserName)
             note     = $Note
         }
         $manifestFile = ($file.FullName + '.manifest.json')
@@ -4227,7 +4240,7 @@ function New-SystemRestorePoint {
     }
 
     try {
-        $sr = [WMIClass]("\\" + $env:COMPUTERNAME + "\root\default:SystemRestore")
+        $sr = [WMIClass]("\\" + (Get-OptHostName) + "\root\default:SystemRestore")
         $rc = $sr.CreateRestorePoint($Description, $RestorePointType, 100)
         $rv = [int]$rc.ReturnValue
         $res.returnValue = $rv
