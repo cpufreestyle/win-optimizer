@@ -3735,3 +3735,164 @@ Describe 'Desktop shortcut installer (New-DesktopShortcuts.ps1)' {
         $t | Should -Match 'New-DesktopShortcuts\.ps1'
     }
 }
+
+# ============================================================
+#  CLI 菜单极简 / 高级双模式（Optimize.ps1 Show-Menu）
+#  目的：新手只看到 4 个高频入口，按 A 才展开全部 16 项，降低学习成本
+# ============================================================
+Describe 'CLI menu simple / advanced modes (Optimize.ps1 Show-Menu)' {
+    BeforeAll {
+        $script:CliPath = Join-Path $PWD.Path 'Optimize.ps1'
+        $script:CliSource = if (Test-Path -LiteralPath $script:CliPath) {
+            [System.IO.File]::ReadAllText($script:CliPath, [System.Text.Encoding]::UTF8)
+        } else { '' }
+        $script:CliErrors = $null
+        $script:CliTokens = $null
+        $script:MenuAst = @()
+        if ($script:CliSource) {
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput(
+                $script:CliSource, [ref]$script:CliTokens, [ref]$script:CliErrors)
+            $script:MenuAst = @($ast.FindAll({
+                param($n)
+                $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Show-Menu'
+            }, $true))
+        }
+        $script:MenuText = if ($script:MenuAst.Count -eq 1) { $script:MenuAst[0].Extent.Text } else { '' }
+
+        # Show-Menu 在独立脚本块里执行：桩掉 Read-Host / Write-Host / Get-CimInstance，
+        # 既覆盖真实分发逻辑，又不会触发 Optimize.ps1 顶层代码（管理员校验等）。
+        $script:MenuHarness = {
+            param([string[]]$Answers, [string]$MenuText)
+            $script:Out = @()
+            $script:Calls = @()
+            $script:Queue = @($Answers)
+            function Write-Host { $script:Out += ($args -join ' ') }
+            function Start-Sleep { param([int]$Seconds) }
+            function Read-Host {
+                param([Parameter(Position = 0)][string]$Prompt)
+                $a = $script:Queue[0]
+                if ($script:Queue.Count -gt 1) { $script:Queue = $script:Queue[1..($script:Queue.Count - 1)] }
+                else { $script:Queue = @() }
+                return $a
+            }
+            function Show-Banner { $script:Out += '<BANNER>' }
+            function Invoke-GuidedOptimization { $script:Calls += 'guided' }
+            function Invoke-FullOptimization { $script:Calls += 'full' }
+            function Show-OptimizePlanPreview { $script:Calls += 'preview' }
+            function Invoke-ScriptModule { param([string]$ScriptName) $script:Calls += $ScriptName }
+            function Get-CimInstance {
+                param([Parameter(Position = 0)][string]$ClassName)
+                if ($ClassName -eq 'Win32_OperatingSystem') {
+                    return [pscustomobject]@{
+                        TotalVisibleMemorySize = 8MB; FreePhysicalMemory = 4MB
+                        Caption = 'Windows 10'; BuildNumber = '19045'
+                        LastBootUpTime = (Get-Date).AddHours(-3)
+                    }
+                }
+                return [pscustomobject]@{ Name = 'Test CPU' }
+            }
+            . ([scriptblock]::Create($MenuText))
+            $null = Show-Menu
+            return [pscustomobject]@{ Out = $script:Out; Calls = $script:Calls }
+        }
+
+        function Invoke-CliMenu([string[]]$Answers) {
+            return (& $script:MenuHarness -Answers $Answers -MenuText $script:MenuText)
+        }
+
+        # 按 <BANNER> 把输出切成「每次重画一帧」，用来断言某一帧渲染了什么
+        function Get-MenuRenders([object]$Result) {
+            $renders = @()
+            $current = @()
+            foreach ($line in @($Result.Out)) {
+                if ($line -eq '<BANNER>') {
+                    if ($current.Count -gt 0) { $renders += ,($current -join "`n") }
+                    $current = @()
+                } else {
+                    $current += $line
+                }
+            }
+            if ($current.Count -gt 0) { $renders += ,($current -join "`n") }
+            return $renders
+        }
+    }
+
+    It 'Optimize.ps1 exists, parses cleanly and exposes Show-Menu' {
+        Test-Path -LiteralPath $script:CliPath | Should -BeTrue
+        @($script:CliErrors).Count | Should -Be 0
+        @($script:MenuAst).Count | Should -Be 1
+        $script:MenuText | Should -Match 'SimpleMode'
+    }
+
+    It 'defaults to simple mode with only the headline entries visible' {
+        $r = Invoke-CliMenu @('Q')
+        $renders = @(Get-MenuRenders $r)
+        $renders.Count | Should -Be 1
+        $first = $renders[0]
+        foreach ($entry in '\[0\]', '\[9\]', '\[15\]', '\[16\]', '\[P\]', '\[A\]', '\[Q\]') {
+            $first | Should -Match $entry
+        }
+        # 极简模式不出现高级编号，新手不会被 16 项淹没
+        foreach ($hidden in '\[1\]', '\[3\]', '\[8\]', '\[10\]', '\[14\]') {
+            $first | Should -Not -Match $hidden
+        }
+        $first | Should -Not -Match '\[S\]'
+    }
+
+    It 'A opens the advanced list, S returns to simple mode' {
+        $r = Invoke-CliMenu @('A', 'S', 'Q')
+        $renders = @(Get-MenuRenders $r)
+        $renders.Count | Should -Be 3
+        # 第 1 帧极简 -> 第 2 帧高级 -> 第 3 帧又回到极简
+        $renders[0] | Should -Not -Match '\[10\]'
+        $renders[1] | Should -Match '\[10\]'
+        $renders[1] | Should -Match '\[14\]'
+        $renders[1] | Should -Match '\[B\]'
+        $renders[1] | Should -Match '\[R\]'
+        $renders[1] | Should -Match '\[S\]'
+        $renders[1] | Should -Not -Match '\[A\]'
+        $renders[2] | Should -Not -Match '\[10\]'
+        $renders[2] | Should -Match '\[A\]'
+        @($r.Calls).Count | Should -Be 0
+    }
+
+    It 'advanced mode dispatches every module from 1 to 14' {
+        $answers = @('A') + @(1..14 | ForEach-Object { [string]$_ }) + @('Q')
+        $r = Invoke-CliMenu $answers
+        $expected = @(
+            '01-SystemInfo.ps1', '02-CleanTemp.ps1', '03-DisableServices.ps1'
+            '04-StartupOptimize.ps1', '05-VisualEffects.ps1', '06-PowerPlan.ps1'
+            '07-DiskOptimize.ps1', '08-NetworkOptimize.ps1', 'full'
+            '10-BlockWin1124H2.ps1', '11-ManualUpdateMode.ps1', '12-HideUpdates.ps1'
+            '13-WindowsFeatures.ps1', '14-RestoreAutoUpdate.ps1'
+        )
+        ($r.Calls -join ',') | Should -Be ($expected -join ',')
+    }
+
+    It 'simple mode keeps the four headline actions plus preview and backup working' {
+        $r = Invoke-CliMenu @('0', '9', '15', '16', 'P', 'B', 'R', 'q')
+        ($r.Calls -join ',') | Should -Be 'guided,full,15-HealthCheck.ps1,16-Profiles.ps1,preview,09-BackupRestore.ps1,09-BackupRestore.ps1'
+    }
+
+    It 'simple mode points advanced-only numbers at the A key instead of a bare error' {
+        $r = Invoke-CliMenu @('10', '3', '14', '99', 'Q')
+        $hints = @($r.Out | Where-Object { $_ -like '*高级功能*' })
+        $bad   = @($r.Out | Where-Object { $_ -like '*无效选项*' })
+        $hints.Count | Should -Be 3
+        $bad.Count | Should -Be 1
+        @($r.Calls).Count | Should -Be 0
+    }
+
+    It 'advanced mode still rejects truly invalid input' {
+        $r = Invoke-CliMenu @('A', '77', 'Q')
+        @($r.Out | Where-Object { $_ -like '*无效选项*' }).Count | Should -Be 1
+        @($r.Calls).Count | Should -Be 0
+    }
+
+    It 'blank input is tolerated and just re-prompts' {
+        $r = Invoke-CliMenu @('', '   ', 'Q')
+        @(Get-MenuRenders $r).Count | Should -Be 3
+        @($r.Out | Where-Object { $_ -like '*无效选项*' }).Count | Should -Be 2
+        @($r.Calls).Count | Should -Be 0
+    }
+}
