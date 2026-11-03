@@ -537,12 +537,8 @@ try/catch 里，任何一组抛异常都会走到 catch 分支，整页退回 ok
 `Get-CimInstance` / `Start-Sleep` 的独立脚本块里跑**真实分发逻辑**
 （避免 dot-source 整个 `Optimize.ps1` 触发顶层管理员校验）。共 8 个用例：
 默认极简渲染、`A`/`S` 往返、高级模式 1~14 全分发、极简核心项、高级编号提示、
-高级模式无效输入、空输入容错。总计 **286 / 286** 通过。
-
-> 坑：PowerShell 函数内对父作用域变量做 `+=` 会生成局部副本，桩函数必须写 `$script:Out += ...`
-> 才能把结果写回外层；同理 `Read-Host` 桩要维护 `$script:Queue`。
-> 另一个坑：`return ,$arr` 会把数组当成单个对象返回，`@(Get-xxx).Count` 会恒为 1，
-> 返回数组时直接 `return $arr`。
+高级模式无效输入、空输入容错。总计 **287 / 287** 通过（CI 实测；本机 Pester 5.9.1 计数为 287）。
+桩函数写法与 `return ,$arr` 的坑见 §5.26。
 
 ## 4. 三端文件地图（按域）
 
@@ -657,7 +653,7 @@ v3.10.0（667,648 字节，构建于 PR #26）。`Start.bat` 的 `[E] EXE 程序
 16. **`Invoke-Profile` 必须带 `[CmdletBinding()]`**：无 `CmdletBinding` 的简单函数会把**未匹配的命名参数静默吞进 `$args`**——
     既不报错也不生效。本次就因 `webui/ps/16_profiles.ps1` 把 `-DryRun:$DryRun` 传给参数名为 `-WhatIf` 的
     `Invoke-Profile`，导致预演静默变成真跑。排查方法：写个最小复现（`function F { param([string]$Name,[switch]$WhatIf) ... }`
-    后 `F -Name x -DryRun:$true`），确认开关全为 `$false` 且 `$args` 里出现 `-DryRun:` 即坐实。
+
 17. **`[CmdletBinding()]` 要放在函数体内 `param(` 之前**，写在 `function` 外面是语法错误
     （`Unexpected attribute 'CmdletBinding'`）。PS 5.1 解析器只认函数内属性这一种形式。
 18. **每次 exec/命令行的 PowerShell 是全新会话**：上一条命令里的 `$py`、`$code` 等变量下一条命令里取不到
@@ -698,7 +694,15 @@ v3.10.0（667,648 字节，构建于 PR #26）。`Start.bat` 的 `[E] EXE 程序
     很容易「只改了一行，diff 却整文件重写」，更严重的会给 `*.ps1` 去掉 BOM，导致 PS 5.1 把中文当 ANSI 读 → 乱码。
      **规则**：改完一律用 `ReadAllBytes` + 手动去/补 BOM + `-replace "`r`n","`n" -replace "`n","`r`n"`
     归一，然后断言 `bareLF=0`；仓库内 `.gitignore` 等非 `*.ps1` 文件按其**原有**约定（该文件无 BOM）保存，别一律加 BOM。
-    验证：`git diff` 不应出现「`-﻿# 编译产物` / `+# 编译产物`」这类 BOM 噪声，也不应出现整文件重写。
+
+25. **本环境的 cmd 会把双引号原样透传**：`gh pr create --title "..."` / `python -c "..."` 里的引号不会被剥掉，
+    带空格的参数会被拆成多个 argv，`gh` 直接报 `unknown arguments`、Python 报 `SyntaxError`。
+    规避：`git commit -F 文件`、`gh pr create --fill --body-file 文件`、把命令写进 `_scratch/*.ps1` 再 `-File` 执行。
+    同理 `python _scratch\xx.py 文件 "正则"` 的正则必须**不加引号**（中文正则还会被按 ANSI 解码而失配，
+    所以 grep 类脚本只用于 ASCII 模式，中文内容用 `_scratch\rd.py` 按行号读）。
+26. **PowerShell 函数里对父作用域变量 `+=` 会生成局部副本**：`function F { $out += 1 }` 改的是 F 自己的 `$out`，
+    外层数组永远是空的。桩函数 / 测试 harness 必须写 `$script:Out += ...`；配套的队列也一样（`$script:Queue`）。
+    另外 `return ,$arr` 会把数组当成单个对象返回，调用方 `@(Get-Xxx).Count` 恒为 1——要返回数组就 `return $arr`。
 
 ---
 
@@ -709,12 +713,13 @@ v3.10.0（667,648 字节，构建于 PR #26）。`Start.bat` 的 `[E] EXE 程序
   cd <项目根>
   Invoke-Pester -Path ./tests/Optimize.Core.Tests.ps1
   ```
-  当前 **277 个用例**（2026-10-04 实测 277 通过 / 0 失败；含各域「编号稳定 / 必须备份 / 行为契约」断言，其中 6 条是 CompactOS 契约用例、
+  当前 **287 个用例**（2026-11-03 实测 CI 287 通过 / 0 失败；含各域「编号稳定 / 必须备份 / 行为契约」断言，其中 6 条是 CompactOS 契约用例、
   1 条用 Mock 覆盖「无活动网卡」分支、15 条覆盖一键向导 lib 逻辑、9 条覆盖 GUI 一键向导页（含导出按钮与导出动作）、
   6 条覆盖首次运行一次性说明（onboarding）的状态读写与降级行为、
-  8 条覆盖 `Get-GuidedNavMap` / `Get-GuidedNavTarget` 的三端导航映射）。
-  9 条覆盖 `New-DesktopShortcuts.ps1`（桌面快捷方式安装器：脚本可解析 / 指向两个启动文件 / 
-  用 WScript.Shell COM 创建 / 图标回退 / 可重复执行不堆积 / 名称与 README 一致 / ICO 头合法 / bat 入口转发）。
+  8 条覆盖 `Get-GuidedNavMap` / `Get-GuidedNavTarget` 的三端导航映射、
+  9 条覆盖 `New-DesktopShortcuts.ps1`（桌面快捷方式安装器：脚本可解析 / 指向两个启动文件 /
+  用 WScript.Shell COM 创建 / 图标回退 / 可重复执行不堆积 / 名称与 README 一致 / ICO 头合法 / bat 入口转发）、
+  8 条覆盖 CLI 菜单极简 / 高级双模式（渲染、A/S 切换、1~14 全分发、高级编号提示、空输入容错，见 §3.22）。
   向导首次进入时 lib 会附带 `onboarding` 段（解释管理员权限 / 重启 / 可回滚），状态记在
   `%LOCALAPPDATA%\PC-Optimizer-7thGen\onboarding.json`；CLI / GUI / WebUI 任一端点掉即落状态。
   > ⚠️ **分离进程跑 Pester 的两个坑**（2026-10-03 实测踩到）：
