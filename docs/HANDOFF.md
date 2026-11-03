@@ -507,6 +507,9 @@ try/catch 里，任何一组抛异常都会走到 catch 分支，整页退回 ok
 4. New-DesktopShortcuts.ps1 重建两个 .lnk，随后 ie4uinit -show 刷新 Windows 图标缓存。
 5. Pester 新增「ICO 多尺寸」用例（≥3 个目录项、含 256/48/16），共 **278 / 278** 通过。
 6. 版本号随四端一致性铁律从 3.11.1 推到 **3.11.2**（config / Start.bat / EXE ProductVersion / README）。
+7. **追补修复（同日）**：PR #44 首次合入时 EXE 内嵌版本仍为 3.11.1.0——构建发生在版本号提升之前，
+   违反四端一致性。已按 3.11.2 重新编译，核验 `ProductVersion = 3.11.2.0`、`ExtractIconEx` 抽得 2 个内嵌图标
+   （large + small），并重建两个桌面 `.lnk` 刷新图标缓存。
 
 ## 4. 三端文件地图（按域）
 
