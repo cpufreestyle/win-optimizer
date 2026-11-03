@@ -3660,7 +3660,7 @@ Describe 'Desktop shortcut installer (New-DesktopShortcuts.ps1)' {
     }
 
     It 'the shortcut names are stable and documented in the README' {
-        foreach ($name in 'PC优化工具.lnk', 'PC优化工具-图形界面.lnk') {
+        foreach ($name in '老电脑优化工具.lnk', '老电脑优化工具-图形界面.lnk') {
             if (-not $script:Source) { continue }
             $script:Source | Should -Match ([regex]::Escape($name))
         }
