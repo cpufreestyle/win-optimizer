@@ -868,7 +868,7 @@ Describe 'Optimize.Core telemetry tasks (shared by CLI/GUI/WebUI)' {
             $f | Should -Match 'telemetry_backup_\d{8}_\d{6}\.json$'
             $data = Get-Content -LiteralPath $f -Raw | ConvertFrom-Json
             @($data.tasks).Count | Should -Be @(Get-TelemetryTasks).Count
-            $data.host | Should -Be $env:COMPUTERNAME
+            $data.host | Should -Be ([Environment]::MachineName)
         } finally {
             Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -1084,7 +1084,7 @@ Describe 'Optimize.Core backup manifest and timeline (shared by CLI/GUI/WebUI)' 
                 time     = $t.ToString('yyyy-MM-ddTHH:mm:ss')
                 items    = 1
                 bytes    = 10
-                host     = $env:COMPUTERNAME
+                host     = (Get-OptHostName)
                 user     = 'test'
                 note     = ''
             } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath ($f + '.manifest.json') -Encoding UTF8
@@ -1105,7 +1105,7 @@ Describe 'Optimize.Core backup manifest and timeline (shared by CLI/GUI/WebUI)' 
             $data.domain  | Should -Be 'services'
             $data.items   | Should -Be 7
             $data.file    | Should -Be 'services_backup_20260101_010101.csv'
-            $data.host    | Should -Be $env:COMPUTERNAME
+            $data.host    | Should -Be ([Environment]::MachineName)
             $data.version | Should -Be (Get-OptVersion)
             $data.date    | Should -Match '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
         } finally {
@@ -1177,7 +1177,7 @@ Describe 'Optimize.Core backup manifest and timeline (shared by CLI/GUI/WebUI)' 
             $tl[0].metadataMissing | Should -BeFalse
             $tl[0].domain | Should -Be 'services'
             $tl[0].items  | Should -Be 1
-            $tl[0].host   | Should -Be $env:COMPUTERNAME
+            $tl[0].host   | Should -Be ([Environment]::MachineName)
             $tl[1].file | Should -Be 'startup_20200101_000000.csv'
             $tl[1].metadataMissing | Should -BeTrue
             $tl[1].domain | Should -Be 'startup'
@@ -1228,7 +1228,7 @@ Describe 'Optimize.Core rollback plan and one-click rollback (shared by CLI/GUI/
                 time     = $t.ToString('yyyy-MM-ddTHH:mm:ss')
                 items    = 1
                 bytes    = 10
-                host     = $env:COMPUTERNAME
+                host     = (Get-OptHostName)
                 user     = 'test'
                 note     = ''
             } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath ($f + '.manifest.json') -Encoding UTF8
@@ -2299,6 +2299,23 @@ Describe 'PowerShell source hygiene - string delimiters and returned object type
         foreach ($f in @($script:psFiles)) {
             $text = Get-Content -LiteralPath $f -Raw -Encoding UTF8
             $text | Should -Not -Match '\[PSCustomObject\]\{'
+        }
+    }
+
+    It 'no raw .NET thread runs a PowerShell scriptblock (it terminates the process)' {
+        # 裸线程的 TLS 里没有 runspace，脚本块一调用就抛 PSInvalidOperationException，
+        # 且发生在 IsBackground 线程上无人捕获 —— GUI 曾因此「窗口刚显示就闪退」。
+        foreach ($f in @($script:psFiles)) {
+            $tokens = $null; $errs = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$tokens, [ref]$errs)
+            # 只看类型名 token（Generic = 命令实参里的裸类型名，Identifier = [类型] 转换），
+            # 注释是 Comment token，天然不会误报
+            $bad = @($tokens | Where-Object {
+                ($_.Kind -eq 'Generic' -or $_.Kind -eq 'Identifier') -and
+                ($_.Text -match '^System\.Threading\.(Thread|ThreadStart|ThreadPool|ParameterizedThreadStart)$')
+            })
+            ("{0} uses {1} raw-thread type(s)" -f (Split-Path -Leaf $f), $bad.Count) |
+                Should -Match 'uses 0 raw-thread type'
         }
     }
 

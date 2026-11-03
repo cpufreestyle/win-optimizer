@@ -80,19 +80,60 @@ function Show-UpdatePrompt {
 }
 
 function Start-BackgroundUpdateCheck {
-    # 启动后延迟几秒在后台静默检查一次，仅发现新版本时弹窗（不阻塞界面、无新版不打扰）
-    $thread = New-Object System.Threading.Thread([System.Threading.ThreadStart]{
-        Start-Sleep -Seconds 5
-        $release = Get-GitHubLatestRelease
-        if (-not $release) { return }
+    param([int]$DelaySeconds = 5)
+    # 启动后延迟几秒静默检查一次，仅发现新版本时弹窗（不阻塞界面、无新版不打扰）
+    #
+    # ⚠️ 不要把这里改回「裸 .NET 线程 + PowerShell 脚本块」：
+    #    普通线程的 TLS 里没有 runspace，脚本块一被调用就抛
+    #    PSInvalidOperationException（ScriptBlock.GetContextFromTLS），
+    #    而该异常发生在 IsBackground 线程上、没有任何调用栈能捕获它，
+    #    会直接终止整个进程 —— 症状就是「主窗口刚显示出来就闪退」。
+    #    现在改成 UI 线程上的计时器触发异步下载，完成事件同样回到 UI 线程，
+    #    不占用后台线程，也不阻塞界面。
+    $timer = New-Object System.Windows.Forms.Timer
+    $timer.Interval = [math]::Max(1, $DelaySeconds) * 1000
+    $script:UpdateCheckTimer = $timer
+    $timer.Add_Tick({
+        param($Sender, $EventArgs)
         try {
-            if ($script:MainForm -and -not $script:MainForm.IsDisposed) {
-                $script:MainForm.Invoke([Action]{ Show-UpdatePrompt -Release $release -QuietWhenLatest })
+            if ($Sender) {
+                $Sender.Stop()
+                $Sender.Dispose()
+            }
+            $script:UpdateCheckTimer = $null
+
+            $repo = Get-GitHubRepo
+            if ([string]::IsNullOrWhiteSpace($repo)) {
+                Write-Log "未配置 update_repo 且无法从 git remote 探测，跳过更新检查。" "INFO"
+                return
+            }
+            $wc = New-Object System.Net.WebClient
+            $wc.Headers.Add("User-Agent", "PC-Optimizer")
+            $wc.Encoding = [System.Text.Encoding]::UTF8
+            # 挂到脚本作用域，避免异步请求期间被 GC 回收
+            $script:UpdateCheckClient = $wc
+            $wc.Add_DownloadStringCompleted({
+                param($SenderWc, $EventArgsWc)
+                try {
+                    if ($null -ne $EventArgsWc.Error -or $EventArgsWc.Cancelled) { return }
+                    if ([string]::IsNullOrWhiteSpace($EventArgsWc.Result)) { return }
+                    $release = $EventArgsWc.Result | ConvertFrom-Json
+                    if (-not $release -or -not $release.tag_name) { return }
+                    if ($script:MainForm -and -not $script:MainForm.IsDisposed) {
+                        Show-UpdatePrompt -Release $release -QuietWhenLatest
+                    }
+                } catch {
+                    Write-Log "自动检查更新提示失败: $($_.Exception.Message)" "WARN"
+                }
+            })
+            try {
+                $null = $wc.DownloadStringAsync([Uri]"https://api.github.com/repos/$repo/releases/latest")
+            } catch {
+                Write-Log "获取最新版本信息失败: $($_.Exception.Message)" "WARN"
             }
         } catch {
-            Write-Log "自动检查更新提示失败: $($_.Exception.Message)" "WARN"
+            Write-Log "后台检查更新异常: $($_.Exception.Message)" "WARN"
         }
     })
-    $thread.IsBackground = $true
-    $thread.Start()
+    $timer.Start()
 }
