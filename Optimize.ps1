@@ -108,6 +108,7 @@ function Show-Banner {
 function Show-Menu {
     $script:PlanProfile       = $Profile
     $script:PlanSkipCleanScan = $SkipCleanScan
+    $script:SimpleMode        = $true
     while ($true) {
         Show-Banner
 
@@ -125,59 +126,96 @@ function Show-Menu {
         Write-Host "   运行时间 : $($uptime.Days)天 $($uptime.Hours)小时"
         Write-Host ""
 
-        Write-Host " [优化选项]" -ForegroundColor Yellow
-        Write-Host "   [0]  一键向导（推荐）    — 体检+推荐+执行+复检，一步到位，新手选它" -ForegroundColor Green
-        Write-Host ""
-        Write-Host "   [1]  系统信息检测        — 查看详细硬件与系统信息"
-        Write-Host "   [2]  临时文件清理        — 清理系统/用户临时文件、缓存"
-        Write-Host "   [3]  服务优化            — 禁用不必要的后台服务"
-        Write-Host "   [4]  启动项优化          — 管理并禁用多余开机启动项"
-        Write-Host "   [5]  视觉效果优化        — 降低视觉特效，提升响应速度"
-        Write-Host "   [6]  电源计划优化        — 切换高性能电源计划"
-        Write-Host "   [7]  磁盘优化            — 磁盘清理与碎片整理/SSD优化"
-        Write-Host "   [8]  网络优化            — 优化DNS与网络参数"
-        Write-Host "   [9]  一键全面优化        — 执行上述所有优化（推荐）"
-        Write-Host "   [10] 屏蔽 Windows 更新   — 停止反复推送升级（如 24H2）"
-        Write-Host "   [11] 手动更新模式         — 不暂停，但不自动安装/重启"
-        Write-Host "   [12] 隐藏指定更新         — 把指定升级藏起来不再出现"
-        Write-Host "   [13] Windows 可选功能     — 列出并启用微软默认未开启的功能"
-        Write-Host "   [14] 恢复自动更新         — 恢复 Windows Update 服务与计划任务"
-        Write-Host "   [15] 一键体检（只读）      — 体检分 + 问题清单，可优化前后对比"
-        Write-Host "   [16] 优化组合包          — 老机均衡/游戏/省电/最小干预，一键到位"
-        Write-Host ""
-        Write-Host " [工具]" -ForegroundColor Yellow
-        Write-Host "   [B]  备份当前系统设置"
-        Write-Host "   [R]  恢复系统设置"
-        Write-Host ""
-        Write-Host "   [P]  优化预览（只读）   — 先看全面优化将做什么，不改任何设置" -ForegroundColor Cyan
-        Write-Host "   [Q]  退出"
+        if ($script:SimpleMode) {
+            # 极简模式：只留高频入口，降低新手学习成本；按 A 展开全部功能
+            Write-Host " [极简模式] 只显示常用功能 · 按 A 展开全部 16 项" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "   [0]  一键向导（推荐）     — 体检+推荐+执行+复检，一步到位" -ForegroundColor Green
+            Write-Host "   [9]  一键全面优化         — 执行所有优化（有经验再用）"
+            Write-Host "   [15] 一键体检（只读）     — 先看电脑状况，不改任何设置"
+            Write-Host "   [16] 优化组合包           — 老机均衡/游戏/省电/最小化，一键到位"
+            Write-Host ""
+            Write-Host "   [P]  优化预览（只读）     — 先看全面优化会改什么" -ForegroundColor Cyan
+            Write-Host "   [B]/[R] 备份 / 恢复系统设置"
+            Write-Host ""
+            Write-Host "   [A]  高级模式             — 展开全部 16 项优化" -ForegroundColor Magenta
+            Write-Host "   [Q]  退出"
+        } else {
+            # 高级模式：完整功能清单；按 S 回到极简
+            Write-Host " [高级模式] 全部功能 · 按 S 回到极简模式" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "   [0]  一键向导（推荐）     — 体检+推荐+执行+复检，一步到位，新手选它" -ForegroundColor Green
+            Write-Host ""
+            Write-Host "   [1]  系统信息检测         — 查看详细硬件与系统信息"
+            Write-Host "   [2]  临时文件清理         — 清理系统/用户临时文件、缓存"
+            Write-Host "   [3]  服务优化             — 禁用不必要的后台服务"
+            Write-Host "   [4]  启动项优化           — 管理并禁用多余开机启动项"
+            Write-Host "   [5]  视觉效果优化         — 降低视觉特效，提升响应速度"
+            Write-Host "   [6]  电源计划优化         — 切换高性能电源计划"
+            Write-Host "   [7]  磁盘优化             — 磁盘清理与碎片整理/SSD优化"
+            Write-Host "   [8]  网络优化             — 优化DNS与网络参数"
+            Write-Host "   [9]  一键全面优化         — 执行上述所有优化（推荐）"
+            Write-Host "   [10] 屏蔽 Windows 更新   — 停止反复推送升级（如 24H2）"
+            Write-Host "   [11] 手动更新模式         — 不暂停，但不自动安装/重启"
+            Write-Host "   [12] 隐藏指定更新         — 把指定升级藏起来不再出现"
+            Write-Host "   [13] Windows 可选功能     — 列出并启用微软默认未开启的功能"
+            Write-Host "   [14] 恢复自动更新         — 恢复 Windows Update 服务与计划任务"
+            Write-Host "   [15] 一键体检（只读）     — 体检分 + 问题清单，可优化前后对比"
+            Write-Host "   [16] 优化组合包           — 老机均衡/游戏/省电/最小化预，一键到位"
+            Write-Host ""
+            Write-Host " [工具]" -ForegroundColor Yellow
+            Write-Host "   [B]  备份当前系统设置"
+            Write-Host "   [R]  恢复系统设置"
+            Write-Host ""
+            Write-Host "   [P]  优化预览（只读）     — 先看全面优化将做什么，不改任何设置" -ForegroundColor Cyan
+            Write-Host "   [S]  极简模式             — 只显示常用功能" -ForegroundColor Magenta
+            Write-Host "   [Q]  退出"
+        }
         Write-Host ("=" * 60) -ForegroundColor DarkGray
 
-        $choice = Read-Host "请输入选项"
+        $choice = ("{0}" -f (Read-Host "请输入选项")).Trim()
+
+        # A / S 是模式切换键，两种模式下都生效
+        if ($choice -eq "A") { $script:SimpleMode = $false; continue }
+        if ($choice -eq "S") { $script:SimpleMode = $true; continue }
 
         switch ($choice) {
-            "0" { Invoke-GuidedOptimization }
-            "1" { Invoke-ScriptModule "01-SystemInfo.ps1" }
-            "2" { Invoke-ScriptModule "02-CleanTemp.ps1" }
-            "3" { Invoke-ScriptModule "03-DisableServices.ps1" }
-            "4" { Invoke-ScriptModule "04-StartupOptimize.ps1" }
-            "5" { Invoke-ScriptModule "05-VisualEffects.ps1" }
-            "6" { Invoke-ScriptModule "06-PowerPlan.ps1" }
-            "7" { Invoke-ScriptModule "07-DiskOptimize.ps1" }
-            "8" { Invoke-ScriptModule "08-NetworkOptimize.ps1" }
-            "9" { Invoke-FullOptimization }
-            "10" { Invoke-ScriptModule "10-BlockWin1124H2.ps1" }
-            "11" { Invoke-ScriptModule "11-ManualUpdateMode.ps1" }
-            "12" { Invoke-ScriptModule "12-HideUpdates.ps1" }
-            "13" { Invoke-ScriptModule "13-WindowsFeatures.ps1" }
-            "14" { Invoke-ScriptModule "14-RestoreAutoUpdate.ps1" }
+            "0"  { Invoke-GuidedOptimization }
+            "9"  { Invoke-FullOptimization }
             "15" { Invoke-ScriptModule "15-HealthCheck.ps1" }
             "16" { Invoke-ScriptModule "16-Profiles.ps1" }
-            { $_ -eq "B" -or $_ -eq "b" } { Invoke-ScriptModule "09-BackupRestore.ps1" }
-            { $_ -eq "R" -or $_ -eq "r" } { Invoke-ScriptModule "09-BackupRestore.ps1" }
-            { $_ -eq "P" -or $_ -eq "p" } { Show-OptimizePlanPreview }
-            { $_ -eq "Q" -or $_ -eq "q" } { Write-Host "感谢使用，再见！" -ForegroundColor Green; return }
-            default { Write-Host "无效选项，请重新输入。" -ForegroundColor Red; Start-Sleep -Seconds 1 }
+            "B"  { Invoke-ScriptModule "09-BackupRestore.ps1" }
+            "R"  { Invoke-ScriptModule "09-BackupRestore.ps1" }
+            "P"  { Show-OptimizePlanPreview }
+            "Q"  { Write-Host "感谢使用，再见！" -ForegroundColor Green; return }
+            default {
+                if ($script:SimpleMode) {
+                    # 极简模式下输入高级功能编号时给出明确指引，而不是只提示无效选项
+                    if ($choice -match '^(10|11|12|13|14|[1-8])$') {
+                        Write-Host "「$choice」是高级功能，按 A 切换到高级模式即可使用。" -ForegroundColor Yellow
+                    } else {
+                        Write-Host "无效选项，请重新输入。" -ForegroundColor Red
+                    }
+                    Start-Sleep -Seconds 1
+                } else {
+                    switch ($choice) {
+                        "1"  { Invoke-ScriptModule "01-SystemInfo.ps1" }
+                        "2"  { Invoke-ScriptModule "02-CleanTemp.ps1" }
+                        "3"  { Invoke-ScriptModule "03-DisableServices.ps1" }
+                        "4"  { Invoke-ScriptModule "04-StartupOptimize.ps1" }
+                        "5"  { Invoke-ScriptModule "05-VisualEffects.ps1" }
+                        "6"  { Invoke-ScriptModule "06-PowerPlan.ps1" }
+                        "7"  { Invoke-ScriptModule "07-DiskOptimize.ps1" }
+                        "8"  { Invoke-ScriptModule "08-NetworkOptimize.ps1" }
+                        "10" { Invoke-ScriptModule "10-BlockWin1124H2.ps1" }
+                        "11" { Invoke-ScriptModule "11-ManualUpdateMode.ps1" }
+                        "12" { Invoke-ScriptModule "12-HideUpdates.ps1" }
+                        "13" { Invoke-ScriptModule "13-WindowsFeatures.ps1" }
+                        "14" { Invoke-ScriptModule "14-RestoreAutoUpdate.ps1" }
+                        default { Write-Host "无效选项，请重新输入。" -ForegroundColor Red; Start-Sleep -Seconds 1 }
+                    }
+                }
+            }
         }
     }
 }
