@@ -243,9 +243,47 @@ function Write-Log {
                 $script:LogTextBox.SelectionColor = $color
                 $script:LogTextBox.AppendText("$line`n")
                 $script:LogTextBox.ScrollToCaret()
+                $script:LogTextBox.Update()
             })
         } catch {}
     }
+}
+
+# ============================================================
+#  重定向控制台输出到 GUI 日志窗口（根治 PS2EXE 下弹窗与文字不可见问题）
+#  当脚本模块调用 Write-Host 时，自动捕获并写入 GUI 操作日志，
+#  同时防止 PS2EXE -noConsole 模式将 Write-Host 转换为阻断性的 MessageBox 弹窗。
+# ============================================================
+function Write-Host {
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
+        $Object,
+        $ForegroundColor,
+        $BackgroundColor,
+        [switch]$NoNewline,
+        $Separator
+    )
+    if ($null -eq $Object) { return }
+    $text = if ($Object -is [string]) { $Object } else { ($Object | Out-String).TrimEnd("`r`n") }
+    if ([string]::IsNullOrWhiteSpace($text)) { return }
+    # 忽略纯控制台横线装饰（如连续10个以上的减号或等号），避免日志刷屏与弹窗
+    if ($text -match '^[ \t]*[-=]{10,}[ \t]*$') { return }
+
+    $level = "INFO"
+    if ($ForegroundColor) {
+        $c = $ForegroundColor.ToString()
+        if ($c -match "Red") { $level = "ERROR" }
+        elseif ($c -match "Yellow") { $level = "WARN" }
+        elseif ($c -match "Green") { $level = "SUCCESS" }
+    }
+    Write-Log $text $level
+}
+
+function Read-Host {
+    param([string]$Prompt)
+    # GUI 环境下被调用的子脚本若有确认询问，自动确认 "Y"
+    return "Y"
 }
 
 function Test-Administrator {
