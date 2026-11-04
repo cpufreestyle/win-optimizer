@@ -32,7 +32,7 @@ set "APP_VER=%APP_VER: =%"
 echo.
 echo   ================================================================
 echo     PC-Optimizer-7thGen  v%APP_VER%
-echo     7代CPU老电脑 Windows 优化工具
+    echo     7代CPU老电脑 Windows 优化工具  (Michaelqiu 出品)
 echo   ================================================================
 echo.
 

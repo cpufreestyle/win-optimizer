@@ -52,10 +52,18 @@ try {
     $cpuThreads = $cpu.NumberOfLogicalProcessors
     $cpuClock   = [math]::Round($cpu.MaxClockSpeed / 1000, 2)
     $cpuLoad    = $cpu.LoadPercentage
-    if ($cpu.Name -match "i[3579]-(\d)") {
-        $gen = [int]$matches[1]
-        # 用半角括号与英文/简中混合，避免某些字体回退对全角括号/长中文渲染异常
-        $cpuGen = "i" + $matches[0][1] + " 第 " + $gen + " 代"
+    $tier = if ($cpu.Name -match 'i([3579])-') { $matches[1] } else { "" }
+    $gen = $null
+    if (Get-Command Get-IntelCpuGeneration -ErrorAction SilentlyContinue) {
+        $gen = Get-IntelCpuGeneration $cpu.Name
+    } elseif ($cpu.Name -match 'i[3579]-(\d{3,5})') {
+        $num = $Matches[1]
+        if ($num.Length -eq 5) { $gen = [int]$num.Substring(0, 2) }
+        elseif ($num.Length -eq 4) { $gen = [int]$num.Substring(0, 1) }
+        elseif ($num.Length -eq 3) { $gen = 1 }
+    }
+    if ($null -ne $gen) {
+        $cpuGen = if ($tier) { "i$tier 第 $gen 代" } else { "第 $gen 代" }
         if ($gen -le 7) { $cpuGen += " [优化目标]" }
     }
 } catch {

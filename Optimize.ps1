@@ -7,7 +7,7 @@
     磁盘优化、网络优化等功能，并提供备份与恢复机制。
 .NOTES
     需要以管理员身份运行 PowerShell
-    作者: PC-Optimizer-7thGen
+    作者: PC-Optimizer-7thGen (Michaelqiu 出品)
     日期: 2026-07-06
 #>
 

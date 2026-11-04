@@ -5,11 +5,12 @@
     $lblAboutTitle = New-Label "PC-Optimizer-7thGen" 20 30 760 36 $Fonts.Title $Theme.Accent
     $page.Controls.Add($lblAboutTitle)
 
-    $lblVer = New-Label "版本 v$Version" 20 72 760 24 $Fonts.Sub $Theme.TextDim
+    $lblVer = New-Label "版本 v$Version  |  Michaelqiu 出品" 20 72 760 24 $Fonts.Sub $Theme.TextDim
     $page.Controls.Add($lblVer)
 
     $aboutText = @"
 专为 7 代及更老 CPU 的 Windows 电脑设计
+出品: Michaelqiu
 兼容 Windows 7 / 8 / 10 / 11 (PS 2.0+)
 
 功能特性:
