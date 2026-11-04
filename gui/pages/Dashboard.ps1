@@ -193,6 +193,7 @@ function Build-Dashboard {
         try {
             foreach ($mod in $modules) {
                 Write-Log "执行模块: $mod"
+                Invoke-UIRefresh
                 $scriptPath = Join-Path $script:ScriptsDir $mod
                 if (Test-Path $scriptPath) {
                     try { & $scriptPath } catch { Write-Log "模块 $mod 出错: $($_.Exception.Message)" "ERROR" }
@@ -200,6 +201,7 @@ function Build-Dashboard {
                 } else {
                     Write-Log "找不到模块文件: $scriptPath" "ERROR"
                 }
+                Invoke-UIRefresh
             }
 
             Write-Log "一键全面优化完成！建议重启电脑使所有更改生效。" "SUCCESS"
