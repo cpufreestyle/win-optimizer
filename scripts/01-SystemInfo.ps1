@@ -30,8 +30,13 @@ foreach ($cpu in $cpus) {
 
 # 判断 CPU 代数
 $cpuName = $cpus[0].Name
-if ($cpuName -match "i[3579]-(\d)") {
-    $gen = $matches[1]
+if (Get-Command Get-IntelCpuGeneration -ErrorAction SilentlyContinue) {
+    $gen = Get-IntelCpuGeneration $cpuName
+} elseif ($cpuName -match 'i[3579]-(\d{3,5})') {
+    $m = $matches[1]
+    $gen = if ($m.Length -eq 5) { [int]$m.Substring(0,2) } elseif ($m.Length -eq 4) { [int]$m.Substring(0,1) } elseif ($m.Length -eq 3) { 1 } else { $null }
+} else { $gen = $null }
+if ($null -ne $gen) {
     Write-Host "  CPU 代数    : 第 ${gen} 代" -ForegroundColor $(if ([int]$gen -le 7) { "Green" } else { "Gray" })
     if ([int]$gen -le 7) {
         Write-Host "  >>> 检测到 7代或更早 CPU，本工具可显著提升性能 <<<" -ForegroundColor Green

@@ -63,6 +63,19 @@ function Get-OptUserName {
     return [Environment]::UserName
 }
 
+# 解析 Intel CPU 代数（支持 1 代 3 位数如 i7-870、2-9 代 4 位数如 i7-7700、10 代+ 5 位数如 i3-10300）
+# 返回代数整数（如 7、10）或 $null
+function Get-IntelCpuGeneration {
+    param([string]$CpuName)
+    if ($CpuName -match 'i[3579]-(\d{3,5})') {
+        $num = $Matches[1]
+        if ($num.Length -eq 5) { return [int]$num.Substring(0, 2) }
+        if ($num.Length -eq 4) { return [int]$num.Substring(0, 1) }
+        if ($num.Length -eq 3) { return 1 }
+    }
+    return $null
+}
+
 # 返回可禁用服务列表: @( @{Name; Desc; Level} )
 # Level 统一为 "安全禁用" / "建议禁用"
 function Get-ServiceList {

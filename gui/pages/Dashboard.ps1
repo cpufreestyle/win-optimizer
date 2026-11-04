@@ -41,8 +41,8 @@ function Build-Dashboard {
     # CPU 代数检测
     $cpuGen = ""
     $cpuColor = $Theme.TextMain
-    if ($cpu.Name -match "i[3579]-(\d)") {
-        $gen = [int]$matches[1]
+    $gen = Get-IntelCpuGeneration $cpu.Name
+    if ($null -ne $gen) {
         $cpuGen = "第 $gen 代"
         if ($gen -le 7) {
             $cpuGen += " (本工具优化目标)"

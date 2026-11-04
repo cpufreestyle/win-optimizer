@@ -331,7 +331,7 @@ function New-SideButton {
     param([string]$Text, [int]$Y)
     $btn = New-Object System.Windows.Forms.Button
     $btn.Location = New-Object System.Drawing.Point(0, [int]$Y)
-    $btn.Size = New-Object System.Drawing.Size(220, 46)
+    $btn.Size = New-Object System.Drawing.Size(230, 40)
     $btn.Text = "  $Text"
     $btn.Font = $Fonts.Sub
     $btn.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -409,7 +409,7 @@ $mainLayout.Dock = [System.Windows.Forms.DockStyle]::Fill
 $mainLayout.ColumnCount = 2
 $mainLayout.RowCount = 1
 # 注意：ColumnStyles.Add() 返回插入索引(int)，必须抑制，否则脚本顶层会向管道输出 "0"/"1"
-[void]$mainLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 220)))
+[void]$mainLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 230)))
 [void]$mainLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
 $mainLayout.BackColor = $Theme.BgDark
 $mainLayout.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 0)
@@ -422,13 +422,13 @@ $sidePanel = New-Object System.Windows.Forms.Panel
 $sidePanel.Dock = [System.Windows.Forms.DockStyle]::Fill
 $sidePanel.BackColor = $Theme.BgDark
 $sidePanel.AutoScroll = $true
-$sidePanel.AutoScrollMinSize = New-Object System.Drawing.Size(0, 680)
+$sidePanel.AutoScrollMinSize = New-Object System.Drawing.Size(0, 650)
 $mainLayout.Controls.Add($sidePanel, 0, 0)
 
 # 侧边栏 Logo
 $lblLogo = New-Object System.Windows.Forms.Label
 $lblLogo.Location = New-Object System.Drawing.Point(0, 16)
-$lblLogo.Size = New-Object System.Drawing.Size(220, 36)
+$lblLogo.Size = New-Object System.Drawing.Size(230, 36)
 $lblLogo.Text = "  PC OPTIMIZER"
 $lblLogo.Font = $Fonts.Header
 $lblLogo.ForeColor = $Theme.Accent
@@ -438,8 +438,8 @@ $sidePanel.Controls.Add($lblLogo)
 
 $lblSubtitle = New-Object System.Windows.Forms.Label
 $lblSubtitle.Location = New-Object System.Drawing.Point(0, 54)
-$lblSubtitle.Size = New-Object System.Drawing.Size(220, 18)
-$lblSubtitle.Text = "  7代CPU老电脑优化工具"
+$lblSubtitle.Size = New-Object System.Drawing.Size(230, 18)
+$lblSubtitle.Text = "  7代老电脑优化 | Michaelqiu 出品"
 $lblSubtitle.Font = $Fonts.Small
 $lblSubtitle.ForeColor = $Theme.TextDim
 $lblSubtitle.BackColor = $Theme.BgDark
@@ -553,6 +553,17 @@ $lblHeader.ForeColor = $Theme.TextBright
 $lblHeader.BackColor = $Theme.BgPanel
 $lblHeader.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
 $headerPanel.Controls.Add($lblHeader)
+
+$lblAuthorHeader = New-Object System.Windows.Forms.Label
+$lblAuthorHeader.Location = New-Object System.Drawing.Point(420, 0)
+$lblAuthorHeader.Size = New-Object System.Drawing.Size(360, 50)
+$lblAuthorHeader.Text = "Michaelqiu 出品"
+$lblAuthorHeader.Font = $Fonts.Small
+$lblAuthorHeader.ForeColor = $Theme.TextDim
+$lblAuthorHeader.BackColor = $Theme.BgPanel
+$lblAuthorHeader.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
+$lblAuthorHeader.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
+$headerPanel.Controls.Add($lblAuthorHeader)
 
 # 页面宿主（位于标题栏之下，承载所有页面；Dock=Fill 在 headerPanel 之后添加，自动避让到其下方）
 $pagesHost = New-Object System.Windows.Forms.Panel
@@ -793,8 +804,10 @@ Build-GuidedPage
 # 将所有页面添加到页面宿主（pagesHost 位于标题栏之下、日志之上，互不遮挡）
 foreach ($key in $script:Pages.Keys) {
     $pagesHost.Controls.Add($script:Pages[$key])
-    $script:Pages[$key].BringToFront()
+    $script:Pages[$key].Visible = ($key -eq "Dashboard")
 }
+$script:CurrentPage = "Dashboard"
+$script:Pages["Dashboard"].BringToFront()
 
 # ============================================================
 #  侧边栏标题映射
