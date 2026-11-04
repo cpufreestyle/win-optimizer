@@ -18,7 +18,9 @@ param(
     [string]$Profile = '',       # -Plan 时额外附上某个优化组合包的步骤预览
     [switch]$SkipCleanScan,      # -Plan 时跳过可清理空间统计（省十几秒）
     [switch]$GuidedPlan,         # 只读预览「一键向导会怎么走」，不需要管理员权限
-    [switch]$Guided              # 直接进入一键向导（供启动器一键直达，跳过主菜单）
+    [switch]$Guided,             # 直接进入一键向导（供启动器一键直达，跳过主菜单）
+    [switch]$Simple,             # 强制极简模式：忽略上次记忆，只显示常用功能（新手 / 桌面快捷方式用）
+    [switch]$Advanced            # 强制高级模式：忽略上次记忆，展开全部 16 项；与 -Simple 同给时以它为准
 )
 
 # ============================================================
@@ -108,7 +110,16 @@ function Show-Banner {
 function Show-Menu {
     $script:PlanProfile       = $Profile
     $script:PlanSkipCleanScan = $SkipCleanScan
-    $script:SimpleMode        = $true
+    # 模式来源优先级：-Advanced > -Simple > 上次记忆 > 极简。
+    # 桌面快捷方式 / Start.bat 可用 -Simple / -Advanced 锁死模式；
+    # 不传参数时沿用上次用 A / S 切过的模式，省掉每次重按。
+    if ($Advanced) {
+        $script:SimpleMode = $false
+    } elseif ($Simple) {
+        $script:SimpleMode = $true
+    } else {
+        $script:SimpleMode = ((Get-CliMenuMode) -ne 'advanced')
+    }
     while ($true) {
         Show-Banner
 
@@ -175,9 +186,17 @@ function Show-Menu {
 
         $choice = ("{0}" -f (Read-Host "请输入选项")).Trim()
 
-        # A / S 是模式切换键，两种模式下都生效
-        if ($choice -eq "A") { $script:SimpleMode = $false; continue }
-        if ($choice -eq "S") { $script:SimpleMode = $true; continue }
+        # A / S 是模式切换键，两种模式下都生效；切换即落盘，下次启动直接沿用
+        if ($choice -eq "A") {
+            $script:SimpleMode = $false
+            $null = Set-CliMenuMode -Mode 'advanced'
+            continue
+        }
+        if ($choice -eq "S") {
+            $script:SimpleMode = $true
+            $null = Set-CliMenuMode -Mode 'simple'
+            continue
+        }
 
         switch ($choice) {
             "0"  { Invoke-GuidedOptimization }
