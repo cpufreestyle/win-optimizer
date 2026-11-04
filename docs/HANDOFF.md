@@ -540,6 +540,49 @@ try/catch 里，任何一组抛异常都会走到 catch 分支，整页退回 ok
 高级模式无效输入、空输入容错。总计 **287 / 287** 通过（CI 实测；本机 Pester 5.9.1 计数为 287）。
 桩函数写法与 `return ,$arr` 的坑见 §5.26。
 
+### 3.23 极简 / 高级模式记忆 + 启动参数锁定（2026-11-04）
+
+**背景**：§3.22 的双模式每次启动都重置回极简，老手按一次 `A` 下次又没了；
+桌面快捷方式也没有办法把模式锁死。对「简化流程和学习成本」这条主线来说，
+「记住用户上次的选择」比再多做一个开关更直接。
+
+**做法**（只动 `lib/Optimize.Core.ps1` 与 `Optimize.ps1` 的 `Show-Menu`，未动三端 GUI / WebUI）：
+
+1. lib 新增 `Get-CliMenuMode` / `Set-CliMenuMode`，状态落在
+   `%LOCALAPPDATA%\PC-Optimizer-7thGen\cli-menu-mode.json`（与 onboarding 同一目录与同一套
+   `Get-OptStateDir` 归一逻辑），不污染版本库。文件内容 `{ mode; version; savedAt }`，
+   `version` 走 `Get-OptVersion` 单一来源。
+2. `Optimize.ps1` param 块新增 `-Simple` / `-Advanced`。模式解析优先级：
+   `-Advanced` > `-Simple` > 上次记忆 > 极简。新手默认永远是极简。
+3. `Show-Menu` 里 `A` / `S` 两个切换键在改 `$script:SimpleMode` 的同时调
+   `Set-CliMenuMode` 落盘；菜单动作（`0/9/15/16/P/B/R/Q`）不写状态。
+4. 所有读写都 fail-open：文件不存在 / JSON 损坏 / 值不是 `advanced` / 目录只读 / 磁盘满，
+   一律回 `simple`，`Set-CliMenuMode` 失败只返回 `$false` 不抛异常，绝不挡住启动。
+5. `ValidateSet('simple','advanced')` 挡住非法值，避免写进垃圾状态。
+6. 版本号随四端一致性铁律从 3.11.2 推到 **3.11.3**（config / Start.bat / EXE ProductVersion / README），
+   EXE 已用 ps2exe 重建并核验 `ProductVersion = 3.11.3.0`、`ExtractAssociatedIcon` 抽得 32×32 图标。
+
+**测试**：`tests/Optimize.Core.Tests.ps1` 新增两个 Describe 共 15 个用例。
+lib 侧 6 个（默认 simple / 磁盘往返 / 非法值抛错 / 损坏文件降级 / 非 advanced 值降级 /
+带 version+savedAt）；CLI 菜单侧 9 个（`-Advanced` 锁高级 / `-Simple` 锁极简 /
+两者同给时 `-Advanced` 优先 / 记住 advanced 后无参数直接分发 `[1]` / 记住 simple 时 `[1]` 被引导到 `A` /
+`A`+`S` 落盘序列 / 菜单动作不写状态 / 锁定参数不写状态 / param 块含两个开关）。
+`$script:MenuHarness` 增加 `-Advanced` / `-Simple` / `-Remembered` 注入位，
+并返回 `SavedModes` 供断言；桩 `Get-CliMenuMode` 直接回注入值，
+`Set-CliMenuMode` 只记录调用（不落盘）。总计 **302 / 302** 通过（CI 实测；本机 Pester 5.9.1 计数为 302）。
+
+**真机验证**：`_scratch/verify-menu-mode.ps1`（gitignore，不入库）前台独立进程跑 9 个场景共 30 条断言全过：
+默认极简、`-Advanced` 忽略已记住的 simple、`-Simple` 覆盖已记住的 advanced、两者同给取 `-Advanced`、
+记住 advanced 后无参数直接分发 `01-SystemInfo.ps1`、记住 simple 时 `[1]` 得到「按 A」提示且不误分发、
+`A`/`S`/`A` 落盘序列与下次启动生效、真实 `%LOCALAPPDATA%` 端到端往返（含 version / savedAt / 非法值拒绝 /
+原状还原）、损坏状态文件不阻塞启动。另用真实进程 `powershell -File Optimize.ps1 -Advanced -Simple`
+验证参数绑定（走到管理员门禁即证明解析无误）。
+
+**踩到的坑**：验证脚本第一版把 harness 桩函数的 `-StateDir` 原样透传给真实 lib 函数，
+而 `Show-Menu` 调 `Get-CliMenuMode` / `Set-CliMenuMode` 时**不带** `-StateDir`，
+于是桩收到空串、回落到真实 `%LOCALAPPDATA%`，既读到上次运行的残留值，又把 `A` 键写进了真实状态文件。
+**规则：给 lib 状态函数写 harness 桩时，必须按注入值应答，写入要显式指到临时目录。**
+
 ## 4. 三端文件地图（按域）
 
 > 命名约定：CLI = `NN-Name.ps1`，GUI 页面 = `gui/pages/Name.ps1`，WebUI = `NN_name.ps1`。
@@ -595,7 +638,7 @@ v3.10.0（667,648 字节，构建于 PR #26）。`Start.bat` 的 `[E] EXE 程序
    否则 `Start.bat` 的 `[E]` 分支会把用户导向旧界面。
 2. `Build-EXE.ps1` 的 `$pageFiles` 是白名单，新增页面文件忘了加就会漏页（§3.18 的 `Health.ps1`、
    上一轮的 `Guided.ps1` 都踩过）。现在由 `Describe 'GUI guided wizard page'` 的两条白名单用例守住。
-3. 版本号单一来源是 `config/optimization.json`（当前 3.11.2），`Build-EXE.ps1` 会读它生成四段式 EXE 文件版本。
+3. 版本号单一来源是 `config/optimization.json`（当前 3.11.3），`Build-EXE.ps1` 会读它生成四段式 EXE 文件版本。
 
 ### 4.3 WebUI 路由盘点：46 条路由与前端调用的对应关系（2026-10-03 续）
 
@@ -704,6 +747,14 @@ v3.10.0（667,648 字节，构建于 PR #26）。`Start.bat` 的 `[E] EXE 程序
     外层数组永远是空的。桩函数 / 测试 harness 必须写 `$script:Out += ...`；配套的队列也一样（`$script:Queue`）。
     另外 `return ,$arr` 会把数组当成单个对象返回，调用方 `@(Get-Xxx).Count` 恒为 1——要返回数组就 `return $arr`。
 
+27. **给 lib 状态函数写测试 / 验证 harness 桩时，`-StateDir` 不会自动跟过来**（2026-11-04）：
+    `Get-CliMenuMode` / `Set-CliMenuMode` 这类「生产不传、测试才传」目录参数的函数，
+    生产调用方（`Show-Menu`）是**裸调**的。桩函数如果写成
+    `function Get-CliMenuMode { param([string]$StateDir) & $real -StateDir $StateDir }`，
+    收到的是空串，`Get-OptStateDir ''` 就回落到真实 `%LOCALAPPDATA%`，
+    于是验证脚本读到上一次运行的残留值、又把 `A` 键写进真实状态文件，表现为「断言随机失败」。
+    **规则：桩要么按注入值直接应答，要么在桩内把空目录替换成临时目录；绝不把空 `-StateDir` 透传给真实函数。**
+
 ---
 
 ## 6. 如何验证改动
@@ -713,13 +764,16 @@ v3.10.0（667,648 字节，构建于 PR #26）。`Start.bat` 的 `[E] EXE 程序
   cd <项目根>
   Invoke-Pester -Path ./tests/Optimize.Core.Tests.ps1
   ```
-  当前 **287 个用例**（2026-11-03 实测 CI 287 通过 / 0 失败；含各域「编号稳定 / 必须备份 / 行为契约」断言，其中 6 条是 CompactOS 契约用例、
+  当前 **302 个用例**（2026-11-04 实测 302 通过 / 0 失败；含各域「编号稳定 / 必须备份 / 行为契约」断言，其中 6 条是 CompactOS 契约用例、
   1 条用 Mock 覆盖「无活动网卡」分支、15 条覆盖一键向导 lib 逻辑、9 条覆盖 GUI 一键向导页（含导出按钮与导出动作）、
   6 条覆盖首次运行一次性说明（onboarding）的状态读写与降级行为、
   8 条覆盖 `Get-GuidedNavMap` / `Get-GuidedNavTarget` 的三端导航映射、
   9 条覆盖 `New-DesktopShortcuts.ps1`（桌面快捷方式安装器：脚本可解析 / 指向两个启动文件 /
   用 WScript.Shell COM 创建 / 图标回退 / 可重复执行不堆积 / 名称与 README 一致 / ICO 头合法 / bat 入口转发）、
-  8 条覆盖 CLI 菜单极简 / 高级双模式（渲染、A/S 切换、1~14 全分发、高级编号提示、空输入容错，见 §3.22）。
+  8 条覆盖 CLI 菜单极简 / 高级双模式（渲染、A/S 切换、1~14 全分发、高级编号提示、空输入容错，见 §3.22）、
+  9 条覆盖极简 / 高级模式记忆与 -Simple / -Advanced 启动参数（参数优先级、记忆往返、A/S 落盘、菜单动作不写状态，见 §3.23）、
+  6 条覆盖 cli-menu-mode.json 状态读写与降级（见 §3.23）。
+  当前 **302 个用例**（2026-11-04 实测 302 通过 / 0 失败）。
   向导首次进入时 lib 会附带 `onboarding` 段（解释管理员权限 / 重启 / 可回滚），状态记在
   `%LOCALAPPDATA%\PC-Optimizer-7thGen\onboarding.json`；CLI / GUI / WebUI 任一端点掉即落状态。
   > ⚠️ **分离进程跑 Pester 的两个坑**（2026-10-03 实测踩到）：
@@ -759,6 +813,14 @@ v3.10.0（667,648 字节，构建于 PR #26）。`Start.bat` 的 `[E] EXE 程序
   lib dot-source 提前到 `Get-CleanTargets` 之前，并按 `16_profiles.ps1` 的模式补了一个“未找到共享核心库”的 JSON 兜底（而不是把 PowerShell 报错当成 JSON）。
   回归：`/api/clean/scan` 返回 `ok:true` + 6 个清理项（含预估大小）。
 - ~~PR #5 / #6 合并顺序与潜在冲突~~ → 已在本集成分支按 `#5 → #6` 顺序合并，**零冲突**；剩最后一步是你在 GitHub 点 Merge（见 §2）。
+- ~~CLI 双模式每次启动重置回极简，老手要重复按 `A`；桌面快捷方式无法锁定模式~~ → **已于 2026-11-04 收口**（见 §3.23）：
+  模式记忆落到 `%LOCALAPPDATA%\PC-Optimizer-7thGen\cli-menu-mode.json`，并新增 `-Simple` / `-Advanced` 启动参数。
+- **剩余可选方向**（2026-11-04 更新，非阻塞）：
+  1. `New-DesktopShortcuts.ps1` 目前两个快捷方式都指向 `Start.bat` / EXE，未透传 `-Simple` / `-Advanced`；
+     若想让桌面图标「永远极简」，可在安装器里加一个 `-Simple` 变体（需同步改测试里「指向两个启动文件」的断言）。
+  2. GUI / WebUI 侧没有「极简 / 高级」概念（图形界面本身就是渐进披露），本轮未动；
+     如要做，建议从「折叠高级设置区」入手，而不是照搬 CLI 的双菜单。
+  3. README 更新日志里 `assets` 字样在历史提交中被写成了 `\x07ssets`（bell 字符），属文档瑕疵，不影响构建。
 
 ---
 

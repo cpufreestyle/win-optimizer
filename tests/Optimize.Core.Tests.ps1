@@ -3473,6 +3473,50 @@ Describe 'Optimize.Core guided onboarding hint (one-time explanation)' {
         $seen.onboarding | Should -BeNullOrEmpty
     }
 }
+
+Describe 'Optimize.Core CLI menu mode memory (simple / advanced)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+        $script:ModeDir = Join-Path $TestDrive 'cli-menu-mode-state'
+        if (Test-Path $script:ModeDir) { Remove-Item $script:ModeDir -Recurse -Force -ErrorAction SilentlyContinue }
+        New-Item -ItemType Directory -Path $script:ModeDir -Force | Out-Null
+    }
+
+    It 'defaults to simple mode when nothing was ever remembered' {
+        Get-CliMenuMode -StateDir $script:ModeDir | Should -Be 'simple'
+    }
+
+    It 'round-trips advanced and simple through disk' {
+        Set-CliMenuMode -Mode 'advanced' -StateDir $script:ModeDir | Should -BeTrue
+        Get-CliMenuMode -StateDir $script:ModeDir | Should -Be 'advanced'
+        Set-CliMenuMode -Mode 'simple' -StateDir $script:ModeDir | Should -BeTrue
+        Get-CliMenuMode -StateDir $script:ModeDir | Should -Be 'simple'
+    }
+
+    It 'rejects an unknown mode instead of writing garbage' {
+        { Set-CliMenuMode -Mode 'fancy' -StateDir $script:ModeDir } | Should -Throw
+    }
+
+    It 'treats a corrupt state file as simple rather than failing the launch' {
+        $file = Join-Path $script:ModeDir 'cli-menu-mode.json'
+        [System.IO.File]::WriteAllText($file, 'not json at all', (New-Object System.Text.UTF8Encoding($false)))
+        Get-CliMenuMode -StateDir $script:ModeDir | Should -Be 'simple'
+    }
+
+    It 'falls back to simple when the recorded value is not advanced' {
+        $file = Join-Path $script:ModeDir 'cli-menu-mode.json'
+        [System.IO.File]::WriteAllText($file, '{"mode":"whatever"}', (New-Object System.Text.UTF8Encoding($false)))
+        Get-CliMenuMode -StateDir $script:ModeDir | Should -Be 'simple'
+    }
+
+    It 'writes the version and a timestamp next to the mode' {
+        Set-CliMenuMode -Mode 'advanced' -StateDir $script:ModeDir | Should -BeTrue
+        $json = Get-Content -LiteralPath (Join-Path $script:ModeDir 'cli-menu-mode.json') -Raw | ConvertFrom-Json
+        $json.mode | Should -Be 'advanced'
+        $json.version | Should -Be (Get-OptVersion)
+        $json.savedAt | Should -Not -BeNullOrEmpty
+    }
+}
 }
 
 Describe 'Optimize.Core guided one-click plan (shared by CLI/GUI/WebUI)' {
@@ -3762,10 +3806,23 @@ Describe 'CLI menu simple / advanced modes (Optimize.ps1 Show-Menu)' {
         # Show-Menu 在独立脚本块里执行：桩掉 Read-Host / Write-Host / Get-CimInstance，
         # 既覆盖真实分发逻辑，又不会触发 Optimize.ps1 顶层代码（管理员校验等）。
         $script:MenuHarness = {
-            param([string[]]$Answers, [string]$MenuText)
+            param(
+                [string[]]$Answers,
+                [string]$MenuText,
+                [bool]$Advanced = $false,
+                [bool]$Simple  = $false,
+                [string]$Remembered = 'simple'
+            )
             $script:Out = @()
             $script:Calls = @()
             $script:Queue = @($Answers)
+            $script:SavedModes = @()
+            function Get-CliMenuMode { return $Remembered }
+            function Set-CliMenuMode {
+                param([Parameter(Mandatory = $true)][ValidateSet('simple', 'advanced')][string]$Mode)
+                $script:SavedModes += $Mode
+                return $true
+            }
             function Write-Host { $script:Out += ($args -join ' ') }
             function Start-Sleep { param([int]$Seconds) }
             function Read-Host {
@@ -3793,11 +3850,16 @@ Describe 'CLI menu simple / advanced modes (Optimize.ps1 Show-Menu)' {
             }
             . ([scriptblock]::Create($MenuText))
             $null = Show-Menu
-            return [pscustomobject]@{ Out = $script:Out; Calls = $script:Calls }
+            return [pscustomobject]@{ Out = $script:Out; Calls = $script:Calls; SavedModes = $script:SavedModes }
         }
 
         function Invoke-CliMenu([string[]]$Answers) {
             return (& $script:MenuHarness -Answers $Answers -MenuText $script:MenuText)
+        }
+
+        function Invoke-CliMenuWith([string[]]$Answers, [bool]$Advanced, [bool]$Simple, [string]$Remembered) {
+            return (& $script:MenuHarness -Answers $Answers -MenuText $script:MenuText `
+                        -Advanced $Advanced -Simple $Simple -Remembered $Remembered)
         }
 
         # 按 <BANNER> 把输出切成「每次重画一帧」，用来断言某一帧渲染了什么
@@ -3894,5 +3956,69 @@ Describe 'CLI menu simple / advanced modes (Optimize.ps1 Show-Menu)' {
         @(Get-MenuRenders $r).Count | Should -Be 3
         @($r.Out | Where-Object { $_ -like '*无效选项*' }).Count | Should -Be 2
         @($r.Calls).Count | Should -Be 0
+    }
+
+    It '-Advanced pins advanced mode and ignores the remembered simple mode' {
+        $r = Invoke-CliMenuWith -Answers @('Q') -Advanced $true -Simple $false -Remembered 'simple'
+        $first = @(Get-MenuRenders $r)[0]
+        $first | Should -Match '\[高级模式\]'
+        $first | Should -Match '\[1\]'
+        $first | Should -Not -Match '\[极简模式\]'
+    }
+
+    It '-Simple pins simple mode and overrides a remembered advanced mode' {
+        $r = Invoke-CliMenuWith -Answers @('Q') -Advanced $false -Simple $true -Remembered 'advanced'
+        $first = @(Get-MenuRenders $r)[0]
+        $first | Should -Match '\[极简模式\]'
+        $first | Should -Not -Match '\[1\]'
+    }
+
+    It '-Advanced wins when both switches are supplied' {
+        $r = Invoke-CliMenuWith -Answers @('Q') -Advanced $true -Simple $true -Remembered 'simple'
+        $first = @(Get-MenuRenders $r)[0]
+        $first | Should -Match '\[高级模式\]'
+    }
+
+    It 'a remembered advanced mode restores the full menu without pressing A' {
+        $r = Invoke-CliMenuWith -Answers @('1', 'Q') -Advanced $false -Simple $false -Remembered 'advanced'
+        ($r.Calls -join ',') | Should -Be '01-SystemInfo.ps1'
+        $first = @(Get-MenuRenders $r)[0]
+        $first | Should -Match '\[高级模式\]'
+    }
+
+    It 'a remembered simple mode keeps the menu collapsed on next launch' {
+        $r = Invoke-CliMenuWith -Answers @('1', 'Q') -Advanced $false -Simple $false -Remembered 'simple'
+        $first = @(Get-MenuRenders $r)[0]
+        $first | Should -Match '\[极简模式\]'
+        $first | Should -Not -Match '\[1\]'
+        @($r.Out | Where-Object { $_ -like '*高级功能*' }).Count | Should -Be 1
+        @($r.Calls).Count | Should -Be 0
+    }
+
+    It 'pressing A persists advanced and S persists simple' {
+        $r = Invoke-CliMenu @('A', 'S', 'A', 'Q')
+        ($r.SavedModes -join ',') | Should -Be 'advanced,simple,advanced'
+    }
+
+    It 'menu actions never write the remembered mode' {
+        $r = Invoke-CliMenu @('0', '9', '15', '16', 'P', 'B', 'Q')
+        @($r.SavedModes).Count | Should -Be 0
+    }
+
+    It 'pinned launch switches never write the remembered mode' {
+        $r = Invoke-CliMenuWith -Answers @('Q') -Advanced $true -Simple $false -Remembered 'simple'
+        @($r.SavedModes).Count | Should -Be 0
+    }
+
+    It 'Optimize.ps1 exposes -Simple and -Advanced switches' {
+        $errs = $null; $toks = $null
+        $fileAst = [System.Management.Automation.Language.Parser]::ParseInput(
+            $script:CliSource, [ref]$toks, [ref]$errs)
+        $fileAst.ParamBlock | Should -Not -BeNullOrEmpty
+        $names = @($fileAst.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+        $names | Should -Contain 'Simple'
+        $names | Should -Contain 'Advanced'
+        $script:MenuText | Should -Match 'Get-CliMenuMode'
+        $script:MenuText | Should -Match 'Set-CliMenuMode'
     }
 }

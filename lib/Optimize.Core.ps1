@@ -650,6 +650,48 @@ function Set-OnboardingHintShown {
     }
 }
 
+# ---------------- 菜单模式记忆（极简 / 高级） ----------------
+# 新手默认永远落在极简模式；切过一次「高级」之后就记住，下次启动不用再按 A。
+# 状态与 onboarding 同源：落在 %LOCALAPPDATA%\PC-Optimizer-7thGen 下的 cli-menu-mode.json，
+# 不污染版本库，也不被多用户共享目录互相覆盖。
+# 取值：'simple' / 'advanced'。任何读写失败都 fail-open 回 'simple'（宁可多看几项，也不要卡住启动）。
+function Get-CliMenuMode {
+    param([string]$StateDir)
+    $file = Join-Path (Get-OptStateDir $StateDir) 'cli-menu-mode.json'
+    if (-not (Test-Path -LiteralPath $file)) { return 'simple' }
+    try {
+        $json = Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json
+        $mode = [string]$json.mode
+        if ($mode -eq 'advanced') { return 'advanced' }
+        return 'simple'
+    } catch {
+        # 文件损坏 / 被占用时当作没有记忆，重新按极简起步
+        return 'simple'
+    }
+}
+
+function Set-CliMenuMode {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('simple', 'advanced')][string]$Mode,
+        [string]$StateDir
+    )
+    $dir = Get-OptStateDir $StateDir
+    try {
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $payload = [pscustomobject]@{
+            mode    = $Mode
+            version = (Get-OptVersion)
+            savedAt = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        }
+        $file = Join-Path $dir 'cli-menu-mode.json'
+        [System.IO.File]::WriteAllText($file, ($payload | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))
+        return $true
+    } catch {
+        # 只读目录 / 磁盘满 / 权限不足：记忆丢失不影响本次运行，静默失败
+        return $false
+    }
+}
+
 # 列出全部启动项：5 个注册表项 + 2 个启动文件夹 + WMI 系统启动命令（按名称去重）
 # 返回 @( @{Index;Name;Value;Scope;Source;Path} )
 function Get-StartupItems {
