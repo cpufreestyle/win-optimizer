@@ -389,7 +389,7 @@ function Get-ServiceDependents {
     if ([string]::IsNullOrWhiteSpace($Name)) { return $running }
     try {
         $q = "ASSOCIATORS OF {Win32_Service.Name='$Name'} WHERE AssocClass=Win32_DependentService Role=Antecedent"
-        $deps = @(Get-WmiObject -Query $q -ErrorAction Stop)
+        $deps = @(Get-WmiCompat -Query $q)
         foreach ($d in $deps) {
             try {
                 $svc = Get-Service -Name $d.Name -ErrorAction SilentlyContinue
