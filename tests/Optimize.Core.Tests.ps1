@@ -2849,7 +2849,7 @@ Describe 'Optimize.Core service dependency guard (P3-1, shared by CLI/GUI/WebUI)
         . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
         Mock Get-Service -ParameterFilter { $Name -eq 'RpcSs' } { [PSCustomObject]@{ Name = 'RpcSs'; Status = 'Running' } }
         Mock Get-Service -ParameterFilter { $Name -eq 'DepA'  } { [PSCustomObject]@{ Name = 'DepA';  Status = 'Running' } }
-        Mock Get-WmiObject { [PSCustomObject]@{ Name = 'DepA' } }
+        Mock Get-CimInstance { [PSCustomObject]@{ Name = 'DepA' } }
         Mock Set-Service  {}
         Mock Stop-Service {}
         Mock Start-Sleep {}
@@ -2862,12 +2862,12 @@ Describe 'Optimize.Core service dependency guard (P3-1, shared by CLI/GUI/WebUI)
 
     It 'Get-ServiceDependents tolerates unknown service names' {
         Mock Get-Service -ParameterFilter { $Name -eq 'Ghost' } { $null }
-        Mock Get-WmiObject { @() }
+        Mock Get-CimInstance { @() }
         @(Get-ServiceDependents -Name 'Ghost').Count | Should -Be 0
     }
 
     It 'Get-ServiceDependents tolerates WMI failure (returns empty, never throws)' {
-        Mock Get-WmiObject { throw 'WMI down' }
+        Mock Get-CimInstance { throw 'CIM down' }
         { @(Get-ServiceDependents -Name 'RpcSs') } | Should -Not -Throw
         @(Get-ServiceDependents -Name 'RpcSs').Count | Should -Be 0
     }
