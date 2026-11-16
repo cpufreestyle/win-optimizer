@@ -583,6 +583,23 @@ lib 侧 6 个（默认 simple / 磁盘往返 / 非法值抛错 / 损坏文件降
 于是桩收到空串、回落到真实 `%LOCALAPPDATA%`，既读到上次运行的残留值，又把 `A` 键写进了真实状态文件。
 **规则：给 lib 状态函数写 harness 桩时，必须按注入值应答，写入要显式指到临时目录。**
 
+### 3.24 启动链路统一「PowerShell 7 优先、5.1 兜底」（2026-11-13）
+
+**背景**：用户要求默认跑 PowerShell 7，但仓库里仍有几处硬编码 5.1 的入口，导致
+同一台机器上 GUI 子进程用 7、模块窗口和双击启动却用 5.1，行为和报错口径不一致。
+
+**做法**：
+
+1. `Start.bat` 顶部统一解析启动器：`set "PS=powershell"` →
+   `for /f "delims=" %%I in ('where pwsh.exe 2^>nul') do if not defined PWSH set "PWSH=%%I"` →
+   `if defined PWSH set "PS=%PWSH%"`，之后所有调用（提权、执行策略、向导/CLI/GUI）一律用 `"%PS%"`。
+2. `EnablePs1DoubleClick.bat` 的 `RUNNER` 同样先探测 `where pwsh.exe`，写进 `ftype` 的就是 7 的完整路径。
+3. `gui/pages/Update.ps1` 的模块窗口 `ProcessStartInfo.FileName` 先取 `pwsh.exe`，
+   `Get-Command` 找不到才回退 `powershell.exe`（与 `OptimizeGUI.ps1:439` 原写法保持一致）。
+
+**约束**：兜底分支是有意保留的——目标用户是 7 代 CPU 老电脑，很多机器没装 PS7。
+不要把 5.1 回退删掉，也不要改成硬依赖 `pwsh`。
+
 ## 4. 三端文件地图（按域）
 
 > 命名约定：CLI = `NN-Name.ps1`，GUI 页面 = `gui/pages/Name.ps1`，WebUI = `NN_name.ps1`。
@@ -843,3 +860,10 @@ v3.10.0（667,648 字节，构建于 PR #26）。`Start.bat` 的 `[E] EXE 程序
 7. ✅ v3.11.0 一键向导（P5-1）已落地：CLI `[0]` / `-Guided` / `-GuidedPlan` + `Start.bat` 默认项
    + WebUI「一键向导」页（`17_guided.ps1` + `/api/guided/{plan,apply,rerun}`，见 §3.20）。
    未做且优先级最高的收尾：无（四端入口 + GUI 专用向导页均已落地）。
+
+## 2026-11-12 维护记录与 Rust 架构结论
+
+1. ✅ 修复后台更新检查生命周期：更新检查改用 WinForms Timer，补充幂等守卫、超时清理、Stop/Dispose 空值与异常防护，避免原始 .NET 线程丢失 PowerShell Runspace 导致约 8 秒后崩溃。
+2. ✅ 修复服务优化计划：服务已处于目标模式时追加 `Skip-Services` 步骤，保证执行链能继续后续步骤；已用测试断言所有计划步骤都有非空 target，且 Services 域始终存在。
+3. ✅ 验证：Pester 303/303 通过，Pytest 3/3 通过，PSScriptAnalyzer 0 Error，`git diff --check` 干净；本地 `.codex-*`、`_scratch/`、`_inspect_clean.ps1` 已清理。
+4. ✅ Rust 架构结论：不建议全量重写。Win7/8 兼容、既有 PS 生态和测试资产是主要约束；性能瓶颈集中在磁盘扫描与 Windows API 调用，冷启动与库加载不是当前问题。后续仅建议把已测量的热点下沉到原生辅助组件，保留 PowerShell 为主架构。

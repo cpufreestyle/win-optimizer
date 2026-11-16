@@ -9,8 +9,10 @@
     $page.Controls.Add($lblDesc)
 
     # 当前计划
-    $currentPlan = @(powercfg /getactivescheme 2>&1) -join ' '
-    $script:lblCurrent = New-Label "当前计划: $currentPlan" 20 96 760 24 $Fonts.Sub $Theme.Warning
+    $currentPlan = ''
+    if (Get-Command Get-PowerPlanDisplayName -ErrorAction SilentlyContinue) { $currentPlan = Get-PowerPlanDisplayName }
+    if (-not $currentPlan) { $currentPlan = '未知' }
+    $script:lblCurrent = New-Label "当前计划：$currentPlan" 20 96 760 24 $Fonts.Sub $Theme.Warning
     $page.Controls.Add($script:lblCurrent)
 
     $script:plans = @(
@@ -62,6 +64,7 @@
     $script:chkPCI.Location = New-Object System.Drawing.Point(330, $yPlan)
     $script:chkPCI.Size = New-Object System.Drawing.Size(300, 24)
     $script:chkPCI.Text = "关闭 PCI Express 电源管理"
+    $script:chkPCI.Tag = 'pin-right'
     $script:chkPCI.Checked = $true
     $script:chkPCI.Font = $Fonts.Body
     $script:chkPCI.ForeColor = $Theme.TextMain
@@ -104,8 +107,10 @@
         $this.Enabled = $true
         $this.Text = "应用电源计划"
 
-        $newPlan = @(powercfg /getactivescheme 2>&1) -join ' '
-        $script:lblCurrent.Text = "当前计划: $newPlan"
+        $newPlan = ''
+        if (Get-Command Get-PowerPlanDisplayName -ErrorAction SilentlyContinue) { $newPlan = Get-PowerPlanDisplayName }
+        if (-not $newPlan) { $newPlan = '未知' }
+        $script:lblCurrent.Text = "当前计划：$newPlan"
 
         [System.Windows.Forms.MessageBox]::Show("电源计划已切换！", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } catch {

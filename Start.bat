@@ -3,6 +3,13 @@ chcp 65001 >nul 2>&1
 title PC-Optimizer-7thGen - 7代CPU老电脑优化工具
 
 REM ============================================================
+REM  优先使用 PowerShell 7，未安装时回退到 Windows PowerShell 5.1
+REM ============================================================
+set "PS=powershell"
+for /f "delims=" %%I in ('where pwsh.exe 2^>nul') do if not defined PWSH set "PWSH=%%I"
+if defined PWSH set "PS=%PWSH%"
+
+REM ============================================================
 REM  检查管理员权限
 REM ============================================================
 net session >nul 2>&1
@@ -12,14 +19,14 @@ if %errorlevel% neq 0 (
     echo   需要管理员权限！正在请求提权...
     echo ================================================================
     echo.
-    powershell -Command "Start-Process cmd -ArgumentList '/c %~dp0Start.bat' -Verb RunAs"
+    "%PS%" -Command "Start-Process cmd -ArgumentList '/c %~dp0Start.bat' -Verb RunAs"
     exit /b
 )
 
 REM ============================================================
 REM  检查 PowerShell 执行策略并设置
 REM ============================================================
-powershell -Command "if ((Get-ExecutionPolicy) -eq 'Restricted') { Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force }"
+"%PS%" -Command "if ((Get-ExecutionPolicy) -eq 'Restricted') { Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force }"
 
 REM ============================================================
 REM  选择启动模式
@@ -59,19 +66,19 @@ if not defined choice set "choice=1"
 if "%choice%"=="1" (
     echo.
     echo   正在启动一键向导...
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Optimize.ps1" -Guided
+    "%PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0Optimize.ps1" -Guided
     goto end
 )
 if "%choice%"=="2" (
     echo.
     echo   正在启动图形界面...
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0OptimizeGUI.ps1"
+    "%PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0OptimizeGUI.ps1"
     goto end
 )
 if "%choice%"=="3" (
     echo.
     echo   正在启动命令行菜单...
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Optimize.ps1"
+    "%PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0Optimize.ps1"
     goto end
 )
 if /i "%choice%"=="E" (
@@ -82,7 +89,7 @@ if /i "%choice%"=="E" (
         goto end
     )
     echo   未找到 EXE，改为启动图形界面...
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0OptimizeGUI.ps1"
+    "%PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0OptimizeGUI.ps1"
     goto end
 )
 if /i "%choice%"=="Q" (
@@ -90,7 +97,7 @@ if /i "%choice%"=="Q" (
     goto end_nopause
 )
 echo   无效选项，改为启动一键向导...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Optimize.ps1" -Guided
+"%PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0Optimize.ps1" -Guided
 goto end
 
 :end

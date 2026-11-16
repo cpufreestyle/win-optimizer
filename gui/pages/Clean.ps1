@@ -43,18 +43,26 @@
     $script:CleanListBox.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
     $script:CleanListBox.CheckOnClick = $true
     $script:CleanListBox.IntegralHeight = $false
+    # 先用占位文本建列表（体积统计要遍历目录，放到界面显示后再算，避免拖慢启动）
     foreach ($item in $script:CleanItems) {
-        $size = Get-FolderSize $item.Path
-        $sizeMB = [math]::Round($size / 1MB, 2)
-        $display = "$($item.Name) — ${sizeMB} MB"
-        $script:CleanListBox.Items.Add($display, $true) | Out-Null
+        $script:CleanListBox.Items.Add("$($item.Name) — 计算中…", $true) | Out-Null
     }
     $page.Controls.Add($script:CleanListBox)
 
     # 额外选项
+    # 这里只写 96 DPI 设计值，实际像素由 OptimizeGUI.ps1 的 Invoke-UiScalePass 统一放大，
+    # 避免页面内再做一次局部 DPI 计算导致控件间距被重复放大。
+    $chkH = 24
+    $btnH = 44
+    $lblH = 24
+    $listBottom = $script:CleanListBox.Bottom
+    $chkTop = $listBottom + 14
+    $btnTop = $chkTop + $chkH + 16
+    $lblTop = $btnTop + $btnH + 12
+
     $script:ChkRecycle = New-Object System.Windows.Forms.CheckBox
-    $script:ChkRecycle.Location = New-Object System.Drawing.Point(20, 348)
-    $script:ChkRecycle.Size = New-Object System.Drawing.Size(200, 24)
+    $script:ChkRecycle.Location = New-Object System.Drawing.Point(20, $chkTop)
+    $script:ChkRecycle.Size = New-Object System.Drawing.Size(200, $chkH)
     $script:ChkRecycle.Text = "清空回收站"
     $script:ChkRecycle.Checked = $true
     $script:ChkRecycle.Font = $Fonts.Body
@@ -63,8 +71,8 @@
     $page.Controls.Add($script:ChkRecycle)
 
     $script:ChkDNS = New-Object System.Windows.Forms.CheckBox
-    $script:ChkDNS.Location = New-Object System.Drawing.Point(230, 348)
-    $script:ChkDNS.Size = New-Object System.Drawing.Size(200, 24)
+    $script:ChkDNS.Location = New-Object System.Drawing.Point(230, $chkTop)
+    $script:ChkDNS.Size = New-Object System.Drawing.Size(200, $chkH)
     $script:ChkDNS.Text = "清除 DNS 缓存"
     $script:ChkDNS.Checked = $true
     $script:ChkDNS.Font = $Fonts.Body
@@ -73,9 +81,10 @@
     $page.Controls.Add($script:ChkDNS)
 
     $script:ChkDump = New-Object System.Windows.Forms.CheckBox
-    $script:ChkDump.Location = New-Object System.Drawing.Point(440, 348)
-    $script:ChkDump.Size = New-Object System.Drawing.Size(200, 24)
+    $script:ChkDump.Location = New-Object System.Drawing.Point(440, $chkTop)
+    $script:ChkDump.Size = New-Object System.Drawing.Size(200, $chkH)
     $script:ChkDump.Text = "删除内存转储文件"
+    $script:ChkDump.Tag = 'pin-right'
     $script:ChkDump.Checked = $true
     $script:ChkDump.Font = $Fonts.Body
     $script:ChkDump.ForeColor = $Theme.TextMain
@@ -83,9 +92,9 @@
     $page.Controls.Add($script:ChkDump)
 
     # 执行按钮
-    $script:BtnClean = New-Button "开始清理" 20 372 200 44 $Theme.Success 11
+    $script:BtnClean = New-Button "开始清理" 20 $btnTop 200 $btnH $Theme.Success 11
     # 取消按钮：仅在清理进行中可用，解决大目录清理时界面长时间无响应且无法中断的问题
-    $script:BtnCancelClean = New-Button "取消" 240 372 120 44 $Theme.Accent 11
+    $script:BtnCancelClean = New-Button "取消" 240 $btnTop 120 $btnH $Theme.Accent 11
     $script:BtnCancelClean.Enabled = $false
     $script:CleanCancel = $false
     $script:BtnCancelClean.Add_Click({
@@ -93,7 +102,7 @@
         $script:LblCleanProgress.Text = "正在取消，等待当前项目收尾..."
     })
     # 进度提示：整体项目进度 [n/m] + 当前项目的百分比
-    $script:LblCleanProgress = New-Label "就绪" 20 424 760 24 $Fonts.Small $Theme.TextDim
+    $script:LblCleanProgress = New-Label "就绪" 20 $lblTop 760 $lblH $Fonts.Small $Theme.TextDim
     $script:LblCleanProgress.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 
     $script:BtnClean.Add_Click({
@@ -199,4 +208,41 @@
     $page.Controls.Add($script:BtnClean)
     $page.Controls.Add($script:BtnCancelClean)
     $page.Controls.Add($script:LblCleanProgress)
+
+    # 列表显示后再统计各目录体积：启动阶段不再遍历磁盘，避免老机械盘上卡住几秒
+    if ($null -ne $script:CleanSizeTimer) {
+        try { $script:CleanSizeTimer.Stop(); $script:CleanSizeTimer.Dispose() } catch { }
+        $script:CleanSizeTimer = $null
+    }
+    $script:CleanSizeTimer = New-Object System.Windows.Forms.Timer
+    $script:CleanSizeTimer.Interval = 250
+    $script:CleanSizeTimer.Add_Tick({
+        param($Sender, $e)
+        try { $Sender.Stop(); $Sender.Dispose() } catch { }
+        $script:CleanSizeTimer = $null
+        Update-CleanSizes
+    })
+    $script:CleanSizeTimer.Start()
+}
+
+# 刷新清理列表里的目录体积（保留勾选状态）
+function Update-CleanSizes {
+    if ($null -eq $script:CleanListBox -or $null -eq $script:CleanItems) { return }
+    $checked = @()
+    for ($i = 0; $i -lt $script:CleanListBox.Items.Count; $i++) {
+        $checked += [bool]$script:CleanListBox.GetItemChecked($i)
+    }
+    for ($i = 0; $i -lt $script:CleanItems.Count; $i++) {
+        if ($i -ge $script:CleanListBox.Items.Count) { break }
+        try {
+            $size = Get-FolderSize $script:CleanItems[$i].Path
+            $sizeMB = [math]::Round($size / 1MB, 2)
+            $script:CleanListBox.Items[$i] = "$($script:CleanItems[$i].Name) — ${sizeMB} MB"
+        } catch {
+            $script:CleanListBox.Items[$i] = "$($script:CleanItems[$i].Name) — 未知"
+        }
+    }
+    for ($i = 0; $i -lt $script:CleanListBox.Items.Count; $i++) {
+        if ($i -lt $checked.Count) { $script:CleanListBox.SetItemChecked($i, $checked[$i]) }
+    }
 }

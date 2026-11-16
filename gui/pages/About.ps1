@@ -9,7 +9,7 @@
     $page.Controls.Add($lblVer)
 
     $aboutText = @"
-专为 7 代及更老 CPU 的 Windows 电脑设计
+专为老电脑设计
 出品: Michaelqiu
 兼容 Windows 7 / 8 / 10 / 11 (PS 2.0+)
 

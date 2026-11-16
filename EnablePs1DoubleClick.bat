@@ -29,6 +29,8 @@ echo [OK] 已关联 .ps1 文件类型
 REM 3) 设置双击时用 powershell 直接执行（含自动提权包装）
 REM    用 RunAs 方式启动，确保需要管理员的操作也能正常运行
 set "RUNNER=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+for /f "delims=" %%I in ('where pwsh.exe 2^>nul') do if not defined PWSH set "PWSH=%%I"
+if defined PWSH set "RUNNER=%PWSH%"
 cmd /c "ftype Microsoft.PowerShellScript.1=\"%RUNNER%\" -NoProfile -ExecutionPolicy Bypass -Command \"if (!(net session 2>nul)) { Start-Process '%RUNNER%' -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"\"%1\"\"' -Verb RunAs } else { & '%RUNNER%' -NoProfile -ExecutionPolicy Bypass -File \"\"%1\"\" }\""
 
 echo [OK] 已设置双击运行方式（自动请求管理员权限）

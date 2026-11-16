@@ -8,7 +8,7 @@ import json
 import base64
 import subprocess
 import webbrowser
-from flask import Flask, render_template, jsonify, request, send_from_directory, Response, stream_with_context
+from flask import Flask, render_template, jsonify, request, Response, stream_with_context
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PS_DIR = os.path.join(BASE_DIR, "ps")
@@ -336,8 +336,6 @@ def _register_mcp_tools(server):
             fmt = "html"
         args += ["-Format", fmt]
         return run_ps("17_guided.ps1", *args, timeout=600)
-        """屏蔽 Windows 更新（如 24H2）。action: status / apply / restore。"""
-        return run_ps("10_block_update.ps1", "-Action", str(action))
 
     @server.tool()
     def update_manual(action: str = "status") -> dict:
@@ -959,7 +957,7 @@ if __name__ == "__main__":
     # 提示当前是否管理员（用于前端提示）
     is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0 if os.name == "nt" else True
     print(f"[WebUI] 管理员权限: {'是' if is_admin else '否（部分功能可能失败）'}")
-    print(f"[WebUI] 访问地址: http://127.0.0.1:5000")
+    print("[WebUI] 访问地址: http://127.0.0.1:5000")
 
     start_mcp_background(5001)
 

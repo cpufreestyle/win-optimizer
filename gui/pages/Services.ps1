@@ -39,33 +39,50 @@
     $dt.Columns.Add("描述") | Out-Null
     $dt.Columns.Add("级别") | Out-Null
     $dt.Columns.Add("状态") | Out-Null
+    # 显示列：截断后的短文本；上面的完整列留给禁用逻辑读取，避免截断影响 Get-Service 查询
+    $dt.Columns.Add("名称显示") | Out-Null
+    $dt.Columns.Add("描述显示") | Out-Null
 
+    # 显式建列 + FillWeight：构建期表格尚未挂到窗体，直接改 Width 会被静默跳过
+    $dgv.AutoGenerateColumns = $false
+    $colCheck = New-Object System.Windows.Forms.DataGridViewCheckBoxColumn
+    $colCheck.Name = "选择"
+    $colCheck.HeaderText = "选择"
+    $colCheck.DataPropertyName = "选择"
+    $colCheck.FillWeight = 11
+    $colCheck.SortMode = [System.Windows.Forms.DataGridViewColumnSortMode]::NotSortable
+    $dgv.Columns.Add($colCheck) | Out-Null
+    foreach ($spec in @(
+            @{ Name = "服务名称"; Prop = "名称显示"; Weight = 23 },
+            @{ Name = "描述"; Prop = "描述显示"; Weight = 38 },
+            @{ Name = "级别"; Prop = "级别"; Weight = 14 },
+            @{ Name = "状态"; Prop = "状态"; Weight = 14 })) {
+        $col = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+        $col.Name = $spec.Name
+        $col.HeaderText = $spec.Name
+        $col.DataPropertyName = $spec.Prop
+        $col.FillWeight = $spec.Weight
+        $col.ReadOnly = $true
+        $col.SortMode = [System.Windows.Forms.DataGridViewColumnSortMode]::NotSortable
+        $dgv.Columns.Add($col) | Out-Null
+    }
+
+    $nameMax = Get-GridTextBudget -FillWeight 23 -TotalWeight 100
+    $descMax = Get-GridTextBudget -FillWeight 38 -TotalWeight 100
+    $svcTips = @{ "服务名称" = @(); "描述" = @() }
     foreach ($svc in $servicesList) {
         $service = Get-Service -Name $svc.Name -ErrorAction SilentlyContinue
         $status = if ($service) { $service.Status.ToString() } else { "未安装" }
         $check = $svc.Level -eq "安全禁用"
-        $dt.Rows.Add($check, $svc.Name, $svc.Desc, $svc.Level, $status) | Out-Null
+        $nameShown = Get-UiEllipsisText -Text ([string]$svc.Name) -Font $Fonts.Small -MaxWidth $nameMax
+        $descShown = Get-UiEllipsisText -Text ([string]$svc.Desc) -Font $Fonts.Small -MaxWidth $descMax
+        $dt.Rows.Add($check, $svc.Name, $svc.Desc, $svc.Level, $status, $nameShown, $descShown) | Out-Null
+        $svcTips["服务名称"] += [string]$svc.Name
+        $svcTips["描述"] += [string]$svc.Desc
     }
     $dgv.DataSource = $dt
 
-    # 设置列样式
-    $dgv.AutoGenerateColumns = $true
-    if ($dgv.Columns.Count -gt 0) {
-        $dgv.Columns[0].Width = 50
-        $dgv.Columns[0].ReadOnly = $false
-        $dgv.Columns[1].Width = 150
-        $dgv.Columns[1].ReadOnly = $true
-        $dgv.Columns[2].AutoSizeMode = [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::Fill
-        $dgv.Columns[2].ReadOnly = $true
-        if ($dgv.Columns.Count -gt 3) {
-            $dgv.Columns[3].Width = 80
-            $dgv.Columns[3].ReadOnly = $true
-        }
-        if ($dgv.Columns.Count -gt 4) {
-            $dgv.Columns[4].Width = 70
-            $dgv.Columns[4].ReadOnly = $true
-        }
-    }
+    Enable-GridCellTips -Grid $dgv -FullTextMap $svcTips
     $page.Controls.Add($dgv)
 
     # 遥测任务
@@ -97,8 +114,8 @@
     })
     $page.Controls.Add($btnAll)
 
-    $script:btnDisable = New-Button "执行禁用" 640 400 140 40 $Theme.Success 10
-    $script:btnDisable.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
+    # 放在左侧按钮组后面：此前锚定 Top|Right，页面宽度变化后会被推到可视区外（点不到）
+    $script:btnDisable = New-Button "执行禁用" 350 400 140 40 $Theme.Success 10
     $script:btnDisable.Add_Click({
         try {
         $this.Enabled = $false

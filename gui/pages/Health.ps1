@@ -86,8 +86,9 @@
     $script:TxtHealthTips.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
     $page.Controls.Add($script:TxtHealthTips)
 
-    # 执行按钮
-    $script:BtnHealthScan = New-Button "开始体检" 20 716 150 40 $Theme.Success 11
+    # 主操作按钮放在首屏右上角（与体检分同一行），避免 1024x720 窗口下需要滚动才能开始体检
+    $script:BtnHealthScan = New-Button "开始体检" 620 100 150 40 $Theme.Success 11
+    $script:BtnHealthScan.Tag = 'pin-right'
     $script:BtnHealthScan.Add_Click({
         try {
             $this.Enabled = $false
@@ -218,13 +219,13 @@
     $page.Controls.Add($script:BtnHealthScan)
 
     # 一键修复按钮：确认后执行，每步前自动备份
-    $script:BtnHealthFix = New-Button "一键修复" 180 716 150 40 $Theme.Warning 11
+    $script:BtnHealthFix = New-Button "一键修复" 20 716 150 40 $Theme.Warning 11
     $script:BtnHealthFix.Enabled = $false
 
     # 执行前先建系统还原点（P1-3）；默认值与 CLI / WebUI 同源（config 的 safety.create_restore_point）
     $script:chkHealthRp = New-Object System.Windows.Forms.CheckBox
-    $script:chkHealthRp.Location = New-Object System.Drawing.Point(515, 722)
-    $script:chkHealthRp.Size = New-Object System.Drawing.Size(265, 24)
+    $script:chkHealthRp.Location = New-Object System.Drawing.Point(340, 722)
+    $script:chkHealthRp.Size = New-Object System.Drawing.Size(245, 24)
     $script:chkHealthRp.Text = "执行前先建系统还原点"
     $script:chkHealthRp.Checked = (Get-RestorePointDefault)
     $script:chkHealthRp.Font = $Fonts.Body
@@ -298,10 +299,10 @@
     $page.Controls.Add($script:BtnHealthFix)
 
     # 导出前后对比报告（自包含 HTML / Markdown，默认输出到桌面）
-    # 操作行同一行只放 开始体检 / 一键修复 / 导出对比报告 / 还原点复选框：
-    # 20..170、180..330、340..490、515..780 —— 导出按钮原先放在 x=350，会压住
-    # 515 处的「执行前先建系统还原点」复选框以及右侧的对比状态文字。
-    $script:BtnHealthExport = New-Button "导出对比报告" 340 716 150 40 $Theme.Success 11
+    # 操作行同一行只放 一键修复 / 导出对比报告 / 还原点复选框：
+    # 20..170、180..330、340..585 —— 导出按钮原先放在 x=350，会压住
+    # 「执行前先建系统还原点」复选框以及右侧的对比状态文字。
+    $script:BtnHealthExport = New-Button "导出对比报告" 180 716 150 40 $Theme.Success 11
     $script:BtnHealthExport.Add_Click({
         try {
             $pick = [System.Windows.Forms.MessageBox]::Show(

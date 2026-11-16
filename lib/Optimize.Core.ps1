@@ -1059,6 +1059,31 @@ function Get-ActivePowerPlan {
     return $null
 }
 
+# 当前计划的友好名称：界面上只显示中文方案名，不暴露长串 GUID
+function Get-PowerPlanDisplayName {
+    $known = @{
+        '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c' = '高性能'
+        'e9a42b02-d5df-448d-aa00-03f14749eb61' = '卓越性能'
+        '381b4222-f694-41f0-9685-ff5bb260df2e' = '平衡'
+        'a1841308-3541-4fab-bc81-f71556f20b4a' = '节能'
+    }
+    $guid = Get-ActivePowerPlan
+    if ($guid) {
+        $key = $guid.ToLower()
+        if ($known.ContainsKey($key)) { return $known[$key] }
+    }
+    # 非内置的第三方方案：取 powercfg 输出括号里的自定义名称
+    try {
+        $out = @(powercfg /getactivescheme 2>&1) -join ' '
+        if ($out -match '\(([^)]+)\)') {
+            $name = $matches[1].Trim()
+            if ($name) { return $name }
+        }
+    } catch { }
+    if ($guid) { return '自定义计划' }
+    return '未知'
+}
+
 # 备份当前电源计划，返回备份文件路径
 # 2026-09-23 起改为结构化 JSON：除 powercfg /query 全文外，额外记录
 #   activeGuid / activeName —— 还原时靠 GUID 精确切回原计划；
@@ -1191,18 +1216,22 @@ $script:VirtualAdapterPatterns = @('Virtual', 'VMware', 'VirtualBox', 'Hyper-V',
 function Get-ActiveNetAdapters {
     param([switch]$IncludeVirtual)
     $result = @()
-    try {
-        $nets = @(Get-NetAdapter -ErrorAction Stop | Where-Object { $_.Status -eq 'Up' })
-        foreach ($n in $nets) {
-            $result += [PSCustomObject]@{
-                Name        = $n.Name
-                IfIndex     = [int]$n.ifIndex
-                Description = $n.InterfaceDescription
-                MacAddress  = $n.MacAddress
-                LinkSpeed   = $n.LinkSpeed
+    # NetAdapter 是 Windows PowerShell 5.1 专用模块：PowerShell 7 下调用会自动拉起
+    # Windows PowerShell 兼容会话（启动多等数秒，个别机器还会卡住），因此只在 5.1 用。
+    if ($PSVersionTable.PSVersion.Major -lt 6) {
+        try {
+            $nets = @(Get-NetAdapter -ErrorAction Stop | Where-Object { $_.Status -eq 'Up' })
+            foreach ($n in $nets) {
+                $result += [PSCustomObject]@{
+                    Name        = $n.Name
+                    IfIndex     = [int]$n.ifIndex
+                    Description = $n.InterfaceDescription
+                    MacAddress  = $n.MacAddress
+                    LinkSpeed   = $n.LinkSpeed
+                }
             }
-        }
-    } catch { }
+        } catch { }
+    }
     if ($result.Count -eq 0) {
         # Win7 回退：CIM（与 GUI 的 Get-NetAdapterCompat 同思路）
         try {
@@ -1260,7 +1289,8 @@ function Get-DnsOptions {
 # 读取指定适配器当前 DNS（现代 cmdlet 优先，回退 CIM）
 function Get-AdapterDns {
     param([int]$IfIndex = 0, [string]$Name = '')
-    if ($IfIndex -gt 0) {
+    # DnsClient 是 5.1 专用模块，PowerShell 7 下会拉起兼容会话；7 以上直接走 CIM
+    if ($IfIndex -gt 0 -and $PSVersionTable.PSVersion.Major -lt 6) {
         try {
             $a = Get-DnsClientServerAddress -InterfaceIndex $IfIndex -AddressFamily IPv4 -ErrorAction Stop
             return @($a.ServerAddresses)
@@ -1307,7 +1337,7 @@ function Set-AdapterDns {
     }
     $joined = ($DnsServers -join ', ')
     if ($WhatIf) { return [PSCustomObject]@{ ok = $true; whatif = $true; method = '(预演)'; applied = $joined } }
-    if ($IfIndex -gt 0) {
+    if ($IfIndex -gt 0 -and $PSVersionTable.PSVersion.Major -lt 6) {
         try {
             Set-DnsClientServerAddress -InterfaceIndex $IfIndex -ServerAddresses $DnsServers -ErrorAction Stop
             return [PSCustomObject]@{ ok = $true; method = 'Set-DnsClientServerAddress'; applied = $joined }
@@ -1341,7 +1371,8 @@ function Set-TcpAutoTuning {
 function Enable-NetworkRss {
     param([string]$Name, [switch]$WhatIf)
     if ($WhatIf) { return [PSCustomObject]@{ ok = $true; whatif = $true; method = '(预演)' } }
-    if ($Name) {
+    # NetAdapter 系列 cmdlet 在 PowerShell 7 下会拉起兼容会话，只在 5.1 使用
+    if ($Name -and $PSVersionTable.PSVersion.Major -lt 6) {
         try {
             if (Get-NetAdapterRss -Name $Name -ErrorAction Stop) {
                 Enable-NetAdapterRss -Name $Name -ErrorAction Stop
@@ -1357,7 +1388,8 @@ function Enable-NetworkRss {
 function Enable-NetworkRsc {
     param([string]$Name, [switch]$WhatIf)
     if ($WhatIf) { return [PSCustomObject]@{ ok = $true; whatif = $true; method = '(预演)' } }
-    if ($Name) {
+    # NetAdapter 系列 cmdlet 在 PowerShell 7 下会拉起兼容会话，只在 5.1 使用
+    if ($Name -and $PSVersionTable.PSVersion.Major -lt 6) {
         try {
             if (Get-NetAdapterRsc -Name $Name -ErrorAction Stop) {
                 Enable-NetAdapterRsc -Name $Name -ErrorAction Stop
@@ -1373,10 +1405,15 @@ function Enable-NetworkRsc {
 function Clear-NetDnsCache {
     param([switch]$WhatIf)
     if ($WhatIf) { return [PSCustomObject]@{ ok = $true; whatif = $true; method = '(预演)' } }
-    try { Clear-DnsClientCache -ErrorAction Stop; return [PSCustomObject]@{ ok = $true; method = 'Clear-DnsClientCache' } }
+    if ($PSVersionTable.PSVersion.Major -lt 6) {
+        try { Clear-DnsClientCache -ErrorAction Stop; return [PSCustomObject]@{ ok = $true; method = 'Clear-DnsClientCache' } } catch { }
+    }
+    try {
+        ipconfig /flushdns 2>&1 | Out-Null
+        return [PSCustomObject]@{ ok = $true; method = 'ipconfig /flushdns' }
+    }
     catch {
-        try { ipconfig /flushdns 2>&1 | Out-Null; return [PSCustomObject]@{ ok = $true; method = 'ipconfig /flushdns' } }
-        catch { return [PSCustomObject]@{ ok = $false; error = $_.Exception.Message } }
+        return [PSCustomObject]@{ ok = $false; error = $_.Exception.Message }
     }
 }
 
@@ -1485,11 +1522,35 @@ function Invoke-NetworkOptimization {
 
 # Win7 及更早（defrag /L 不可用）。版本号 < 6.2 视为旧系统。
 function Test-IsLegacyWindows {
+    # 用 .NET 版本号即可，不必查 WMI（PS7 下 Get-WmiObject 会拉起兼容会话）
     try {
-        $os = Get-WmiObject -Class Win32_OperatingSystem -ErrorAction Stop
-        $v = [version]$os.Version
+        $v = [System.Environment]::OSVersion.Version
         return ($v.Major -lt 6 -or ($v.Major -eq 6 -and $v.Minor -lt 2))
     } catch { return $false }
+}
+
+# PS7 没有 Get-WmiObject：直接调用会拉起 Windows PowerShell 兼容会话
+# （首次约 1.3 秒，个别机器会卡住）。统一封装：3+ 走 CIM，老系统仍走 WMI。
+function Get-WmiCompat {
+    param([string]$Class, [string]$Namespace = '', [string]$Filter = '', [string]$Query = '')
+    if ($PSVersionTable.PSVersion.Major -ge 3) {
+        $p = @{ ErrorAction = 'Stop' }
+        if ($Namespace) { $p['Namespace'] = $Namespace }
+        if ($Query) { $p['Query'] = $Query }
+        else {
+            $p['ClassName'] = $Class
+            if ($Filter) { $p['Filter'] = $Filter }
+        }
+        return @(Get-CimInstance @p)
+    }
+    $p = @{ ErrorAction = 'Stop' }
+    if ($Namespace) { $p['Namespace'] = $Namespace }
+    if ($Query) { $p['Query'] = $Query }
+    else {
+        $p['Class'] = $Class
+        if ($Filter) { $p['Filter'] = $Filter }
+    }
+    return @(Get-WmiObject @p)
 }
 
 # 物理磁盘（WMI Win32_DiskDrive，Win7 可用）
@@ -1498,7 +1559,7 @@ function Test-IsLegacyWindows {
 function Get-PhysicalDiskInfo {
     $disks = @()
     try {
-        foreach ($d in @(Get-WmiObject -Class Win32_DiskDrive -ErrorAction Stop)) {
+        foreach ($d in @(Get-WmiCompat -Class Win32_DiskDrive)) {
             $media = 'Unknown'
             if ($d.MediaType -match 'SSD|Solid State') { $media = 'SSD' }
             $disks += [PSCustomObject]@{
@@ -1514,7 +1575,7 @@ function Get-PhysicalDiskInfo {
     # Win7 没有该命名空间，Get-WmiObject 会失败并被 catch 忽略 —— 不影响 Win7 兼容。
     # 该类不提供与 Win32_DiskDrive.Index 的直接对应，这里按"容量"匹配回写。
     try {
-        $msft = @(Get-WmiObject -Namespace 'root\Microsoft\Windows\Storage' -Class MSFT_PhysicalDisk -ErrorAction Stop)
+        $msft = @(Get-WmiCompat -Namespace 'root\Microsoft\Windows\Storage' -Class MSFT_PhysicalDisk)
         if ($msft.Count -gt 0) {
             # MSFT_PhysicalDisk.DeviceId 与 Win32_DiskDrive.Index 实测是一一对应的，
             # 按此对应即可。（注意：两者 Size 有数 MB 级差异，不能用来做匹配依据。）
@@ -1537,7 +1598,7 @@ function Get-PhysicalDiskInfo {
 function Get-FixedVolumeList {
     $vols = @()
     try {
-        foreach ($ld in @(Get-WmiObject -Class Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop)) {
+        foreach ($ld in @(Get-WmiCompat -Class Win32_LogicalDisk -Filter 'DriveType=3')) {
             $vols += [PSCustomObject]@{
                 DriveLetter   = $ld.DeviceID.Substring(0, 1)
                 Size          = $ld.Size
@@ -1554,13 +1615,13 @@ function Get-DriveMediaMap {
     try {
         $diskMedia = @{}
         foreach ($d in (Get-PhysicalDiskInfo)) { $diskMedia[[string]$d.DeviceId] = $d.MediaType }
-        foreach ($ld in @(Get-WmiObject -Class Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop)) {
+        foreach ($ld in @(Get-WmiCompat -Class Win32_LogicalDisk -Filter 'DriveType=3')) {
             $letter = $ld.DeviceID.Substring(0, 1)
             $media  = 'Unknown'
             try {
-                $parts = @(Get-WmiObject -Query ("ASSOCIATORS OF {Win32_LogicalDisk.DeviceID='" + $ld.DeviceID + "'} WHERE AssocClass=Win32_LogicalDiskToPartition") -ErrorAction Stop)
+                $parts = @(Get-WmiCompat -Query ("ASSOCIATORS OF {Win32_LogicalDisk.DeviceID='" + $ld.DeviceID + "'} WHERE AssocClass=Win32_LogicalDiskToPartition"))
                 foreach ($p in $parts) {
-                    $drives = @(Get-WmiObject -Query ("ASSOCIATORS OF {Win32_DiskPartition.DeviceID='" + $p.DeviceID + "'} WHERE AssocClass=Win32_DiskDriveToDiskPartition") -ErrorAction Stop)
+                    $drives = @(Get-WmiCompat -Query ("ASSOCIATORS OF {Win32_DiskPartition.DeviceID='" + $p.DeviceID + "'} WHERE AssocClass=Win32_DiskDriveToDiskPartition"))
                     foreach ($drv in $drives) {
                         $m = $diskMedia[[string]$drv.Index]
                         if ($m -and $m -ne 'Unknown') { $media = $m; break }
@@ -3351,7 +3412,7 @@ function Restore-NetworkSettings {
             if ($servers.Count -eq 0) {
                 # 备份时是自动获取：置空 / dhcp 即恢复
                 $okReset = $false
-                if ($idx -gt 0) {
+                if ($idx -gt 0 -and $PSVersionTable.PSVersion.Major -lt 6) {
                     try { Set-DnsClientServerAddress -InterfaceIndex $idx -ResetServerAddresses -ErrorAction Stop; $okReset = $true } catch { }
                 }
                 if (-not $okReset) {
@@ -4776,6 +4837,12 @@ function Get-OptimizePlan {
             -Target ("config 可优化服务 {0} 项，其中 {1} 项仍为自动启动" -f $svcList.Count, $autoSvc.Count) `
             -Detail $names `
             -Impact '相关后台服务停止运行；已自动备份服务状态，可随时恢复'
+    } else {
+        $steps += New-OptimizePlanStep -Domain 'services' -Title '服务优化复核' -Menu '[3]' `
+            -Action 'Skip-Services' -Risk 'low' `
+            -Target ("config 可优化服务 {0} 项，当前没有仍为自动启动的项目" -f $svcList.Count) `
+            -Detail '服务状态已是目标状态，无需重复修改' `
+            -Impact '不改动任何服务；如服务状态变化，后续体检会重新提示'
     }
 
     # --- [4] 启动项优化（只给清单，不自动禁用）---
