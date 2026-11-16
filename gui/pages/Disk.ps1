@@ -20,23 +20,38 @@
 
     foreach ($pd in $physicalDisks) {
         $sizeGB = if ($pd.Size) { [math]::Round([double]$pd.Size / 1GB, 0) } else { 0 }
-        $typeColor = if ($pd.MediaType -eq "SSD") { $Theme.Success } else { $Theme.Warning }
+        # 只有真正需要关注的状态才用告警色；RAID/虚拟盘读到的 Unspecified 属于正常情况
+        $mediaType = [string]$pd.MediaType
+        $typeColor = switch ($mediaType) {
+            "SSD" { $Theme.Success }
+            "HDD" { $Theme.TextMain }
+            default { $Theme.TextDim }
+        }
+        $typeText = switch ($mediaType) {
+            "SSD" { "SSD" }
+            "HDD" { "机械硬盘 (HDD)" }
+            "SCM" { "存储级内存 (SCM)" }
+            ""    { "未知（RAID / 虚拟盘）" }
+            default {
+                if ($mediaType -match '(?i)^(unspecified|unknown)$') { "未知（RAID / 虚拟盘）" } else { $mediaType }
+            }
+        }
         $card = New-Object System.Windows.Forms.Panel
         $card.Location = New-Object System.Drawing.Point(20, $yDisk)
-        $card.Size = New-Object System.Drawing.Size(760, 44)
+        $card.Size = New-Object System.Drawing.Size(760, 50)
         $card.BackColor = $Theme.BgCard
         $page.Controls.Add($card)
 
-        $lbl = New-Label "$($pd.FriendlyName)" 16 6 350 20 $Fonts.Body $Theme.TextBright
+        $lbl = New-Label "$($pd.FriendlyName)" 16 3 350 22 $Fonts.Body $Theme.TextBright
         $card.Controls.Add($lbl)
 
-        $lblType = New-Label "类型: $($pd.MediaType)" 16 24 200 18 $Fonts.Small $typeColor
+        $lblType = New-Label "类型: $typeText" 16 26 240 20 $Fonts.Small $typeColor
         $card.Controls.Add($lblType)
 
-        $lblSize = New-Label "容量: ${sizeGB}GB" 260 24 200 18 $Fonts.Small $Theme.TextDim
+        $lblSize = New-Label "容量: ${sizeGB}GB" 260 26 200 20 $Fonts.Small $Theme.TextDim
         $card.Controls.Add($lblSize)
 
-        $yDisk += 50
+        $yDisk += 54
     }
 
     # 操作选项

@@ -39,12 +39,44 @@
     $dtStartup.Columns.Add("范围") | Out-Null
     $dtStartup.Columns.Add("命令") | Out-Null
 
+    # 显式建列：页面构建时表格还没挂到窗体上，AutoGenerateColumns 拿不到列，
+    # 之前直接改 Columns[i].Width 会被静默跳过；这里改用 FillWeight 固定列宽比例。
+    $script:DgvStartup.AutoGenerateColumns = $false
+    foreach ($spec in @(
+            @{ Name = "名称"; Weight = 26 },
+            @{ Name = "来源"; Weight = 16 },
+            @{ Name = "范围"; Weight = 16 },
+            @{ Name = "命令"; Weight = 42 })) {
+        $col = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+        $col.Name = $spec.Name
+        $col.HeaderText = $spec.Name
+        $col.DataPropertyName = $spec.Name
+        $col.FillWeight = $spec.Weight
+        $col.SortMode = [System.Windows.Forms.DataGridViewColumnSortMode]::NotSortable
+        $script:DgvStartup.Columns.Add($col) | Out-Null
+    }
+
+    # 长文本按列宽截断（完整内容走悬停提示），避免文字顶到相邻列
+    $nameMax = Get-GridTextBudget -FillWeight 26 -TotalWeight 100
+    # 来源/范围 内容都是短语，权重虽小但实际只需要几十像素，放宽一档避免无谓截断
+    $sourceMax = Get-GridTextBudget -FillWeight 16 -TotalWeight 100 -Factor 0.75
+    $scopeMax = Get-GridTextBudget -FillWeight 16 -TotalWeight 100 -Factor 0.75
+    $cmdMax = Get-GridTextBudget -FillWeight 42 -TotalWeight 100
+    $startupTips = @{ "名称" = @(); "来源" = @(); "范围" = @(); "命令" = @() }
     foreach ($item in $script:StartupItems) {
         $cmdText = [string]$item.Value
-        $cmd = if ($cmdText.Length -gt 60) { $cmdText.Substring(0, 57) + "..." } else { $cmdText }
-        $dtStartup.Rows.Add($item.Name, $item.Source, $item.Scope, $cmd) | Out-Null
+        $nameShown = Get-UiEllipsisText -Text ([string]$item.Name) -Font $Fonts.Small -MaxWidth $nameMax
+        $sourceShown = Get-UiEllipsisText -Text ([string]$item.Source) -Font $Fonts.Small -MaxWidth $sourceMax
+        $scopeShown = Get-UiEllipsisText -Text ([string]$item.Scope) -Font $Fonts.Small -MaxWidth $scopeMax
+        $cmdShown = Get-UiEllipsisText -Text $cmdText -Font $Fonts.Small -MaxWidth $cmdMax
+        $dtStartup.Rows.Add($nameShown, $sourceShown, $scopeShown, $cmdShown) | Out-Null
+        $startupTips["名称"] += [string]$item.Name
+        $startupTips["来源"] += [string]$item.Source
+        $startupTips["范围"] += [string]$item.Scope
+        $startupTips["命令"] += $cmdText
     }
     $script:DgvStartup.DataSource = $dtStartup
+    Enable-GridCellTips -Grid $script:DgvStartup -FullTextMap $startupTips
     $page.Controls.Add($script:DgvStartup)
 
     $script:btnDisableStartup = New-Button "禁用选中项" 20 446 160 40 $Theme.Success 10

@@ -41,7 +41,7 @@ function Show-BackupRollbackReport {
         Write-Log "如需再次反悔，可从上面这些「当前状态备份」中恢复。"
     }
 }
-function Build-BackupPage {
+function Build-BackupPageContent {
     $page = $script:Pages["Backup"]
     $page.Controls.Clear()
     $lblTitle = New-Label "备份恢复" 20 22 500 30 $Fonts.Header $Theme.TextBright
@@ -76,7 +76,7 @@ function Build-BackupPage {
                 ("备份完成：成功 {0} 项，失败 {1} 项`n`n{2}" -f $ok, $fail, ($lines -join "`n")),
                 "备份", [System.Windows.Forms.MessageBoxButtons]::OK,
                 $(if ($fail -eq 0) { [System.Windows.Forms.MessageBoxIcon]::Information } else { [System.Windows.Forms.MessageBoxIcon]::Warning })) | Out-Null
-            Build-BackupPage
+            Build-BackupPageContent
         } catch {
             Write-Log "备份创建失败: $($_.Exception.Message)" "ERROR"
             [System.Windows.Forms.MessageBox]::Show("备份创建失败: $($_.Exception.Message)", "错误",
@@ -98,7 +98,7 @@ function Build-BackupPage {
         try {
             $rb = Invoke-Rollback -BackupDir $script:BackupDir
             Show-BackupRollbackReport -Result $rb
-            Build-BackupPage
+            Build-BackupPageContent
         } catch {
             Write-Log "恢复失败: $($_.Exception.Message)" "ERROR"
         }
@@ -164,14 +164,15 @@ function Build-BackupPage {
             }
             $rb = Invoke-Rollback @rbArgs
             Show-BackupRollbackReport -Result $rb
-            Build-BackupPage
+            Build-BackupPageContent
         } catch {
             Write-Log "回滚失败: $($_.Exception.Message)" "ERROR"
         }
     })
     $page.Controls.Add($btnRollback)
     $btnRefresh = New-Button "刷新列表" 545 $y 120 44 $Theme.AccentDark 10
-    $btnRefresh.Add_Click({ Build-BackupPage })
+    $btnRefresh.Tag = 'pin-right'
+    $btnRefresh.Add_Click({ Build-BackupPageContent })
     $page.Controls.Add($btnRefresh)
     $y += 62
     $lblTimeline = New-Label "优化时间线（新 → 旧）:" 20 $y 760 24 $Fonts.Body $Theme.TextBright
@@ -179,7 +180,8 @@ function Build-BackupPage {
     $y += 26
     $dgv = New-Object System.Windows.Forms.DataGridView
     $dgv.Location = New-Object System.Drawing.Point(20, $y)
-    $dgv.Size = New-Object System.Drawing.Size(760, 250)
+    # 高度收窄 30px：让「恢复选中备份」按钮与提示文字在 1024x720 窗口内无需滚动即可完整显示
+    $dgv.Size = New-Object System.Drawing.Size(760, 220)
     $dgv.BackgroundColor = $Theme.BgPanel
     $dgv.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
     $dgv.AllowUserToAddRows = $false
@@ -202,20 +204,39 @@ function Build-BackupPage {
     $dgv.Columns.Add("Items", "条目")   | Out-Null
     $dgv.Columns.Add("File",  "备份文件") | Out-Null
     $dgv.Columns.Add("Flag",  "标记")   | Out-Null
+    # Fill 权重：文件名最长，给它最多空间；时间列用短格式即可
+    $dgv.Columns["Time"].FillWeight = 18
+    $dgv.Columns["Domain"].FillWeight = 21
+    $dgv.Columns["Items"].FillWeight = 11
+    $dgv.Columns["File"].FillWeight = 30
+    $dgv.Columns["Flag"].FillWeight = 20
+    # 时间列只显示 "MM-dd HH:mm"，内容短，放宽一档避免截成 "2026-1…"
+    $timeMax = Get-GridTextBudget -FillWeight 18 -TotalWeight 100 -Factor 0.75
+    $fileMax = Get-GridTextBudget -FillWeight 30 -TotalWeight 100
     $timeline = @(Get-OptimizationTimeline -BackupDir $script:BackupDir -Max 100)
+    $bkTips = @{ "时间" = @(); "备份文件" = @() }
     foreach ($e in $timeline) {
         $items = if ($e.metadataMissing) { '?' } else { "$($e.items)" }
         $flag  = if ($e.metadataMissing) { '元数据缺失' } else { '' }
-        $row = $dgv.Rows.Add($e.timeText, $e.domainLabel, $items, $e.file, $flag)
+        $timeShown = [string]$e.timeText
+        # 兼容 "yyyy-MM-dd HH:mm:ss" 与 ISO 两种形态，统一压成 "MM-dd HH:mm"
+        if ($timeShown.Length -ge 16) { $timeShown = $timeShown.Substring(5, 11) }
+        $timeShown = Get-UiEllipsisText -Text $timeShown -Font $Fonts.Small -MaxWidth $timeMax
+        $fileShown = Get-UiEllipsisText -Text ([string]$e.file) -Font $Fonts.Small -MaxWidth $fileMax
+        $row = $dgv.Rows.Add($timeShown, $e.domainLabel, $items, $fileShown, $flag)
         $dgv.Rows[$row].Tag = $e
+        $bkTips["时间"] += [string]$e.timeText
+        $bkTips["备份文件"] += [string]$e.file
     }
+    Enable-GridCellTips -Grid $dgv -FullTextMap $bkTips
     $page.Controls.Add($dgv)
     $script:BkTimeline = $timeline
     if ($timeline.Count -eq 0) {
         $lblEmpty = New-Label "暂无备份。各优化步骤默认会自动备份，备份后即可在这里恢复或回滚。" 20 ($y + 258) 760 24 $Fonts.Small $Theme.TextDim
         $page.Controls.Add($lblEmpty)
     }
-    $y += 262
+    # 按 DataGridView 的实际底边定位，避免宽度自适应后按钮行压到列表/提示文字上
+    $y = $dgv.Bottom + 12
     $btnRestoreSel = New-Button "恢复选中备份" 20 $y 160 44 $Theme.Warning 11
     $btnRestoreSel.Enabled = ($timeline.Count -gt 0)
     $btnRestoreSel.Add_Click({
@@ -250,12 +271,43 @@ function Build-BackupPage {
                 if ($d -is [string]) { Write-Log "    $d" }
                 else { Write-Log "    $($d.name) : $($d.result)" }
             }
-            Build-BackupPage
+            Build-BackupPageContent
         } catch {
             Write-Log "恢复失败: $($_.Exception.Message)" "ERROR"
         }
     })
     $page.Controls.Add($btnRestoreSel)
-    $lblTip = New-Label "提示：还原只影响被还原的域；每个域还原前都会先备份当前状态。" 195 $y 580 24 $Fonts.Small $Theme.TextDim
+    # 提示另起一行并占满可用宽度：原来放在按钮右侧会被页面右边缘裁掉半句
+    $lblTip = New-Label "提示：还原只影响被还原的域；每个域还原前都会先备份当前状态。" 20 ($y + 54) 760 24 $Fonts.Small $Theme.TextDim
     $page.Controls.Add($lblTip)
+}
+
+# 启动时先显示占位内容，窗口出现后再读备份时间线（解析 50+ 个 manifest 约 0.25 秒）
+function Build-BackupPage {
+    $page = $script:Pages["Backup"]
+    if ($null -eq $page) { return }
+    # 离屏渲染 / 布局审计需要完整内容，保持同步构建
+    if ($script:HeadlessRender) {
+        Build-BackupPageContent
+        return
+    }
+    $page.Controls.Clear()
+    $page.Controls.Add((New-Label "备份恢复" 20 22 500 30 $Fonts.Header $Theme.TextBright))
+    $page.Controls.Add((New-Label "正在读取备份列表…" 20 60 500 24 $Fonts.Small $Theme.TextDim))
+    if ($null -ne $script:BackupTimer) {
+        try { $script:BackupTimer.Stop(); $script:BackupTimer.Dispose() } catch { }
+        $script:BackupTimer = $null
+    }
+    $script:BackupTimer = New-Object System.Windows.Forms.Timer
+    $script:BackupTimer.Interval = 120
+    $script:BackupTimer.Add_Tick({
+        param($Sender, $e)
+        try { $Sender.Stop(); $Sender.Dispose() } catch { }
+        $script:BackupTimer = $null
+        Build-BackupPageContent
+        if (Get-Command Reposition-PageControls -ErrorAction SilentlyContinue) {
+            Reposition-PageControls $script:Pages["Backup"]
+        }
+    })
+    $script:BackupTimer.Start()
 }

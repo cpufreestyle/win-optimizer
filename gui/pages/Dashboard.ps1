@@ -22,7 +22,7 @@ function Show-ProfileReport {
     elseif ($Result.ok) { Write-Log "组合包执行完成，建议重启电脑使更改生效。" "SUCCESS" }
     else { Write-Log "组合包部分步骤失败，详见上方日志。" "WARN" }
 }
-function Build-Dashboard {
+function Build-DashboardContent {
     $page = $script:Pages["Dashboard"]
     $page.Controls.Clear()
 
@@ -53,44 +53,46 @@ function Build-Dashboard {
     # --- CPU 卡片 ---
     $cardCPU = New-Object System.Windows.Forms.Panel
     $cardCPU.Location = New-Object System.Drawing.Point(20, 60)
-    $cardCPU.Size = New-Object System.Drawing.Size(370, 145)
+    $cardCPU.Size = New-Object System.Drawing.Size(345, 145)
+    $cardCPU.Tag = 'col-left'
     $cardCPU.BackColor = $Theme.BgCard
     $page.Controls.Add($cardCPU)
 
-    $cardCPU.Controls.Add((New-Label "CPU 处理器" 16 10 340 26 $Fonts.Header $Theme.Accent))
-    $cardCPU.Controls.Add((New-Label $cpu.Name 16 40 340 24 $Fonts.Body $Theme.TextBright))
-    $cardCPU.Controls.Add((New-Label "核心: $($cpu.NumberOfCores)  线程: $($cpu.NumberOfLogicalProcessors)  频率: $([math]::Round($cpu.MaxClockSpeed/1000,2)) GHz" 16 66 340 22 $Fonts.Small $Theme.TextDim))
-    $cardCPU.Controls.Add((New-Label "当前负载: $($cpu.LoadPercentage)%" 16 88 340 22 $Fonts.Small $Theme.Warning))
+    $cardCPU.Controls.Add((New-Label "CPU 处理器" 16 10 313 26 $Fonts.Header $Theme.Accent))
+    $cardCPU.Controls.Add((New-Label $cpu.Name 16 40 313 24 $Fonts.Body $Theme.TextBright))
+    $cardCPU.Controls.Add((New-Label "核心: $($cpu.NumberOfCores)  线程: $($cpu.NumberOfLogicalProcessors)  频率: $([math]::Round($cpu.MaxClockSpeed/1000,2)) GHz" 16 66 313 22 $Fonts.Small $Theme.TextDim))
+    $cardCPU.Controls.Add((New-Label "当前负载: $($cpu.LoadPercentage)%" 16 88 313 22 $Fonts.Small $Theme.Warning))
 
     if ($cpuGen) {
-        $cardCPU.Controls.Add((New-Label $cpuGen 16 108 340 22 $Fonts.Small $cpuColor))
+        $cardCPU.Controls.Add((New-Label $cpuGen 16 112 313 22 $Fonts.Small $cpuColor))
     }
 
     # --- 内存卡片 ---
     $cardMem = New-Object System.Windows.Forms.Panel
-    $cardMem.Location = New-Object System.Drawing.Point(410, 60)
-    $cardMem.Size = New-Object System.Drawing.Size(370, 145)
+    $cardMem.Location = New-Object System.Drawing.Point(370, 60)
+    $cardMem.Size = New-Object System.Drawing.Size(345, 145)
+    $cardMem.Tag = 'col-right'
     $cardMem.BackColor = $Theme.BgCard
     $page.Controls.Add($cardMem)
 
-    $cardMem.Controls.Add((New-Label "内存" 16 10 340 26 $Fonts.Header $Theme.Accent))
+    $cardMem.Controls.Add((New-Label "内存" 16 10 313 26 $Fonts.Header $Theme.Accent))
 
-    $lblMemTotal = New-Label "总内存: ${totalMem} GB" 16 40 340 22 $Fonts.Body $Theme.TextBright
+    $lblMemTotal = New-Label "总内存: ${totalMem} GB" 16 40 313 22 $Fonts.Body $Theme.TextBright
     $cardMem.Controls.Add($lblMemTotal)
 
-    $lblMemUsed = New-Label "已使用: ${usedMem} GB / ${totalMem} GB (${memPct}%)" 16 64 340 22 $Fonts.Small $Theme.TextDim
+    $lblMemUsed = New-Label "已使用: ${usedMem} GB / ${totalMem} GB (${memPct}%)" 16 64 313 22 $Fonts.Small $Theme.TextDim
     $cardMem.Controls.Add($lblMemUsed)
 
     # 内存进度条
     $memBar = New-Object System.Windows.Forms.ProgressBar
     $memBar.Location = New-Object System.Drawing.Point(16, 90)
-    $memBar.Size = New-Object System.Drawing.Size(340, 16)
+    $memBar.Size = New-Object System.Drawing.Size(313, 16)
     $memBar.Value = $memPct
     $memBar.ForeColor = if ($memPct -gt 80) { $Theme.Error } elseif ($memPct -gt 60) { $Theme.Warning } else { $Theme.Success }
     $memBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
     $cardMem.Controls.Add($memBar)
 
-    $lblMemFree = New-Label "可用: ${freeMem} GB" 16 110 340 18 $Fonts.Small $Theme.TextDim
+    $lblMemFree = New-Label "可用: ${freeMem} GB" 16 110 313 18 $Fonts.Small $Theme.TextDim
     $cardMem.Controls.Add($lblMemFree)
 
     # --- 磁盘卡片 ---
@@ -104,19 +106,19 @@ function Build-Dashboard {
 
         $cardDisk = New-Object System.Windows.Forms.Panel
         $cardDisk.Location = New-Object System.Drawing.Point(20, $yDisk)
-        $cardDisk.Size = New-Object System.Drawing.Size(760, 56)
+        $cardDisk.Size = New-Object System.Drawing.Size(715, 56)
         $cardDisk.BackColor = $Theme.BgCard
         $page.Controls.Add($cardDisk)
 
-        $lblDiskName = New-Label "$($disk.DeviceID) 总计 ${total}GB" 16 6 200 22 $Fonts.Body $Theme.TextBright
+        $lblDiskName = New-Label "$($disk.DeviceID) 总计 ${total}GB" 16 6 220 22 $Fonts.Body $Theme.TextBright
         $cardDisk.Controls.Add($lblDiskName)
 
-        $lblDiskUse = New-Label "已用 ${used}GB / 可用 ${free}GB (${pct}%)" 220 8 300 18 $Fonts.Small $Theme.TextDim
+        $lblDiskUse = New-Label "已用 ${used}GB / 可用 ${free}GB (${pct}%)" 240 8 240 18 $Fonts.Small $Theme.TextDim
         $cardDisk.Controls.Add($lblDiskUse)
 
         $diskBar = New-Object System.Windows.Forms.ProgressBar
-        $diskBar.Location = New-Object System.Drawing.Point(530, 16)
-        $diskBar.Size = New-Object System.Drawing.Size(210, 14)
+        $diskBar.Location = New-Object System.Drawing.Point(480, 16)
+        $diskBar.Size = New-Object System.Drawing.Size(195, 14)
         $diskBar.Value = $pct
         $diskBar.ForeColor = if ($pct -gt 85) { $Theme.Error } elseif ($pct -gt 70) { $Theme.Warning } else { $Theme.Success }
         $diskBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
@@ -134,15 +136,26 @@ function Build-Dashboard {
     foreach ($gpu in $gpus) {
         if ($gpu.Name) { $sysInfo += "显卡: $($gpu.Name)`n" }
     }
+    # 去掉末行换行，避免尾部空行把 Label 撑高并触发可见性审计误报
+    $sysInfo = $sysInfo.TrimEnd("`r", "`n")
 
     # 根据行数动态计算卡片高度（每行 22px + 标题区 38px + 边距）
     $sysLines = ($sysInfo.Split("`n") | Where-Object { $_ -ne "" }).Count
-    $sysInfoHeight = [math]::Max(60, $sysLines * 22 + 14)
+    # 用 TextRenderer 按最窄卡片宽度实测文本高度，避免 AutoSize 的
+    # GetPreferredSize 与 TextRenderer 绘制换行算法不一致导致末行被裁切
+    $sysInfoMeasureWidth = 420
+    $sysInfoMeasureSize = New-Object System.Drawing.Size($sysInfoMeasureWidth, 0)
+    $sysInfoMeasureFlags = [System.Windows.Forms.TextFormatFlags]::WordBreak -bor
+        [System.Windows.Forms.TextFormatFlags]::TextBoxControl
+    $sysInfoTextSize = [System.Windows.Forms.TextRenderer]::MeasureText(
+        $sysInfo, $Fonts.Small, $sysInfoMeasureSize, $sysInfoMeasureFlags
+    )
+    $sysInfoHeight = [math]::Max(60, [int]$sysInfoTextSize.Height + 8)
     $cardSysHeight = 38 + $sysInfoHeight + 14
 
     $cardSys = New-Object System.Windows.Forms.Panel
     $cardSys.Location = New-Object System.Drawing.Point(20, [int]($yDisk + 4))
-    $cardSys.Size = New-Object System.Drawing.Size(760, $cardSysHeight)
+    $cardSys.Size = New-Object System.Drawing.Size(715, $cardSysHeight)
     $cardSys.BackColor = $Theme.BgCard
     $page.Controls.Add($cardSys)
 
@@ -151,8 +164,9 @@ function Build-Dashboard {
 
     $lblSysInfo = New-Object System.Windows.Forms.Label
     $lblSysInfo.Location = New-Object System.Drawing.Point(16, 38)
-    $lblSysInfo.AutoSize = $true
-    $lblSysInfo.MaximumSize = New-Object System.Drawing.Size(728, 0)
+    $lblSysInfo.AutoSize = $false
+    $lblSysInfo.MaximumSize = New-Object System.Drawing.Size(683, 0)
+    $lblSysInfo.Size = New-Object System.Drawing.Size(683, $sysInfoHeight)
     $lblSysInfo.Text = $sysInfo
     $lblSysInfo.Font = $Fonts.Small
     $lblSysInfo.ForeColor = $Theme.TextDim
@@ -166,8 +180,9 @@ function Build-Dashboard {
 
     # --- 一键优化按钮 ---
     # 与「刷新信息」同一操作行（原先写死 $yDisk + 112，比系统信息卡片底边还高 4px，会压住卡片）
-    $btnFull = New-Button "一键全面优化" 640 ([int]($yDisk + 4 + $cardSysHeight + 12)) 140 36 $Theme.Success 10
-    $btnFull.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
+    $btnFull = New-Button "一键全面优化" 575 ([int]($yDisk + 4 + $cardSysHeight + 12)) 120 36 $Theme.Success 10
+    # 由 Reposition-PageControls 统一贴右（锚定在页面尺寸变化时会把按钮推出可视区）
+    $btnFull.Tag = 'pin-right'
     $btnFull.Add_Click({
         $result = [System.Windows.Forms.MessageBox]::Show(
             "即将执行所有优化操作，可能需要几分钟时间。`n`n建议先进行备份。`n`n确认继续？",
@@ -219,19 +234,19 @@ function Build-Dashboard {
     $yProf = [int]($yDisk + 4 + $cardSysHeight + 62)
     $cardProf = New-Object System.Windows.Forms.Panel
     $cardProf.Location = New-Object System.Drawing.Point(20, $yProf)
-    $cardProf.Size = New-Object System.Drawing.Size(760, 104)
+    $cardProf.Size = New-Object System.Drawing.Size(715, 104)
     $cardProf.BackColor = $Theme.BgCard
     $page.Controls.Add($cardProf)
 
-    $cardProf.Controls.Add((New-Label "优化组合包 Profiles" 16 10 720 26 $Fonts.Header $Theme.Accent))
-    $cardProf.Controls.Add((New-Label "一键套用预设方案（服务 / 启动项 / 视觉效果 / 电源 / 网络 / 遥测），每个域执行前自动备份" 16 36 720 22 $Fonts.Small $Theme.TextDim))
+    $cardProf.Controls.Add((New-Label "优化组合包 Profiles" 16 10 675 26 $Fonts.Header $Theme.Accent))
+    $cardProf.Controls.Add((New-Label "一键套用预设方案（服务 / 启动项 / 视觉效果 / 电源 / 网络 / 遥测），每个域执行前自动备份" 16 36 675 22 $Fonts.Small $Theme.TextDim))
 
     $btnProfile = New-Button "选择组合包" 16 62 150 30 $Theme.AccentDark 10
     # 一键向导：与 CLI Optimize.ps1 -Guided / WebUI「一键向导」同源，全部读 lib 的 Get-GuidedPlan
     $btnGuided = New-Button "一键向导（推荐）" 178 62 190 30 $Theme.Success 10
     $btnGuided.Add_Click({ Show-GuidedPageFromDashboard })
     $cardProf.Controls.Add($btnGuided)
-    $cardProf.Controls.Add((New-Label "不知道选哪个？先让工具体检并自动推荐，你只需确认一次" 382 66 370 22 $Fonts.Small $Theme.TextDim))
+    $cardProf.Controls.Add((New-Label "不知道选哪个？先让工具体检并自动推荐，你只需确认一次" 376 66 331 22 $Fonts.Small $Theme.TextDim))
     $btnProfile.Add_Click({
         try { Add-Type -AssemblyName Microsoft.VisualBasic -ErrorAction SilentlyContinue } catch { }
         if (-not ('Microsoft.VisualBasic.Interaction' -as [type])) {
@@ -308,4 +323,104 @@ function Build-Dashboard {
         }
     })
     $cardProf.Controls.Add($btnProfile)
+}
+
+# 启动时先画占位内容，窗口显示后再读系统指标（CIM 查询约 1.4 秒，不拖慢首屏）
+function Build-Dashboard {
+    $page = $script:Pages["Dashboard"]
+    if ($null -eq $page) { return }
+    # 离屏渲染 / 布局审计需要完整内容，保持同步构建
+    if ($script:HeadlessRender) {
+        Build-DashboardContent
+        return
+    }
+    $page.Controls.Clear()
+    $page.Controls.Add((New-Label "系统仪表盘" 20 22 500 30 $Fonts.Header $Theme.TextBright))
+    $page.Controls.Add((New-Label "正在读取系统信息…" 20 70 500 24 $Fonts.Body $Theme.TextDim))
+    if ($null -ne $script:DashTimer) {
+        try { $script:DashTimer.Stop(); $script:DashTimer.Dispose() } catch { }
+        $script:DashTimer = $null
+    }
+    Start-DashboardMetricsLoad
+    if ($null -eq $script:DashLoader) {
+        # 后台线程起不来就退回同步构建，功能不能丢
+        Complete-DashboardBuild
+        return
+    }
+    $script:DashTimer = New-Object System.Windows.Forms.Timer
+    $script:DashTimer.Interval = 120
+    $script:DashTimer.Add_Tick({
+        param($Sender, $e)
+        $loader = $script:DashLoader
+        if ($null -eq $loader) {
+            try { $Sender.Stop(); $Sender.Dispose() } catch { }
+            $script:DashTimer = $null
+            return
+        }
+        $state = $loader.PowerShell.InvocationStateInfo.State
+        if ($state -eq [System.Management.Automation.PSInvocationState]::Running -or
+            $state -eq [System.Management.Automation.PSInvocationState]::NotStarted) {
+            return
+        }
+        try { $Sender.Stop(); $Sender.Dispose() } catch { }
+        $script:DashTimer = $null
+        $metrics = $null
+        try {
+            if ($state -eq [System.Management.Automation.PSInvocationState]::Completed) {
+                $out = $loader.PowerShell.EndInvoke($loader.Handle)
+                if (@($out).Count -gt 0) { $metrics = $out[0] }
+            }
+        } catch { }
+        try { $loader.PowerShell.Dispose() } catch { }
+        $script:DashLoader = $null
+        if ($null -ne $metrics -and $metrics -is [hashtable]) {
+            Complete-DashboardBuild -Metrics $metrics
+        } else {
+            Complete-DashboardBuild
+        }
+    })
+    $script:DashTimer.Start()
+}
+
+# 后台线程预取仪表盘需要的 CIM 数据（不占 UI 线程）
+function Start-DashboardMetricsLoad {
+    if ($null -ne $script:DashLoader) {
+        try { $script:DashLoader.PowerShell.Dispose() } catch { }
+        $script:DashLoader = $null
+    }
+    $loaderScript = @'
+$ErrorActionPreference = 'SilentlyContinue'
+$cpu = @(Get-CimInstance Win32_Processor)[0]
+$os = @(Get-CimInstance Win32_OperatingSystem)[0]
+$disks = @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3')
+$gpus = @(Get-CimInstance Win32_VideoController)
+@{
+    'Win32_Processor' = [pscustomobject]@{ Name = $cpu.Name; NumberOfCores = $cpu.NumberOfCores; NumberOfLogicalProcessors = $cpu.NumberOfLogicalProcessors; MaxClockSpeed = $cpu.MaxClockSpeed; LoadPercentage = $cpu.LoadPercentage }
+    'Win32_OperatingSystem' = [pscustomobject]@{ TotalVisibleMemorySize = $os.TotalVisibleMemorySize; FreePhysicalMemory = $os.FreePhysicalMemory; LastBootUpTime = $os.LastBootUpTime; Caption = $os.Caption; BuildNumber = $os.BuildNumber }
+    'Win32_LogicalDisk' = @($disks | ForEach-Object { [pscustomobject]@{ DeviceID = $_.DeviceID; Size = $_.Size; FreeSpace = $_.FreeSpace } })
+    'Win32_VideoController' = @($gpus | ForEach-Object { [pscustomobject]@{ Name = $_.Name } })
+}
+'@
+    try {
+        $ps = [powershell]::Create()
+        $ps.AddScript($loaderScript) | Out-Null
+        $script:DashLoader = @{ PowerShell = $ps; Handle = $ps.BeginInvoke() }
+    } catch {
+        $script:DashLoader = $null
+    }
+}
+
+# 运行时重建仪表盘后补一次 DPI 缩放与页面重排（启动期由全局初始化统一处理）
+function Complete-DashboardBuild {
+    param($Metrics)
+    $prevCache = $script:DashboardCimCache
+    if ($null -ne $Metrics) { $script:DashboardCimCache = $Metrics }
+    try {
+        Build-DashboardContent
+    } finally {
+        $script:DashboardCimCache = $prevCache
+    }
+    if (Get-Command Reposition-PageControls -ErrorAction SilentlyContinue) {
+        Reposition-PageControls $script:Pages["Dashboard"]
+    }
 }

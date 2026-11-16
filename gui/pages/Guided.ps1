@@ -114,7 +114,7 @@ function Build-GuidedPage {
 
     $dgv = New-Object System.Windows.Forms.DataGridView
     $dgv.Location = New-Object System.Drawing.Point(20, $y)
-    $dgv.Size = New-Object System.Drawing.Size(760, 150)
+    $dgv.Size = New-Object System.Drawing.Size(760, 108)
     $dgv.BackgroundColor = $Theme.BgPanel
     $dgv.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
     $dgv.AllowUserToAddRows = $false
@@ -140,7 +140,7 @@ function Build-GuidedPage {
         $dgv.Rows[$row].Tag = $s
     }
     $page.Controls.Add($dgv)
-    $y += 160
+    $y += 118
 
     # 侧边栏页面 Key -> 显示名（与 OptimizeGUI.ps1 的 $navItems 一致，用于把「去哪处理」说清楚）
     $script:GuidedNavLabels = @{
@@ -164,7 +164,7 @@ function Build-GuidedPage {
 
     $txtManual = New-Object System.Windows.Forms.TextBox
     $txtManual.Location = New-Object System.Drawing.Point(20, $y)
-    $txtManual.Size = New-Object System.Drawing.Size(760, 104)
+    $txtManual.Size = New-Object System.Drawing.Size(760, 76)
     $txtManual.Font = $Fonts.Small
     $txtManual.ForeColor = $Theme.TextMain
     $txtManual.BackColor = $Theme.BgCard
@@ -189,7 +189,7 @@ function Build-GuidedPage {
     }
     $txtManual.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
     $page.Controls.Add($txtManual)
-    $y += 116
+    $y += 88
 
     # --- 操作按钮 ---
     if ($KeepPlan -and $script:GuidedPlan) {
@@ -213,5 +213,5 @@ function Build-GuidedPage {
         $page.Controls.Add($btnExport)
     }
     $script:GuidedBackBtn = $btnRescan
-    $page.Controls.Add((New-Label "执行过程中请耐心等待，界面可能短暂无响应，这属于正常现象" 370 ($y + 10) 400 24 $Fonts.Small $Theme.TextDim))
+    $page.Controls.Add((New-Label "执行过程中请耐心等待，界面可能短暂无响应，这属于正常现象" 20 ($y + 46) 620 20 $Fonts.Small $Theme.TextDim))
 }

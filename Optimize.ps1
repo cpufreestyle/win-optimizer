@@ -2,7 +2,7 @@
 .SYNOPSIS
     7代CPU老电脑 Windows 系统优化工具
 .DESCRIPTION
-    专为 7代及更老 CPU 的 Windows 10/11 电脑设计的系统优化脚本。
+    专为老电脑设计的系统优化脚本。
     包含临时文件清理、服务优化、启动项管理、视觉效果调整、电源计划优化、
     磁盘优化、网络优化等功能，并提供备份与恢复机制。
 .NOTES
@@ -97,7 +97,7 @@ function Show-Banner {
  |_|   |_| \_\\___/|____/|_____/_/   \_\____|
                                               
    7代CPU老电脑 Windows 优化工具 v$Version
-   专为 Intel 7代及更老 CPU 打造 | Windows 10/11
+   专为老电脑打造 | Windows 10/11
 "@
     Write-Host $banner -ForegroundColor Cyan
     Write-Host ("=" * 60) -ForegroundColor DarkGray

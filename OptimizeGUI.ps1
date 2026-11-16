@@ -13,6 +13,49 @@
 [void][System.Reflection.Assembly]::LoadWithPartialName("System.Data")
 
 # ============================================================
+#  高 DPI 支持（必须在创建任何窗口/控件之前执行）
+#  未声明 DPI 感知时，150% 缩放由 Windows 位图拉伸 96 DPI 的界面：
+#  文字发虚，且固定高度装不下按 DPI 放大后的字体（10pt 在 144 DPI 下高 26px），
+#  列表行距被压扁、控件互相覆盖。先声明系统级 DPI 感知，再按实际比例重排所有控件。
+# ============================================================
+$script:UiDpi = 96
+$script:UiScale = 1.0
+$script:DpiAware = $false
+try {
+    if (-not ("PCOpt.DpiNative" -as [type])) {
+        Add-Type -Namespace PCOpt -Name DpiNative -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern bool SetProcessDPIAware();
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern bool SetProcessDpiAwarenessContext(System.IntPtr value);
+'@ -ErrorAction Stop
+    }
+} catch { }
+try {
+    if ("PCOpt.DpiNative" -as [type]) {
+        # 优先系统级 DPI 感知：窗口拖到其他缩放比例的显示器时由系统整体缩放，比例不会失真。
+        try { $script:DpiAware = [PCOpt.DpiNative]::SetProcessDPIAware() } catch { }
+    }
+} catch { }
+# 进程已声明感知后，屏幕 DC 的 DpiY 就是实际缩放后的 DPI（96=100%，144=150%）
+try {
+    $dpiProbe = [System.Drawing.Graphics]::FromHwnd([System.IntPtr]::Zero)
+    try { $script:UiDpi = [int]$dpiProbe.DpiY } finally { $dpiProbe.Dispose() }
+} catch { $script:UiDpi = 96 }
+if ($script:UiDpi -lt 96) { $script:UiDpi = 96 }
+$script:UiScale = [math]::Round($script:UiDpi / 96.0, 3)
+# 允许显式覆盖缩放比例（布局审计脚本用 1.0/1.25/1.5 模拟不同 DPI 显示器）
+$uiScaleOverride = 0.0
+if ([double]::TryParse(([string]$env:PCOPT_UI_SCALE), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$uiScaleOverride)) {
+    if ($uiScaleOverride -ge 1.0 -and $uiScaleOverride -le 3.0) {
+        $script:UiScale = [math]::Round($uiScaleOverride, 3)
+        $script:UiDpi = [int][math]::Round(96 * $script:UiScale)
+    }
+}
+try { [System.Windows.Forms.Application]::EnableVisualStyles() } catch { }
+try { [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false) } catch { }
+
+# ============================================================
 #  编码环境初始化（PowerShell 5.1 中文乱码根治）
 #  PS 5.1 捕获外部命令行工具（schtasks/sc/netsh/powercfg 等）输出时，
 #  默认按 UTF-8 解码系统 ANSI(GBK) 输出，导致中文变问号。
@@ -77,6 +120,10 @@ $script:PSVersion = $PSVersionTable.PSVersion.Major
 # ============================================================
 function Get-CimData {
     param([string]$Class, [string]$Filter = $null)
+    # 仪表盘的后台线程预取结果：命中时直接用，避免 UI 线程再查一次 CIM
+    if ($null -ne $script:DashboardCimCache -and $script:DashboardCimCache.ContainsKey($Class)) {
+        return @($script:DashboardCimCache[$Class])
+    }
     if ($script:PSVersion -ge 3) {
         if ($Filter) { return @(Get-CimInstance -ClassName $Class -Filter $Filter -ErrorAction SilentlyContinue) }
         else { return @(Get-CimInstance -ClassName $Class -ErrorAction SilentlyContinue) }
@@ -310,6 +357,86 @@ function Invoke-ScriptModule {
 # ============================================================
 #  UI 辅助函数
 # ============================================================
+# 把 96 DPI 设计值换算成当前 DPI 下的像素值
+function Get-UiPx {
+    param([double]$Value)
+    $scale = $script:UiScale
+    if (-not $scale -or $scale -le 0) { $scale = 1.0 }
+    return [int][math]::Round($Value * $scale)
+}
+
+# 表格单元格可用的文本宽度（像素）。
+# 页面构建时表格还没挂到窗体上，拿不到最终列宽；这里按最小窗口下最保守的
+# 列宽估算（Fill 列实际宽度约为 760*scale*0.60*权重），保证任意窗口/DPI 下都不越界。
+function Get-GridTextBudget {
+    param([int]$FillWeight, [int]$TotalWeight, [double]$Factor = 0.60, [int]$Padding = 28)
+    if ($FillWeight -le 0 -or $TotalWeight -le 0) { return 0 }
+    $scale = $script:UiScale
+    if (-not $scale -or $scale -le 0) { $scale = 1.0 }
+    $physical = 760.0 * $scale * $Factor * ($FillWeight / [double]$TotalWeight)
+    return [int][math]::Max(24, $physical - ($Padding * $scale))
+}
+
+# 按像素宽度截断文本，超出部分用省略号收尾（完整文本由悬停提示展示）
+function Get-UiEllipsisText {
+    param([string]$Text, $Font, [int]$MaxWidth)
+    if ([string]::IsNullOrEmpty($Text) -or $null -eq $Font -or $MaxWidth -le 0) { return $Text }
+    $flags = [System.Windows.Forms.TextFormatFlags]::SingleLine -bor [System.Windows.Forms.TextFormatFlags]::NoPadding
+    $probe = New-Object System.Drawing.Size(0, 0)
+    $full = [System.Windows.Forms.TextRenderer]::MeasureText($Text, $Font, $probe, $flags).Width
+    if ($full -le $MaxWidth) { return $Text }
+    $ellipsis = [string][char]0x2026
+    $lo = 0
+    $hi = $Text.Length - 1
+    while ($lo -lt $hi) {
+        $mid = [int][math]::Ceiling(($lo + $hi) / 2)
+        $cand = $Text.Substring(0, $mid) + $ellipsis
+        $w = [System.Windows.Forms.TextRenderer]::MeasureText($cand, $Font, $probe, $flags).Width
+        if ($w -le $MaxWidth) { $lo = $mid } else { $hi = $mid - 1 }
+    }
+    if ($lo -le 0) { return $ellipsis }
+    return $Text.Substring(0, $lo).TrimEnd() + $ellipsis
+}
+
+# 给表格挂悬停提示：被截断的单元格显示完整文本。
+# 注意：DataGridViewCellStyle 没有 ToolTipText 属性（在 CellFormatting 里写 $e.CellStyle.ToolTipText 会抛异常），
+# 必须走 CellToolTipTextNeeded 事件参数。
+function Enable-GridCellTips {
+    param($Grid, [hashtable]$FullTextMap)
+    if ($null -eq $Grid -or $null -eq $FullTextMap) { return }
+    # 事件处理脚本块不会保留函数局部变量（局部作用域随函数返回销毁），
+    # 必须把完整文本表放到脚本作用域，表格释放时再清理。
+    if ($null -eq $script:GridTipMaps) { $script:GridTipMaps = @{} }
+    foreach ($k in @($script:GridTipMaps.Keys)) {
+        if ($null -eq $k -or $k.IsDisposed) { $script:GridTipMaps.Remove($k) }
+    }
+    $script:GridTipMaps[$Grid] = $FullTextMap
+    $Grid.Add_Disposed({
+        param($s, $e)
+        try { $script:GridTipMaps.Remove($s) } catch { }
+    })
+    $Grid.Add_CellToolTipTextNeeded({
+        param($Sender, $e)
+        if ($null -eq $e -or $e.RowIndex -lt 0 -or $e.ColumnIndex -lt 0) { return }
+        try {
+            $map = $script:GridTipMaps[$Sender]
+            if ($null -eq $map) { return }
+            $col = $Sender.Columns[$e.ColumnIndex]
+            $texts = $map[[string]$col.Name]
+            if ($null -eq $texts) { $texts = $map[[string]$col.HeaderText] }
+            if ($null -eq $texts) { return }
+            $list = @($texts)
+            if ($e.RowIndex -ge $list.Count) { return }
+            $full = [string]$list[$e.RowIndex]
+            if ([string]::IsNullOrEmpty($full)) { return }
+            $shown = [string]$Sender.Rows[$e.RowIndex].Cells[$e.ColumnIndex].Value
+            if ($full -ne $shown) { $e.ToolTipText = $full }
+        } catch {
+            # 悬停提示属于增强功能，任何异常都不应影响主界面
+        }
+    })
+}
+
 function New-Label {
     param([string]$Text, [int]$X, [int]$Y, [int]$W=200, [int]$H=24, $Font=$null, $Color=$null)
     $lbl = New-Object System.Windows.Forms.Label
@@ -412,9 +539,218 @@ function New-Card {
 }
 
 # ============================================================
+#  DPI 缩放：把 96 DPI 下写死的像素尺寸整体放大到实际 DPI
+#  字体用 point 定义，会随 DPI 变大；若控件仍按 96 DPI 的像素摆位，
+#  文字就会被固定高度裁切、控件互相覆盖（125%/150% 下的主要故障）。
+# ============================================================
+$script:UiScaledControls = @{}
+
+function Expand-UiControl {
+    param($Control, [double]$Scale = 1.0)
+    if ($null -eq $Control) { return }
+    if ($script:UiScaledControls.ContainsKey($Control)) { return }
+    $script:UiScaledControls[$Control] = $true
+    if ($Scale -le 1.0001) { return }
+
+    try {
+        if ($Control -is [System.Windows.Forms.Form]) {
+            # 主窗体：放大初始尺寸，但不能超出屏幕工作区
+            $maxW = 0
+            $maxH = 0
+            try {
+                $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+                $maxW = [int][math]::Floor($wa.Width * 0.96)
+                $maxH = [int][math]::Floor($wa.Height * 0.96)
+            } catch { }
+            $newW = [int][math]::Round($Control.Width * $Scale)
+            $newH = [int][math]::Round($Control.Height * $Scale)
+            if ($maxW -gt 0 -and $newW -gt $maxW) { $newW = $maxW }
+            if ($maxH -gt 0 -and $newH -gt $maxH) { $newH = $maxH }
+            $Control.Size = New-Object System.Drawing.Size($newW, $newH)
+            $minSize = $Control.MinimumSize
+            if ($minSize.Width -gt 0 -or $minSize.Height -gt 0) {
+                $minW = [int][math]::Round($minSize.Width * $Scale)
+                $minH = [int][math]::Round($minSize.Height * $Scale)
+                if ($minW -gt $newW) { $minW = $newW }
+                if ($minH -gt $newH) { $minH = $newH }
+                $Control.MinimumSize = New-Object System.Drawing.Size($minW, $minH)
+            }
+            return
+        }
+
+        $dock = [System.Windows.Forms.DockStyle]::None
+        try { $dock = $Control.Dock } catch { }
+
+        $loc = $Control.Location
+        $size = $Control.Size
+        if ($dock -eq [System.Windows.Forms.DockStyle]::None) {
+            $Control.Location = New-Object System.Drawing.Point(
+                [int][math]::Round($loc.X * $Scale),
+                [int][math]::Round($loc.Y * $Scale))
+        }
+
+        # AutoSize 的 Label 高度由内容决定，再改 Size 会被 WinForms 覆盖，只挪位置即可
+        $resize = $true
+        if ($Control -is [System.Windows.Forms.Label] -and $Control.AutoSize) { $resize = $false }
+
+        if ($resize -and $dock -ne [System.Windows.Forms.DockStyle]::Fill) {
+            $newW = $size.Width
+            $newH = $size.Height
+            if ($dock -eq [System.Windows.Forms.DockStyle]::Top -or $dock -eq [System.Windows.Forms.DockStyle]::Bottom) {
+                $newH = [int][math]::Round($size.Height * $Scale)
+            } elseif ($dock -eq [System.Windows.Forms.DockStyle]::Left -or $dock -eq [System.Windows.Forms.DockStyle]::Right) {
+                $newW = [int][math]::Round($size.Width * $Scale)
+            } else {
+                $newW = [int][math]::Round($size.Width * $Scale)
+                $newH = [int][math]::Round($size.Height * $Scale)
+            }
+            if ($newW -ne $size.Width -or $newH -ne $size.Height) {
+                $Control.Size = New-Object System.Drawing.Size($newW, $newH)
+            }
+        }
+
+        # 内边距 / 外边距
+        $pad = $Control.Padding
+        if ($pad.Left -ne 0 -or $pad.Top -ne 0 -or $pad.Right -ne 0 -or $pad.Bottom -ne 0) {
+            $Control.Padding = New-Object System.Windows.Forms.Padding(
+                [int][math]::Round($pad.Left * $Scale),
+                [int][math]::Round($pad.Top * $Scale),
+                [int][math]::Round($pad.Right * $Scale),
+                [int][math]::Round($pad.Bottom * $Scale))
+        }
+        $margin = $Control.Margin
+        if ($margin.Left -ne 0 -or $margin.Top -ne 0 -or $margin.Right -ne 0 -or $margin.Bottom -ne 0) {
+            $Control.Margin = New-Object System.Windows.Forms.Padding(
+                [int][math]::Round($margin.Left * $Scale),
+                [int][math]::Round($margin.Top * $Scale),
+                [int][math]::Round($margin.Right * $Scale),
+                [int][math]::Round($margin.Bottom * $Scale))
+        }
+
+        # 自动换行 Label 的最大宽度
+        $maxSize = $Control.MaximumSize
+        if ($maxSize.Width -gt 0 -or $maxSize.Height -gt 0) {
+            $maxW2 = if ($maxSize.Width -gt 0) { [int][math]::Round($maxSize.Width * $Scale) } else { 0 }
+            $maxH2 = if ($maxSize.Height -gt 0) { [int][math]::Round($maxSize.Height * $Scale) } else { 0 }
+            $Control.MaximumSize = New-Object System.Drawing.Size($maxW2, $maxH2)
+        }
+
+        # 可滚动容器的虚拟内容高度（侧边栏导航）
+        if ($Control -is [System.Windows.Forms.Panel] -and $Control.AutoScroll) {
+            $asm = $Control.AutoScrollMinSize
+            if ($asm.Width -gt 0 -or $asm.Height -gt 0) {
+                $Control.AutoScrollMinSize = New-Object System.Drawing.Size(
+                    $(if ($asm.Width -gt 0) { [int][math]::Round($asm.Width * $Scale) } else { 0 }),
+                    $(if ($asm.Height -gt 0) { [int][math]::Round($asm.Height * $Scale) } else { 0 }))
+            }
+        }
+
+        # 表格布局的绝对行列宽高
+        if ($Control -is [System.Windows.Forms.TableLayoutPanel]) {
+            foreach ($col in $Control.ColumnStyles) {
+                if ($col.SizeType -eq [System.Windows.Forms.SizeType]::Absolute -and $col.Width -gt 0) {
+                    $col.Width = [float][math]::Round($col.Width * $Scale)
+                }
+            }
+            foreach ($row in $Control.RowStyles) {
+                if ($row.SizeType -eq [System.Windows.Forms.SizeType]::Absolute -and $row.Height -gt 0) {
+                    $row.Height = [float][math]::Round($row.Height * $Scale)
+                }
+            }
+        }
+
+        # 分隔条与两个面板的最小尺寸（不碰 SplitterDistance，避免构造期越界）
+        if ($Control -is [System.Windows.Forms.SplitContainer]) {
+            $Control.SplitterWidth = [int][math]::Max(1, [math]::Round($Control.SplitterWidth * $Scale))
+            if ($Control.Panel1MinSize -gt 0) { $Control.Panel1MinSize = [int][math]::Round($Control.Panel1MinSize * $Scale) }
+            if ($Control.Panel2MinSize -gt 0) { $Control.Panel2MinSize = [int][math]::Round($Control.Panel2MinSize * $Scale) }
+        }
+
+        # 表格的表头/行高是固定像素，不随字体放大 -> 150% 下表头文字会被裁掉一半
+        if ($Control -is [System.Windows.Forms.DataGridView]) {
+            try {
+                $hdrFont = $Control.ColumnHeadersDefaultCellStyle.Font
+                if ($null -eq $hdrFont) { $hdrFont = $Control.Font }
+                $hdrNeed = [System.Windows.Forms.TextRenderer]::MeasureText('名称Ag', $hdrFont).Height +
+                    [int][math]::Round(10 * $Scale)
+                $hdrH = [int][math]::Round($Control.ColumnHeadersHeight * $Scale)
+                if ($hdrNeed -gt $hdrH) { $hdrH = $hdrNeed }
+                $Control.ColumnHeadersHeightSizeMode = [System.Windows.Forms.DataGridViewColumnHeadersHeightSizeMode]::DisableResizing
+                $Control.ColumnHeadersHeight = $hdrH
+                $rowH = [int][math]::Round($Control.RowTemplate.Height * $Scale)
+                if ($rowH -gt 0) {
+                    $rowFont = $Control.DefaultCellStyle.Font
+                    if ($null -eq $rowFont) { $rowFont = $Control.Font }
+                    $rowNeed = [System.Windows.Forms.TextRenderer]::MeasureText('国Ag', $rowFont).Height +
+                        [int][math]::Round(10 * $Scale)
+                    if ($rowNeed -gt $rowH) { $rowH = $rowNeed }
+                    $Control.RowTemplate.Height = $rowH
+                    foreach ($row in $Control.Rows) {
+                        try { $row.Height = $rowH } catch { }
+                    }
+                }
+            } catch { }
+        }
+    } catch { }
+}
+
+function Invoke-UiScalePass {
+    param($Root, [double]$Scale = 0)
+    if ($null -eq $Root) { return }
+    if ($Scale -le 0) { $Scale = $script:UiScale }
+    if ($Scale -le 1.0001) { return }
+    try {
+        $stack = New-Object System.Collections.Stack
+        $stack.Push($Root)
+        while ($stack.Count -gt 0) {
+            $ctrl = $stack.Pop()
+            Expand-UiControl -Control $ctrl -Scale $Scale
+            try {
+                foreach ($child in @($ctrl.Controls)) { $stack.Push($child) }
+            } catch { }
+        }
+        $Root.PerformLayout()
+    } catch { }
+}
+
+# ============================================================
 #  管理员权限检查
 # ============================================================
-if (-not (Test-Administrator)) {
+# 离屏渲染模式：通过命令行参数开启（UAC 提权会丢失调用方环境变量，
+# 因此已编译 EXE 必须用参数而不是 $env: 传递渲染目录）
+$script:HeadlessRender = ($env:PCOPT_HEADLESS_RENDER -eq "1")
+$script:RenderOutDir = $env:PCOPT_RENDER_OUT
+if ($args) {
+    for ($argIndex = 0; $argIndex -lt $args.Count; $argIndex++) {
+        $currentArg = [string]$args[$argIndex]
+        if ($currentArg -eq "-HeadlessRender") {
+            $script:HeadlessRender = $true
+        } elseif ($currentArg -like "-RenderOut=*") {
+            $script:RenderOutDir = $currentArg.Substring("-RenderOut=".Length)
+        } elseif ($currentArg -eq "-RenderOut" -and ($argIndex + 1) -lt $args.Count) {
+            $script:RenderOutDir = [string]$args[$argIndex + 1]
+            $argIndex++
+        }
+    }
+}
+if ($script:HeadlessRender) { $env:PCOPT_HEADLESS_RENDER = "1" }
+if ($script:RenderOutDir) { $env:PCOPT_RENDER_OUT = $script:RenderOutDir }
+
+if (-not (Test-Administrator) -and -not $script:HeadlessRender) {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = 'pwsh.exe'
+    if (-not (Get-Command pwsh.exe -ErrorAction SilentlyContinue)) { $psi.FileName = 'powershell.exe' }
+    $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $MyInvocation.MyCommand.Path + '"'
+    $psi.Verb = 'RunAs'
+    $psi.WorkingDirectory = $script:ProjectRoot
+    $psi.UseShellExecute = $true
+    try {
+        $elevated = [System.Diagnostics.Process]::Start($psi)
+        if ($elevated -and -not $elevated.HasExited) {
+            exit 0
+        }
+    } catch {
+    }
     [System.Windows.Forms.MessageBox]::Show(
         "需要管理员权限才能运行此程序！`n`n请右键以管理员身份运行 PowerShell。`n然后执行: .\OptimizeGUI.ps1",
         "权限不足",
@@ -437,6 +773,8 @@ $MainForm.ForeColor = $Theme.TextMain
 $MainForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::Sizable
 $MainForm.Font = $Fonts.Body
 $MainForm.Icon = $null
+# 缩放由 Expand-UiControl 统一处理，禁用 WinForms 自己的自动缩放以免二次放大
+$MainForm.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::None
 
 # ============================================================
 #  主布局：TableLayoutPanel（根除 Dock Z-Order 遮挡问题）
@@ -847,6 +1185,9 @@ foreach ($key in $script:Pages.Keys) {
 $script:CurrentPage = "Dashboard"
 $script:Pages["Dashboard"].BringToFront()
 
+# 所有页面与控件建好后，统一按当前 DPI 放大固定像素尺寸
+Invoke-UiScalePass -Root $MainForm
+
 # ============================================================
 #  侧边栏标题映射
 # ============================================================
@@ -878,6 +1219,8 @@ function Reposition-PageControls {
     param($Page)
     if (-not $Page) { return }
     try {
+        # 页面可能被动态重建（备份列表、启动项等），补一次增量缩放；已缩放过的控件会跳过
+        Invoke-UiScalePass -Root $Page
         # 使用父容器（pagesHost）的实际客户区宽度，避免写死尺寸导致 ClientSize 失真
         $parentW = if ($Page.Parent) { $Page.Parent.ClientSize.Width } else { $Page.ClientSize.Width }
         $parentH = if ($Page.Parent) { $Page.Parent.ClientSize.Height } else { $Page.ClientSize.Height }
@@ -886,18 +1229,31 @@ function Reposition-PageControls {
             $Page.Location = New-Object System.Drawing.Point(0, 0)
             $Page.Size = New-Object System.Drawing.Size($parentW, $parentH)
         }
-        $avail = [math]::Max(300, $parentW - 40)
-        $maxW  = [math]::Min(760, $avail)
+        $avail = [math]::Max((Get-UiPx 300), $parentW - (Get-UiPx 40))
+        $maxW  = [math]::Min((Get-UiPx 760), $avail)
         foreach ($ctrl in $Page.Controls) {
             # 重排靠左的“宽”控件（卡片、宽 Label、列表等）
-            if ($ctrl.Left -le 30 -and $ctrl.Width -ge 400) {
+            if ($ctrl.Left -le (Get-UiPx 30) -and $ctrl.Width -ge (Get-UiPx 400)) {
                 $ctrl.Width = $maxW
-                # 卡片内部子控件也按卡片宽度跟随，避免被拉宽超出卡片
-                if ($ctrl -is [System.Windows.Forms.Panel]) {
-                    foreach ($child in $ctrl.Controls) {
-                        if ($child.Width -ge 300) { $child.Width = [math]::Max(200, $ctrl.Width - 32) }
-                    }
-                }
+            }
+        }
+        # 双列卡片（Tag = col-left / col-right）：按可用宽度平分，避免右侧卡片在小窗口被裁掉
+        $colLeft = @($Page.Controls | Where-Object { $_.Tag -eq 'col-left' })
+        $colRight = @($Page.Controls | Where-Object { $_.Tag -eq 'col-right' })
+        if ($colLeft.Count -gt 0 -and $colRight.Count -gt 0) {
+            $gap = Get-UiPx 25
+            $half = [int][math]::Floor(($maxW - $gap) / 2)
+            if ($half -gt (Get-UiPx 200)) {
+                $colLeft[0].Left = Get-UiPx 20
+                $colLeft[0].Width = $half
+                $colRight[0].Left = $colLeft[0].Left + $half + $gap
+                $colRight[0].Width = $half
+            }
+        }
+        # 右对齐控件（Tag = pin-right）：贴住当前可用宽度，避免被锚定推到可视区外
+        foreach ($ctrl in $Page.Controls) {
+            if ($ctrl.Tag -eq 'pin-right') {
+                $ctrl.Left = [int][math]::Max((Get-UiPx 20), ($maxW + (Get-UiPx 20) - $ctrl.Width))
             }
         }
         # 计算内容总高（最底端控件的 Bottom + 边距），确保 AutoScroll 滚动条正确出现
@@ -907,7 +1263,7 @@ function Reposition-PageControls {
             if ($bottom -gt $maxBottom) { $maxBottom = $bottom }
         }
         # 内容总高 + 40 底部余量，作为 AutoScrollMinSize.Height，保证内容超出时一定显示滚动条
-        $contentH = $maxBottom + 40
+        $contentH = $maxBottom + (Get-UiPx 40)
         $Page.AutoScrollMinSize = New-Object System.Drawing.Size(0, [int]$contentH)
         # 重置滚动位置到顶部，避免切换页面后内容偏移导致顶部被裁
         $Page.AutoScrollPosition = New-Object System.Drawing.Point(0, 0)
@@ -930,6 +1286,61 @@ foreach ($key in $script:Pages.Keys) {
 $MainForm.Add_Shown({ Start-BackgroundUpdateCheck })
 
 # 显示窗口
+if ($script:HeadlessRender) {
+    $MainForm.ShowInTaskbar = $false
+    $MainForm.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+    $MainForm.Location = New-Object System.Drawing.Point(-4000, -4000)
+    $MainForm.Visible = $true
+    if ($script:Pages.ContainsKey("Dashboard")) {
+        $script:Pages["Dashboard"].Visible = $true
+        $script:Pages["Dashboard"].BringToFront()
+    }
+    [System.Windows.Forms.Application]::DoEvents()
+
+    # 可选：把每个页面渲染成 PNG，用于对已编译 EXE 做真实的像素级回归验证
+    # 用法：.\PC-Optimizer.exe -HeadlessRender -RenderOut "<目录>"
+    # （脚本方式：$env:PCOPT_HEADLESS_RENDER="1"; $env:PCOPT_RENDER_OUT="<目录>"; .\OptimizeGUI.ps1）
+    if ($script:RenderOutDir) {
+        try {
+            [System.IO.Directory]::CreateDirectory($script:RenderOutDir) | Out-Null
+            foreach ($key in @($script:Pages.Keys)) {
+                $renderPage = $script:Pages[$key]
+                if (-not $renderPage) { continue }
+                Write-Log "离屏渲染: $key 开始"
+                $renderPage.Visible = $true
+                $renderPage.BringToFront()
+                [System.Windows.Forms.Application]::DoEvents()
+                $bitmap = New-Object System.Drawing.Bitmap($renderPage.Width, $renderPage.Height)
+                try {
+                    $renderPage.DrawToBitmap($bitmap, (New-Object System.Drawing.Rectangle(0, 0, $renderPage.Width, $renderPage.Height)))
+                    $pngPath = Join-Path $script:RenderOutDir ("{0}.png" -f $key)
+                    $bitmap.Save($pngPath, [System.Drawing.Imaging.ImageFormat]::Png)
+                } finally {
+                    $bitmap.Dispose()
+                }
+                Write-Log "离屏渲染: $key 完成"
+            }
+            foreach ($key in @($script:Pages.Keys)) {
+                $script:Pages[$key].Visible = ($key -eq "Dashboard")
+            }
+        } catch {
+            Write-Log "离屏渲染失败: $($_.Exception.Message)"
+        }
+    }
+
+    Write-Log "===== GUI 离屏渲染完成 ====="
+    # 编译成 EXE 时消息循环不会随脚本返回而结束，必须显式退出进程；
+    # 被 harness dot-source 时只 return，把控制权交回验证脚本继续做布局审计。
+    # 注意：pwsh -File 下 GetEntryAssembly().Location 指向 pwsh.dll，不能用它判断，
+    # 必须按当前进程名区分（ps2exe 产物进程名为 PC-Optimizer）。
+    $procName = ''
+    try { $procName = [string][System.Diagnostics.Process]::GetCurrentProcess().ProcessName } catch { }
+    if ($procName -and $procName -notmatch '(?i)^(pwsh|powershell)$') {
+        [System.Environment]::Exit(0)
+    }
+    return
+}
+
 $MainForm.ShowDialog() | Out-Null
 Write-Log "===== GUI 退出 ====="
 

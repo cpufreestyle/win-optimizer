@@ -2319,6 +2319,31 @@ Describe 'PowerShell source hygiene - string delimiters and returned object type
         }
     }
 
+    It 'no ToolTipText is written through CellStyle (that property does not exist)' {
+        # DataGridViewCellStyle 没有 ToolTipText 属性；在 CellFormatting 里写
+        # $e.CellStyle.ToolTipText 会让 GUI 弹「未处理异常」并卡住主界面。
+        # 单元格提示必须走 CellToolTipTextNeeded 的 $e.ToolTipText。
+        # 用 AST 而不是文本匹配：注释里提到这个写法不算违规。
+        foreach ($f in @($script:psFiles)) {
+            $tokens = $null
+            $errs = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$tokens, [ref]$errs)
+            $bad = @($ast.FindAll({
+                        param($n)
+                        if ($n -isnot [System.Management.Automation.Language.MemberExpressionAst]) { return $false }
+                        $member = $n.Member
+                        if ($member -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { return $false }
+                        if ($member.Value -ne 'ToolTipText') { return $false }
+                        $inner = $n.Expression
+                        if ($inner -isnot [System.Management.Automation.Language.MemberExpressionAst]) { return $false }
+                        $innerMember = $inner.Member
+                        if ($innerMember -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { return $false }
+                        return ($innerMember.Value -eq 'CellStyle')
+                    }, $true))
+            $bad.Count | Should -Be 0 -Because ("{0} 不能把 ToolTipText 写到 CellStyle 上" -f (Split-Path -Leaf $f))
+        }
+    }
+
     It 'Install-HealthSchedule always returns a shaped object, never a ScriptBlock' {
         $badTime = Install-HealthSchedule -Time 'abc' -HealthScript (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
         $badTime | Should -BeOfType [System.Management.Automation.PSCustomObject]
@@ -2531,6 +2556,9 @@ Describe 'Optimize.Core unified optimize plan - read-only dry-run (P2, shared by
         foreach ($d in @('services','startup','power','disk')) {
             @($plan.steps | Where-Object { $_.domain -eq $d }).Count | Should -Be 1
         }
+        foreach ($s in @($plan.steps)) {
+            $s.target | Should -Not -BeNullOrEmpty
+        }
         $plan.powerPlan | Should -Not -BeNullOrEmpty
         $plan.dns       | Should -Not -BeNullOrEmpty
 
@@ -2539,6 +2567,14 @@ Describe 'Optimize.Core unified optimize plan - read-only dry-run (P2, shared by
         $powerStep.target | Should -Match '平衡优化模式'
         $powerStep.action | Should -Be 'Set-PowerPlan'
         $powerStep.risk   | Should -Be 'low'
+    }
+
+    It 'plan reports an already-optimized services domain instead of dropping it' {
+        $plan = Get-OptimizePlan -SkipCleanScan
+        $services = @($plan.steps | Where-Object { $_.domain -eq 'services' })
+        $services.Count | Should -Be 1
+        $services[0].action | Should -BeIn @('Disable-Services', 'Skip-Services')
+        $services[0].target | Should -Match '可优化服务'
     }
 
     It 'network step reflects the chosen DNS option when adapters are present' {

@@ -19,7 +19,8 @@
             }
             Write-Log "启动模块窗口: $ScriptName"
             $psi = New-Object System.Diagnostics.ProcessStartInfo
-            $psi.FileName = "powershell.exe"
+            $psi.FileName = "pwsh.exe"
+            if (-not (Get-Command pwsh.exe -ErrorAction SilentlyContinue)) { $psi.FileName = "powershell.exe" }
             $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
             $psi.Verb = "RunAs"
             $psi.UseShellExecute = $true

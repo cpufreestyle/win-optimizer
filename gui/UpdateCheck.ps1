@@ -90,7 +90,9 @@ function Start-BackgroundUpdateCheck {
     #    因此采用安全架构：
     #    1. 使用专属的 [PowerShell]::Create() 实例在独立专用 Runspace 中异步发起网络请求；
     #    2. 主 UI 线程上的计时器按秒轮询 IAsyncResult.IsCompleted；
-    #    3. 结果就绪后，在主 UI 线程上调用 EndInvoke 并安全弹窗，100% 线程安全无崩溃。
+    #    3. 结果就绪后，在主 UI 线程上调用 EndInvoke 并安全弹窗，避免跨线程 PowerShell 崩溃。
+    if ($script:UpdateCheckTimer -or $script:UpdateCheckPS) { return }
+
     $repo = Get-GitHubRepo
     if ([string]::IsNullOrWhiteSpace($repo)) {
         Write-Log "未配置 update_repo 且无法从 git remote 探测，跳过更新检查。" "INFO"
@@ -124,42 +126,65 @@ function Start-BackgroundUpdateCheck {
 
         $timer.Add_Tick({
             param($Sender, $EventArgs)
+            $targetTimer = if ($Sender -is [System.Windows.Forms.Timer]) { $Sender } elseif ($script:UpdateCheckTimer) { $script:UpdateCheckTimer } else { $null }
             try {
                 $script:UpdateCheckTicks++
                 if ($script:UpdateCheckTicks -lt $DelaySeconds) { return }
+                $shouldStop = ($script:UpdateCheckAsync -and $script:UpdateCheckAsync.IsCompleted) -or ($script:UpdateCheckTicks -gt [math]::Max(30, $DelaySeconds))
+                if (-not $shouldStop) { return }
 
-                $targetTimer = if ($Sender) { $Sender } elseif ($this) { $this } else { $script:UpdateCheckTimer }
+                if ($targetTimer) {
+                    try { $targetTimer.Stop() } catch { }
+                }
+                if ($script:UpdateCheckTimer) { $script:UpdateCheckTimer = $null }
 
-                if ($script:UpdateCheckAsync -and $script:UpdateCheckAsync.IsCompleted) {
-                    if ($targetTimer) { $targetTimer.Stop(); $targetTimer.Dispose() }
-                    $script:UpdateCheckTimer = $null
+                $ps = $script:UpdateCheckPS
+                $asyncResult = $script:UpdateCheckAsync
+                $script:UpdateCheckPS = $null
+                $script:UpdateCheckAsync = $null
 
-                    $results = $script:UpdateCheckPS.EndInvoke($script:UpdateCheckAsync)
-                    $script:UpdateCheckPS.Dispose()
-                    $script:UpdateCheckPS = $null
-                    $script:UpdateCheckAsync = $null
+                $results = $null
+                if ($ps -and $asyncResult -and $asyncResult.IsCompleted) {
+                    try { $results = $ps.EndInvoke($asyncResult) } catch { }
+                }
+                if ($ps) {
+                    try { $ps.Dispose() } catch { }
+                }
+                if ($targetTimer) {
+                    try { $targetTimer.Dispose() } catch { }
+                }
 
-                    if ($results -and $results.Count -gt 0) {
-                        $release = $results[0]
-                        if ($release -and $release.tag_name -and $script:MainForm -and -not $script:MainForm.IsDisposed) {
-                            Show-UpdatePrompt -Release $release -QuietWhenLatest
-                        }
-                    }
-                } elseif ($script:UpdateCheckTicks -gt 30) {
-                    if ($targetTimer) { $targetTimer.Stop(); $targetTimer.Dispose() }
-                    $script:UpdateCheckTimer = $null
-                    if ($script:UpdateCheckPS) {
-                        $script:UpdateCheckPS.Dispose()
-                        $script:UpdateCheckPS = $null
-                        $script:UpdateCheckAsync = $null
+                if ($results -and $results.Count -gt 0) {
+                    $release = $results[0]
+                    if ($release -and $release.tag_name -and $script:MainForm -and -not $script:MainForm.IsDisposed) {
+                        Show-UpdatePrompt -Release $release -QuietWhenLatest
                     }
                 }
             } catch {
                 Write-Log "后台检查更新处理失败: $($_.Exception.Message)" "WARN"
+                if ($targetTimer) {
+                    try { $targetTimer.Stop() } catch { }
+                    try { $targetTimer.Dispose() } catch { }
+                }
+                if ($script:UpdateCheckTimer) { $script:UpdateCheckTimer = $null }
+                if ($script:UpdateCheckPS) {
+                    try { $script:UpdateCheckPS.Dispose() } catch { }
+                    $script:UpdateCheckPS = $null
+                }
+                $script:UpdateCheckAsync = $null
             }
         })
         $timer.Start()
     } catch {
         Write-Log "初始化后台更新检查失败: $($_.Exception.Message)" "WARN"
+        if ($script:UpdateCheckTimer) {
+            try { $script:UpdateCheckTimer.Dispose() } catch { }
+            $script:UpdateCheckTimer = $null
+        }
+        if ($script:UpdateCheckPS) {
+            try { $script:UpdateCheckPS.Dispose() } catch { }
+            $script:UpdateCheckPS = $null
+        }
+        $script:UpdateCheckAsync = $null
     }
 }
