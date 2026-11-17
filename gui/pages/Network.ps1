@@ -1,4 +1,4 @@
-﻿function Build-NetworkPage {
+﻿function Build-NetworkPageContent {
     $page = $script:Pages["Network"]
     $page.Controls.Clear()
 
@@ -81,8 +81,17 @@
     $lblCurDNS = New-Label "当前 DNS:" 20 $y 760 24 $Fonts.Small $Theme.TextDim
     try {
         $dnsText = @()
+        # 只查一次 CIM，所有适配器的 DNS 一起取（Win32_NetworkAdapterConfiguration 单次约 50ms）
+        $cfgs = @(Get-CimInstance Win32_NetworkAdapterConfiguration -Filter 'IPEnabled=True' -ErrorAction SilentlyContinue)
         foreach ($a in (Get-ActiveNetAdapters)) {
-            $dnsText += "$($a.Name): $((@(Get-AdapterDns -IfIndex $a.IfIndex -Name $a.Name)) -join ', ')"
+            $dns = @()
+            foreach ($c in $cfgs) {
+                if ([int]$c.InterfaceIndex -eq [int]$a.IfIndex -or ($a.Name -and $c.Description -eq $a.Name)) {
+                    $dns = @($c.DNSServerSearchOrder)
+                    break
+                }
+            }
+            $dnsText += "$($a.Name): $($dns -join ', ')"
         }
         $lblCurDNS.Text = "当前 DNS: $($dnsText -join ' | ')"
     } catch {}
@@ -120,4 +129,34 @@
         }
     })
     $page.Controls.Add($script:btnNetOpt)
+}
+
+# 启动时先画占位内容，窗口出现后再查网卡/DNS（Get-ActiveNetAdapters 首次约 400ms）
+function Build-NetworkPage {
+    $page = $script:Pages["Network"]
+    if ($null -eq $page) { return }
+    # 离屏渲染 / 布局审计需要完整内容，保持同步构建
+    if ($script:HeadlessRender) {
+        Build-NetworkPageContent
+        return
+    }
+    $page.Controls.Clear()
+    $page.Controls.Add((New-Label "网络优化" 20 22 500 30 $Fonts.Header $Theme.TextBright))
+    $page.Controls.Add((New-Label "正在读取网卡信息…" 20 60 500 24 $Fonts.Small $Theme.TextDim))
+    if ($null -ne $script:NetworkTimer) {
+        try { $script:NetworkTimer.Stop(); $script:NetworkTimer.Dispose() } catch { }
+        $script:NetworkTimer = $null
+    }
+    $script:NetworkTimer = New-Object System.Windows.Forms.Timer
+    $script:NetworkTimer.Interval = 120
+    $script:NetworkTimer.Add_Tick({
+        param($Sender, $e)
+        try { $Sender.Stop(); $Sender.Dispose() } catch { }
+        $script:NetworkTimer = $null
+        Build-NetworkPageContent
+        if (Get-Command Reposition-PageControls -ErrorAction SilentlyContinue) {
+            Reposition-PageControls $script:Pages["Network"]
+        }
+    })
+    $script:NetworkTimer.Start()
 }
