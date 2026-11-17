@@ -139,10 +139,22 @@ function Get-TelemetryTasks {
 
 # 查询单个计划任务状态（Win7 兼容）
 # 返回: @{ exists=$bool; state=$string }（state 形如 Ready / Disabled / Running，无法解析时为 $null）
+#
+# 性能说明: Get-ScheduledTask 属于 Windows PowerShell 5.1 专用模块，
+# 在 PowerShell 7 下每次调用都会拉起一次兼容会话（实测约 1.2~1.7 秒/次）。
+# 因此批量场景（Get-TelemetryTaskStates）改用 CIM 一次性取回全部任务再在内存里查表。
 function Get-ScheduledTaskState {
     param([string]$TaskPath, [string]$TaskName)
     if ([string]::IsNullOrWhiteSpace($TaskName)) { return @{ exists = $false; state = $null } }
     $fullName = "$TaskPath$TaskName"
+    # PowerShell 7: 走 CIM 批量缓存（首次约 0.9 秒取回全部任务，之后查表即可）
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        $map = Get-ScheduledTaskStateMap
+        if ($map.ContainsKey($fullName)) {
+            return @{ exists = $true; state = $map[$fullName] }
+        }
+        return @{ exists = $false; state = $null }
+    }
     if ($PSVersionTable.PSVersion.Major -ge 3 -and -not (Test-IsLegacyWindows)) {
         try {
             $t = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop
@@ -166,6 +178,48 @@ function Get-ScheduledTaskState {
     }
 }
 
+# 批量取回全部计划任务状态（TaskPath+TaskName -> 状态字符串）
+# PowerShell 7 用 CIM 一次取回全部任务，5.1 用 ScheduledTasks 模块
+# 查询失败返回空表（调用方按"不存在"处理，不抛异常）
+function Get-ScheduledTaskStateMap {
+    # 短 TTL 缓存：一次体检/禁用流程会多次查询状态，避免重复走 CIM（每次约 0.9 秒）
+    $now = Get-Date
+    if ($script:SchedTaskMapCache -and $script:SchedTaskMapCacheAt -and
+        ($now - $script:SchedTaskMapCacheAt).TotalSeconds -lt 10) {
+        return $script:SchedTaskMapCache
+    }
+    $map = @{}
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        try {
+            $tasks = @(Get-CimInstance -Namespace 'root/Microsoft/Windows/TaskScheduler' -ClassName MSFT_ScheduledTask -ErrorAction Stop)
+            foreach ($t in $tasks) {
+                $key = "$($t.TaskPath)$($t.TaskName)"
+                $state = "$($t.State)"
+                # CIM 的 State 是 uint16：1=Disabled 2=Queued 3=Ready 4=Running
+                switch ($state) {
+                    '1' { $state = 'Disabled' }
+                    '2' { $state = 'Queued' }
+                    '3' { $state = 'Ready' }
+                    '4' { $state = 'Running' }
+                    default { }
+                }
+                $map[$key] = $state
+            }
+        } catch { }
+        $script:SchedTaskMapCache = $map
+        $script:SchedTaskMapCacheAt = $now
+        return $map
+    }
+    try {
+        foreach ($t in @(Get-ScheduledTask -ErrorAction Stop)) {
+            $map["$($t.TaskPath)$($t.TaskName)"] = "$($t.State)"
+        }
+    } catch { }
+    $script:SchedTaskMapCache = $map
+    $script:SchedTaskMapCacheAt = $now
+    return $map
+}
+
 # 启用/禁用单个计划任务（Win7 兼容），成功返回 $true
 function Set-ScheduledTaskState {
     param([string]$TaskPath, [string]$TaskName, [bool]$Enable)
@@ -177,12 +231,16 @@ function Set-ScheduledTaskState {
             } else {
                 Disable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null
             }
+            # 状态已变，清掉缓存避免读到旧值
+            $script:SchedTaskMapCache = $null
             return $true
         }
         # Win7 / PS2.0 回退：schtasks /Change
         $switchArg = if ($Enable) { '/ENABLE' } else { '/DISABLE' }
         & schtasks /Change /TN "$TaskPath$TaskName" $switchArg 2>$null | Out-Null
-        return ($LASTEXITCODE -eq 0)
+        $ok = ($LASTEXITCODE -eq 0)
+        if ($ok) { $script:SchedTaskMapCache = $null }
+        return $ok
     } catch {
         return $false
     }
@@ -192,11 +250,17 @@ function Set-ScheduledTaskState {
 # 返回 @( @{name; taskPath; exists; state; disabled} )
 function Get-TelemetryTaskStates {
     $result = @()
+    $stateMap = Get-ScheduledTaskStateMap
     foreach ($full in @(Get-TelemetryTasks)) {
         $leaf   = Split-Path $full -Leaf
         $parent = Split-Path $full -Parent
         if (-not $parent.EndsWith("\")) { $parent = "$parent\" }
-        $st = Get-ScheduledTaskState -TaskPath $parent -TaskName $leaf
+        $key = "$parent$leaf"
+        if ($stateMap.ContainsKey($key)) {
+            $st = @{ exists = $true; state = $stateMap[$key] }
+        } else {
+            $st = @{ exists = $false; state = $null }
+        }
         $result += [PSCustomObject]@{
             name     = $leaf
             taskPath = $parent
