@@ -620,6 +620,26 @@ Compact.exe /CompactOS:never
 
 
 
+### v3.11.4 (2026-11-17)
+
+- **启动更快、PS7 兼容更稳，表格不再挤爆**
+
+  - 服务/启动项/备份时间线的长文本按列宽自动截断，鼠标悬停显示完整内容；
+    显式列 + FillWeight 让列宽在构建期就固定，不再被静默跳过。
+
+  - 仪表盘改为后台加载：窗口先出、指标随后就位；清理页体积统计、备份时间线
+    解析延后执行，冷启动到窗口可见约 6.2s → 约 3.5s。
+
+  - PowerShell 7 下不再拉起 Windows PowerShell 兼容会话：
+    `Get-PhysicalDiskInfo` / `Get-ActiveNetAdapters` / `Get-DnsClientServerAddress` /
+    `Get-ServiceDependents` 等改走 CIM（5.1 仍走 WMI），磁盘页构建 1.43s → 0.10s，
+    服务依赖 WhatIf 全量约 4s → 2.9s。
+
+  - 服务页「执行禁用」按钮不再被锚定推到可视区外；新增 `tools/Test-UiLayout.ps1`
+    布局审计工具（1.25/1.5/2.0/2.5 × 4 尺寸 × 13 页 = 0 发现）。
+
+  - 回归：Pester 304/304、pytest 3/3、PSScriptAnalyzer 0 Error、`git diff --check` 通过。
+
 ### v3.11.3 (2026-11-04)
 
 - **极简 / 高级模式现在会被记住，启动方式也能直接锁定**
