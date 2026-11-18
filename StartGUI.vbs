@@ -1,5 +1,5 @@
 ' PC-Optimizer-7thGen VBS launcher
-' Request admin and start PowerShell GUI
+' Request admin and start PowerShell GUI (prefer PowerShell 7, fallback to 5.1)
 
 Set objShell = CreateObject("Shell.Application")
 strDir = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName)
@@ -45,10 +45,13 @@ If strPs = "" Then strPs = "powershell.exe"
 objShell.ShellExecute strPs, "-NoProfile -ExecutionPolicy Bypass -File """ & strDir & "\OptimizeGUI.ps1""", strDir, "", 0
 
 Function IsAdmin()
+    ' 注意：不能在这里把全局 objShell（Shell.Application）覆盖成 WScript.Shell，
+    ' 否则提权分支再调 objShell.ShellExecute 会报「对象不支持此属性或方法」。
+    Dim objProbe
     On Error Resume Next
-    Set objShell = CreateObject("WScript.Shell")
-    err.Clear
-    objShell.RegRead("HKEY_USERS\S-1-5-19\Environment\TEMP")
+    Set objProbe = CreateObject("WScript.Shell")
+    Err.Clear
+    objProbe.RegRead "HKEY_USERS\S-1-5-19\Environment\TEMP"
     IsAdmin = (Err.Number = 0)
     On Error GoTo 0
 End Function
