@@ -2344,6 +2344,31 @@ Describe 'PowerShell source hygiene - string delimiters and returned object type
         }
     }
 
+
+    It 'no MessageBox button enum is read from the MessageBox class itself' {
+        # MessageBox.Show 的第 3 个参数要 MessageBoxButtons（OK/YesNo/...），
+        # 误写成 [MessageBox]::OK 时 PowerShell 找不到 4 参重载，
+        # 报「Cannot find an overload for "Show" and the argument count: "4"」，
+        # 连 catch 里的错误提示框都弹不出来（整页向导直接崩）。
+        foreach ($f in @($script:psFiles)) {
+            $tokens = $null
+            $errs = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$tokens, [ref]$errs)
+            $bad = @($ast.FindAll({
+                        param($n)
+                        if ($n -isnot [System.Management.Automation.Language.MemberExpressionAst]) { return $false }
+                        $member = $n.Member
+                        if ($member -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { return $false }
+                        if ($member.Value -notmatch '^(OK|YesNo|YesNoCancel|RetryCancel|AbortRetryIgnore)$') { return $false }
+                        $inner = $n.Expression
+                        if ($inner -isnot [System.Management.Automation.Language.MemberExpressionAst]) { return $false }
+                        $innerMember = $inner.Member
+                        if ($innerMember -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { return $false }
+                        return ($innerMember.Value -eq 'MessageBox')
+                    }, $true))
+            $bad.Count | Should -Be 0 -Because ("{0} 把按钮枚举写成了 MessageBox 的成员（应为 MessageBoxButtons）" -f (Split-Path -Leaf $f))
+        }
+    }
     It 'Install-HealthSchedule always returns a shaped object, never a ScriptBlock' {
         $badTime = Install-HealthSchedule -Time 'abc' -HealthScript (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
         $badTime | Should -BeOfType [System.Management.Automation.PSCustomObject]

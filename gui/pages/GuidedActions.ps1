@@ -13,7 +13,7 @@
         if (-not $plan.ok) {
             Write-Log ("一键向导体检失败: " + $plan.error) "ERROR"
             [System.Windows.Forms.MessageBox]::Show("体检失败：" + $plan.error + "`n`n通常是因为没有管理员权限，请右键以管理员身份重新启动本工具。", "一键向导",
-                [System.Windows.Forms.MessageBox]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
             return
         }
         $script:GuidedPlan = $plan
@@ -23,7 +23,7 @@
     } catch {
         Write-Log ("一键向导体检异常: " + $_.Exception.Message) "ERROR"
         [System.Windows.Forms.MessageBox]::Show("体检出现异常：" + $_.Exception.Message, "一键向导",
-            [System.Windows.Forms.MessageBox]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
     } finally {
         $script:GuidedBusy = $false
     }
@@ -38,7 +38,7 @@ function Invoke-GuidedRun {
     $plan = $script:GuidedPlan
     if (-not $plan -or -not $plan.ok) {
         [System.Windows.Forms.MessageBox]::Show("请先点击「开始体检并推荐」。", "一键向导",
-            [System.Windows.Forms.MessageBox]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
         return
     }
 
@@ -48,7 +48,7 @@ function Invoke-GuidedRun {
          "每个域执行前会自动备份，之后可到「备份恢复」页撤销。`n" +
          "高风险或需人工确认的步骤会被自动跳过。`n`n确认开始？"),
         "一键向导",
-        [System.Windows.Forms.MessageBox]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+        [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
     if ($ans -ne [System.Windows.Forms.DialogResult]::Yes) {
         Write-Log "一键向导：已取消执行。" "WARN"
         return
@@ -74,20 +74,26 @@ function Invoke-GuidedRun {
                 if ($cmp.scoreDelta -gt 0) {
                     [System.Windows.Forms.MessageBox]::Show(
                         ("优化完成！`n`n体检得分：" + $cmp.beforeScore + " → " + $cmp.afterScore + "（+" + $cmp.scoreDelta + "）`n`n建议重启电脑使所有更改生效。"),
-                        "一键向导", [System.Windows.Forms.MessageBox]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+                        "一键向导", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
                 } else {
                     [System.Windows.Forms.MessageBox]::Show(
                         ("优化已完成，体检得分没有变化（" + $cmp.beforeScore + " → " + $cmp.afterScore + "）。`n`n建议重启电脑后再体检一次查看效果。"),
-                        "一键向导", [System.Windows.Forms.MessageBox]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+                        "一键向导", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
                 }
             }
             try { Save-HealthReport -Report $after -BackupDir (Join-Path $script:ProjectRoot "backups\health") } catch { }
         }
         Build-GuidedPage -KeepPlan
     } catch {
-        Write-Log ("一键向导执行异常: " + $_.Exception.Message) "ERROR"
-        [System.Windows.Forms.MessageBox]::Show("执行出现异常：" + $_.Exception.Message, "一键向导",
-            [System.Windows.Forms.MessageBox]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        # 记录完整异常（类型 + 调用位置 + 内部异常），否则只有一句 Message 很难定位
+        $errText = "$($_.Exception.GetType().FullName): $($_.Exception.Message)"
+        Write-Log ("一键向导执行异常: " + $errText) "ERROR"
+        Write-Log ("调用位置: " + $_.InvocationInfo.PositionMessage) "ERROR"
+        if ($_.Exception.InnerException) {
+            Write-Log ("内部异常: " + $_.Exception.InnerException.GetType().FullName + ": " + $_.Exception.InnerException.Message) "ERROR"
+        }
+        [System.Windows.Forms.MessageBox]::Show("执行出现异常：$errText`n`n详情见操作日志。", "一键向导",
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
     } finally {
         $script:GuidedBusy = $false
     }
@@ -122,7 +128,7 @@ function Invoke-GuidedExport {
     #>
     if (-not $script:GuidedBefore -or -not $script:GuidedAfter) {
         [System.Windows.Forms.MessageBox]::Show("还没有可导出的对比：请先执行一次优化。", "一键向导",
-            [System.Windows.Forms.MessageBox]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
         return
     }
     try { Add-Type -AssemblyName Microsoft.VisualBasic -ErrorAction SilentlyContinue } catch { }
@@ -139,19 +145,19 @@ function Invoke-GuidedExport {
             Write-Log ("一键向导：对比报告已导出 " + $exp.file) "SUCCESS"
             $open = [System.Windows.Forms.MessageBox]::Show(
                 ("报告已保存到：" + $exp.file + "`n`n是否现在打开？"),
-                "导出完成", [System.Windows.Forms.MessageBox]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Information)
+                "导出完成", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Information)
             if ($open -eq [System.Windows.Forms.DialogResult]::Yes) {
                 try { Start-Process $exp.file } catch { }
             }
         } else {
             Write-Log ("一键向导：导出失败 " + $exp.error) "ERROR"
             [System.Windows.Forms.MessageBox]::Show("导出失败：" + $exp.error, "一键向导",
-                [System.Windows.Forms.MessageBox]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         }
     } catch {
         Write-Log ("一键向导：导出异常 " + $_.Exception.Message) "ERROR"
         [System.Windows.Forms.MessageBox]::Show("导出出现异常：" + $_.Exception.Message, "一键向导",
-            [System.Windows.Forms.MessageBox]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
     }
 }
 
