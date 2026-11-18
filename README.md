@@ -620,6 +620,16 @@ Compact.exe /CompactOS:never
 
 
 
+### v3.11.5 (2026-11-18)
+
+- **PS7 启动与向导执行稳定性修复**
+
+  - `StartGUI.vbs` 和 `StartGUI.bat` 优先使用 PowerShell 7，未安装时自动回退到 Windows PowerShell 5.1；桌面快捷方式启动时不再弹出黑色控制台窗口。
+  - 修复「按方案执行优化」因 `MessageBoxButtons` 枚举调用错误导致的 `Show` 重载异常。
+  - 修复管理员提权启动器覆盖 `Shell.Application` 对象导致的 `ShellExecute` 异常。
+  - 网络、遥测任务和 DPI 初始化路径完成 PS7 兼容与启动性能优化。
+  - 回归：Pester 305/305、布局审计 13 页 × 4 尺寸通过、PSScriptAnalyzer 0 Error。
+
 ### v3.11.4 (2026-11-17)
 
 - **启动更快、PS7 兼容更稳，表格不再挤爆**
