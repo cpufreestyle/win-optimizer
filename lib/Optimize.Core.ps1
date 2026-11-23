@@ -608,6 +608,55 @@ function Remove-FolderContent {
     return $cnt
 }
 
+# 按文件年龄清理文件夹内容：只删除 LastWriteTime 早于截止时间的普通文件，
+# 默认还会移走因此变空的目录；正在使用/最近写入的文件不动，避免误伤运行中的程序。
+# 返回 @{ deleted; bytes; skipped; dirs; error }，WhatIf 时只统计不落盘。
+function Remove-OldFolderContent {
+    param(
+        [string]$Path,
+        [int]$OlderThanDays = 7,
+        [int]$MaxBytes = 0,
+        [switch]$WhatIf
+    )
+    $result = [PSCustomObject]@{ deleted = 0; bytes = [double]0; skipped = 0; dirs = 0; error = $null }
+    if ([string]::IsNullOrWhiteSpace($Path) -or $OlderThanDays -lt 0) { return $result }
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) { return $result }
+        $cutoff = (Get-Date).AddDays(-$OlderThanDays)
+        $files = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -File -ErrorAction SilentlyContinue |
+                   Where-Object { $_.LastWriteTime -lt $cutoff })
+        $files = @($files | Sort-Object @{Expression = { $_.LastWriteTime }; Descending = $true})
+        foreach ($file in $files) {
+            $length = [double]$file.Length
+            if ($MaxBytes -gt 0 -and ($result.bytes + $length) -gt $MaxBytes) {
+                $result.skipped++
+                continue
+            }
+            if (-not $WhatIf) {
+                try { Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop }
+                catch { $result.skipped++; continue }
+            }
+            $result.deleted++
+            $result.bytes += $length
+        }
+        if (-not $WhatIf) {
+            $dirs = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -Directory -ErrorAction SilentlyContinue |
+                      Sort-Object @{Expression = { $_.FullName.Length }; Descending = $true})
+            foreach ($dir in $dirs) {
+                try {
+                    if (@(Get-ChildItem -LiteralPath $dir.FullName -Force -ErrorAction Stop).Count -eq 0) {
+                        Remove-Item -LiteralPath $dir.FullName -Force -ErrorAction Stop
+                        $result.dirs++
+                    }
+                } catch { }
+            }
+        }
+    } catch {
+        $result.error = $_.Exception.Message
+    }
+    return $result
+}
+
 # ============================================================
 #  清理目标清单（CLI / WebUI 共享的单一数据源）
 #  从 config/optimization.json 读取；缺失时用内置回退，保证离线可用。
@@ -4596,7 +4645,8 @@ function Get-SmartRecommendations {
         [int]$Top = 3,
         [switch]$IncludeStartup,
         [switch]$IncludeClean,
-        [switch]$SkipCleanMeasure
+        [switch]$SkipCleanMeasure,
+        [int]$CleanOlderThanDays = 0
     )
     if ($Top -lt 1) { $Top = 1 }
 
@@ -4648,6 +4698,7 @@ function Get-SmartRecommendations {
                 exists    = $exists
                 publisher = $publisher
                 score     = [int]$sc.score
+                tags      = @($sc.tags)
                 reason  = [string]$sc.reason
                 hint    = '体检结果里可一键应用本条建议（自动备份）；或到菜单 [4] 手动禁用'
             }
@@ -4686,8 +4737,18 @@ function Get-SmartRecommendations {
         }
         if (-not $reused -and -not $SkipCleanMeasure) {
             foreach ($t in @(Get-CleanTargets)) {
-                $b = Get-FolderSize $t.path
-                if ($b -gt 0) { $measured += [PSCustomObject]@{ key = $t.key; name = $t.name; path = $t.path; mb = [math]::Round($b / 1MB, 1) } }
+                $measurePath = $t.path
+                $measureName = $t.name
+                if ($CleanOlderThanDays -gt 0) {
+                    $aged = Remove-OldFolderContent -Path $t.path -OlderThanDays $CleanOlderThanDays -WhatIf
+                    if ($aged.error) { continue }
+                    $measurePath = "$($t.path) (>$($CleanOlderThanDays)天)"
+                    $measureName = "$($t.name)（仅旧文件）"
+                    $b = [double]$aged.bytes
+                } else {
+                    $b = Get-FolderSize $t.path
+                }
+                if ($b -gt 0) { $measured += [PSCustomObject]@{ key = $t.key; name = $measureName; path = $measurePath; mb = [math]::Round($b / 1MB, 1) } }
             }
         }
         $totalMB = 0.0
@@ -4704,8 +4765,13 @@ function Get-SmartRecommendations {
                 path   = [string]$m.path
                 mb     = [double]$m.mb
                 pct    = [int]$pct
+                aged   = [bool]($CleanOlderThanDays -gt 0)
                 reason = ("可释放 {0} MB，约占当前可清理总量的 {1}%" -f $m.mb, $pct)
-                hint   = '菜单 [2] 临时文件清理：勾选对应目标后清理'
+                hint   = if ($CleanOlderThanDays -gt 0) {
+                    "体检页可一键清理超过 $CleanOlderThanDays 天的旧文件（自动跳过最近文件）"
+                } else {
+                    '菜单 [2] 临时文件清理：勾选对应目标后清理'
+                }
             }
             if ($n -ge $Top) { break }
         }
@@ -4762,6 +4828,7 @@ function Invoke-SmartRecommendations {
         [object]$Report,
         [int]$Top = 3,
         [string]$BackupDir,
+        [int]$CleanOlderThanDays = 0,
         [switch]$SkipBackup,
         [switch]$WhatIf,
         [bool]$CreateRestorePoint = (Get-RestorePointDefault)
@@ -4769,6 +4836,7 @@ function Invoke-SmartRecommendations {
     $res = [PSCustomObject]@{
         ok           = $false
         whatIf       = [bool]$WhatIf
+        startupOnly  = $true
         applied      = @()
         failed       = @()
         backup       = $null
@@ -4776,24 +4844,38 @@ function Invoke-SmartRecommendations {
         error        = $null
     }
 
-    $tips = Get-SmartRecommendations -Report $Report -Top $Top -SkipCleanMeasure
+    $res.startupOnly = ($CleanOlderThanDays -le 0)
+    $getTipsArgs = @{
+        Report              = $Report
+        Top                 = $Top
+        CleanOlderThanDays  = $CleanOlderThanDays
+        SkipCleanMeasure    = $true
+    }
+    if ($CleanOlderThanDays -gt 0) {
+        $getTipsArgs['IncludeStartup'] = $true
+        $getTipsArgs['IncludeClean'] = $true
+    }
+    $tips = Get-SmartRecommendations @getTipsArgs
     $recs = @($tips.startup)
-    if ($recs.Count -eq 0) {
-        $res.error = '当前没有可自动应用的启动项建议（未命中触发条件或无可禁用项）'
+    $cleanRecs = if ($CleanOlderThanDays -gt 0) { @($tips.clean) } else { @() }
+    if ($recs.Count -eq 0 -and $cleanRecs.Count -eq 0) {
+        $res.error = '当前没有可自动应用的建议（未命中触发条件或无可处理项）'
         return $res
     }
 
-    # 建议基于报告生成，执行前按 Name+Value 重新匹配实时启动项；
-    # 匹配不到就跳过该项——宁可不做，也不误删。
-    $live = @(Get-StartupItems)
     $picked = @()
-    foreach ($r in $recs) {
-        $hit = @($live | Where-Object { $_.Name -eq $r.name -and $_.Value -eq $r.command })[0]
-        if ($hit) { $picked += $hit }
-    }
-    if ($picked.Count -eq 0) {
-        $res.error = '建议对应的启动项已不存在（可能已被其他流程处理），未做任何改动'
-        return $res
+    if ($recs.Count -gt 0) {
+        # 建议基于报告生成，执行前按 Name+Value 重新匹配实时启动项；
+        # 匹配不到就跳过该项——宁可不做，也不误删。
+        $live = @(Get-StartupItems)
+        foreach ($r in $recs) {
+            $hit = @($live | Where-Object { $_.Name -eq $r.name -and $_.Value -eq $r.command })[0]
+            if ($hit) { $picked += $hit }
+        }
+        if ($picked.Count -eq 0) {
+            $res.error = '建议对应的启动项已不存在（可能已被其他流程处理），未做任何改动'
+            return $res
+        }
     }
 
     # 懒创建还原点：真要动系统的第一步之前才建；失败只记录、不阻塞
@@ -4812,11 +4894,26 @@ function Invoke-SmartRecommendations {
     }
 
     # 一次禁用全部选中项（备份已在上面统一做过，这里 SkipBackup）
-    $r = Disable-StartupItems -Items $picked -BackupDir $bdir -SkipBackup -WhatIf:$WhatIf
-    $res.applied = @($r.details | Where-Object { [string]$_.Result -like '已禁用*' } |
-                      ForEach-Object { [string]$_.Name })
-    $res.failed = @($r.details | Where-Object { [string]$_.Result -notlike '已禁用*' } |
-                     ForEach-Object { [PSCustomObject]@{ name = [string]$_.Name; reason = [string]$_.Result } })
+    $appliedNames = @()
+    $failedItems = @()
+    if ($picked.Count -gt 0) {
+        $r = Disable-StartupItems -Items $picked -BackupDir $bdir -SkipBackup -WhatIf:$WhatIf
+        $appliedNames = @($r.details | Where-Object { [string]$_.Result -like '已禁用*' } |
+                          ForEach-Object { [string]$_.Name })
+        $failedItems = @($r.details | Where-Object { [string]$_.Result -notlike '已禁用*' } |
+                         ForEach-Object { [PSCustomObject]@{ name = [string]$_.Name; reason = [string]$_.Result } })
+    }
+    foreach ($c in $cleanRecs) {
+        $basePath = [string]$c.path -replace '\s*\(>\d+天\)$', ''
+        $aged = Remove-OldFolderContent -Path $basePath -OlderThanDays $CleanOlderThanDays -WhatIf:$WhatIf
+        if ($aged.error) {
+            $failedItems += [PSCustomObject]@{ name = [string]$c.name; reason = $aged.error }
+        } else {
+            $appliedNames += ("清理旧文件: {0}（{1:N1} MB，{2} 个文件）" -f $c.name, ($aged.bytes / 1MB), $aged.deleted)
+        }
+    }
+    $res.applied = $appliedNames
+    $res.failed = $failedItems
     $res.ok = ($res.applied.Count -gt 0 -and $res.failed.Count -eq 0)
     return $res
 }

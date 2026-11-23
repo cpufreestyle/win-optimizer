@@ -67,6 +67,14 @@ def _register_mcp_tools(server):
         return run_ps("02_clean.ps1", "-Action", "clean", "-Items", str(items))
 
     @server.tool()
+    def clean_old(days: int = 7, items: str = "all", what_if: bool = False) -> dict:
+        """只清理指定天数之前的旧临时文件（默认 7 天），跳过最近文件，适合老电脑保守提速。"""
+        args = ["-Action", "clean", "-Items", str(items), "-OlderThanDays", str(int(days))]
+        if what_if:
+            args.append("-WhatIf")
+        return run_ps("02_clean.ps1", *args)
+
+    @server.tool()
     def services_list() -> dict:
         """列出可优化的服务项。"""
         return run_ps("03_services.ps1", "-Action", "list")
@@ -182,6 +190,11 @@ def _register_mcp_tools(server):
         return run_ps("15_health.ps1", "-Action", "tips")
 
     @server.tool()
+    def health_aged_clean(days: int = 7) -> dict:
+        """只读扫描超过 N 天的旧临时文件，给出保守清理收益（不修改任何文件）。"""
+        return run_ps("15_health.ps1", "-Action", "tips", "-OlderThanDays", str(int(days)))
+
+    @server.tool()
     def health_remediate(issue_code: str = "", max_severity: str = "Medium",
                         dns_option: int = 1, what_if: bool = False, force: bool = False,
                         create_restore_point: bool = False) -> dict:
@@ -205,12 +218,14 @@ def _register_mcp_tools(server):
 
     @server.tool()
     def health_apply_tips(top: int = 3, what_if: bool = False,
-                         create_restore_point: bool = False) -> dict:
+                          create_restore_point: bool = False, older_than_days: int = 0) -> dict:
         """一键应用智能降级建议（P3-1）：按体检结果禁用最值得处理的启动项，
-        执行前自动备份；清理类建议不自动执行。what_if=true 只预览不改系统。"""
+        执行前自动备份；older_than_days>0 时同时清理旧临时文件。what_if=true 只预览不改系统。"""
         args = ["-Action", "apply-tips", "-Top", str(int(top))]
         if what_if:
             args.append("-WhatIf")
+        if int(older_than_days) > 0:
+            args += ["-OlderThanDays", str(int(older_than_days))]
         args += ["-CreateRestorePoint", str(bool(create_restore_point)).lower()]
         return run_ps("15_health.ps1", *args)
 
@@ -535,7 +550,11 @@ def api_clean_scan():
 def api_clean():
     data = request.get_json(silent=True) or {}
     items = data.get("items", "all")
-    return jsonify(run_ps("02_clean.ps1", "-Action", "clean", "-Items", str(items)))
+    args = ["-Action", "clean", "-Items", str(items)]
+    older = int(data.get("older_than_days", 0) or 0)
+    if older > 0:
+        args += ["-OlderThanDays", str(older)]
+    return jsonify(run_ps("02_clean.ps1", *args))
 
 
 # ---------------- 服务 ----------------
@@ -727,6 +746,9 @@ def api_health_apply_tips():
     args = ["-Action", "apply-tips", "-Top", str(int(data.get("top", 3)))]
     if data.get("what_if"):
         args.append("-WhatIf")
+    older = int(data.get("older_than_days", 0) or 0)
+    if older > 0:
+        args += ["-OlderThanDays", str(older)]
     args += ["-CreateRestorePoint", str(bool(data.get("create_restore_point", False))).lower()]
     return jsonify(run_ps("15_health.ps1", *args))
 

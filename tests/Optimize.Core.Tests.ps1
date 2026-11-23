@@ -209,6 +209,57 @@ Describe 'Optimize.Core folder sizing and logging' {
     }
 }
 
+Describe 'Optimize.Core conservative clean and startup zero-risk paths' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+
+    It 'Remove-OldFolderContent removes only stale files and reports bytes in WhatIf' {
+        $tmp = Join-Path $env:TEMP ('agedclean_' + (New-Guid).ToString('N'))
+        $oldDir = Join-Path $tmp 'old'
+        New-Item -ItemType Directory -Path $oldDir -Force | Out-Null
+        $oldFile = Join-Path $oldDir 'old.txt'
+        $newFile = Join-Path $tmp 'new.txt'
+        Set-Content -Path $oldFile -Value ('A' * 100) -NoNewline
+        Set-Content -Path $newFile -Value ('B' * 100) -NoNewline
+        (Get-Item $oldFile).LastWriteTime = (Get-Date).AddDays(-30)
+        try {
+            $preview = Remove-OldFolderContent -Path $tmp -OlderThanDays 7 -WhatIf
+            $preview.deleted | Should -Be 1
+            $preview.bytes   | Should -Be 100
+            Test-Path $oldFile | Should -BeTrue
+
+            $applied = Remove-OldFolderContent -Path $tmp -OlderThanDays 7
+            $applied.deleted | Should -Be 1
+            Test-Path $oldFile | Should -BeFalse
+            Test-Path $newFile | Should -BeTrue
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Get-SmartRecommendations returns only live stale startup items when health has no trigger' {
+        $items = @(
+            [PSCustomObject]@{ Name='ZedUpdater'; Value='"C:\gone\ZedUpdater.exe"'; Scope='当前用户'; Source='注册表'; Index=1 }
+            [PSCustomObject]@{ Name='OneDrive'; Value='C:\Windows\System32\SecurityHealthSystray.exe'; Scope='所有用户'; Source='注册表'; Index=2 }
+        )
+        Mock Get-FilePublisher { 'Microsoft Corporation' } -ParameterFilter { $Path -like '*SecurityHealth*' }
+        $tips = Get-SmartRecommendations -StartupItems $items -Top 3 -IncludeStartup
+        @($tips.startup).Count | Should -Be 1
+        $tips.startup[0].name | Should -Be 'ZedUpdater'
+        $tips.startup[0].tags | Should -Contain 'dead'
+    }
+
+    It 'Invoke-SmartRecommendations keeps startup-only behaviour by default' {
+        $rep = [PSCustomObject]@{ issues = @([PSCustomObject]@{ id='startup.many'; severity='Medium' }) }
+        Mock Get-StartupItems { @() }
+        Mock Get-SmartRecommendations { [PSCustomObject]@{ ok=$true; startup=@(); clean=@(); vetoed=@() } }
+        $r = Invoke-SmartRecommendations -Report $rep -WhatIf
+        $r.startupOnly | Should -BeTrue
+        $r.ok | Should -BeFalse
+    }
+}
+
 Describe 'Optimize.Core startup items (shared by CLI/GUI/WebUI)' {
     BeforeAll {
         . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
