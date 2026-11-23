@@ -7,7 +7,8 @@
 #>
 param(
     [ValidateSet("scan", "clean")]$Action = "scan",
-    [string]$Items = "all"   # 逗号分隔索引，或 "all"
+    [string]$Items = "all",  # 逗号分隔索引，或 "all"
+    [int]$OlderThanDays = 0  # >0 时只清理指定天数之前的旧文件
 )
 
 # 统一 stdout 为 UTF-8（让 Python subprocess.run 按 utf-8 解码时不乱码；与 OptimizeGUI 同款）
@@ -44,12 +45,17 @@ try {
         $i = 0
         foreach ($d in $cleanDefs) {
             $i++
+            $sizeMB = if ($OlderThanDays -gt 0) {
+                [math]::Round((Remove-OldFolderContent -Path $d.Path -OlderThanDays $OlderThanDays -WhatIf).bytes / 1MB, 2)
+            } else {
+                Get-FolderSizeMB $d.Path
+            }
             $list += [PSCustomObject]@{
                 index = $i
                 key   = $d.Key
                 name  = $d.Name
                 path  = $d.Path
-                sizeMB= (Get-FolderSizeMB $d.Path)
+                sizeMB= $sizeMB
             }
         }
         $recycle = 0
@@ -81,17 +87,24 @@ try {
         $files = 0
         $details = @()
         foreach ($d in $targets) {
-            $before = (Get-FolderSizeMB $d.Path) * 1MB
-            $files += (Remove-FolderContent $d.Path)
-            $after  = (Get-FolderSizeMB $d.Path) * 1MB
-            $freed  = [math]::Max(0, $before - $after)
+            if ($OlderThanDays -gt 0) {
+                $r = Remove-OldFolderContent -Path $d.Path -OlderThanDays $OlderThanDays
+                $files += $r.deleted
+                $freed = [double]$r.bytes
+            } else {
+                $before = (Get-FolderSizeMB $d.Path) * 1MB
+                $files += (Remove-FolderContent $d.Path)
+                $after  = (Get-FolderSizeMB $d.Path) * 1MB
+                $freed  = [math]::Max(0, $before - $after)
+            }
             $totalFreed += $freed
-            $details += [PSCustomObject]@{ name = $d.Name; freedMB = [math]::Round($freed/1MB, 2) }
+            $details += [PSCustomObject]@{ name = $d.Name; freedMB = [math]::Round($freed/1MB, 2); olderThanDays = $OlderThanDays }
         }
         Out-Json ([PSCustomObject]@{
             ok = $true
             freedMB = [math]::Round($totalFreed/1MB, 2)
             filesDeleted = $files
+            olderThanDays = $OlderThanDays
             details = $details
         })
     }

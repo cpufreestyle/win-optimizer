@@ -79,7 +79,43 @@
     Enable-GridCellTips -Grid $script:DgvStartup -FullTextMap $startupTips
     $page.Controls.Add($script:DgvStartup)
 
-    $script:btnDisableStartup = New-Button "禁用选中项" 20 446 160 40 $Theme.Success 10
+    # 僵尸启动项：目标文件已不存在，禁用零风险；签名厂商仍按共享库的护栏跳过
+    $script:ZeroRiskStartup = @()
+    foreach ($item in $script:StartupItems) {
+        $target = Get-StartupTargetPath -Item $item
+        if (-not $target) { continue }
+        if (Test-Path -LiteralPath $target) { continue }
+        $script:ZeroRiskStartup += $item
+    }
+    $script:LblZeroRiskStartup = New-Label "检测到 $($script:ZeroRiskStartup.Count) 个目标文件已不存在的僵尸启动项（禁用零风险）" 20 414 760 20 $Fonts.Small $Theme.TextDim
+    $page.Controls.Add($script:LblZeroRiskStartup)
+    $script:BtnZeroRiskStartup = New-Button "禁用僵尸项" 20 440 160 36 $Theme.Warning 10
+    $script:BtnZeroRiskStartup.Enabled = ($script:ZeroRiskStartup.Count -gt 0)
+    $script:BtnZeroRiskStartup.Add_Click({
+        try {
+            if ($script:ZeroRiskStartup.Count -eq 0) { return }
+            $ans = [System.Windows.Forms.MessageBox]::Show(
+                "将禁用 $($script:ZeroRiskStartup.Count) 个目标文件已不存在的启动项（执行前自动备份）。是否继续？",
+                "确认禁用僵尸启动项",
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Warning)
+            if ($ans -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+            $res = Disable-StartupItems -BackupDir $script:BackupDir -Items $script:ZeroRiskStartup
+            Write-Log "僵尸启动项备份: $($res.backup)"
+            foreach ($d in $res.details) { Write-Log "[$($d.Result)] $($d.Name)" }
+            Write-Log "僵尸启动项处理完成：禁用 $($res.disabled) 项，失败 $($res.failed) 项" "SUCCESS"
+            [System.Windows.Forms.MessageBox]::Show("已禁用 $($res.disabled) 个僵尸启动项。", "完成", `
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            Build-StartupPage
+        } catch {
+            Write-Log "禁用僵尸启动项出错: $($_.Exception.Message)" "ERROR"
+            [System.Windows.Forms.MessageBox]::Show("禁用僵尸启动项出错: $($_.Exception.Message)", "错误", `
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    })
+    $page.Controls.Add($script:BtnZeroRiskStartup)
+
+    $script:btnDisableStartup = New-Button "禁用选中项" 200 440 160 36 $Theme.Success 10
     $script:btnDisableStartup.Add_Click({
         try {
         if ($script:DgvStartup.SelectedRows.Count -eq 0) {
@@ -118,7 +154,7 @@
     })
     $page.Controls.Add($script:btnDisableStartup)
 
-    $btnRefreshStartup = New-Button "刷新列表" 190 446 120 40 $Theme.AccentDark 10
+    $btnRefreshStartup = New-Button "刷新列表" 380 440 120 36 $Theme.AccentDark 10
     $btnRefreshStartup.Add_Click({ Build-StartupPage })
     $page.Controls.Add($btnRefreshStartup)
 }

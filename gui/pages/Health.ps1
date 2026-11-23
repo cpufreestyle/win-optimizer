@@ -185,13 +185,24 @@
 
             # --- 智能降级建议（只读；复用本次报告，不重复扫盘）---
             $script:HealthTips = Get-SmartRecommendations -Report $r -Top 3
+            $script:HealthAgedClean = Get-SmartRecommendations -Report $r -Top 3 -CleanOlderThanDays 7
             $script:BtnHealthApplyTips.Enabled = (@($script:HealthTips.startup).Count -gt 0)
+            $script:LblAgedClean.Text = "保守清理：体检后显示旧临时文件数量"
+            $script:BtnAgedClean.Enabled = $false
             $tipLines = @(Format-SmartRecommendations $script:HealthTips)
             if ($tipLines.Count -eq 0) {
                 $script:TxtHealthTips.Lines = @("当前体检未命中需要优先处理的项目。")
             } else {
                 $script:TxtHealthTips.Lines = $tipLines
             }
+            $agedCleanMB = 0.0
+            foreach ($c in @($script:HealthAgedClean.clean)) { $agedCleanMB += [double]$c.mb }
+            $script:LblAgedClean.Text = if ($agedCleanMB -gt 0) {
+                "保守清理：可安全清理超过 7 天的旧临时文件约 $($agedCleanMB.ToString('N1')) MB，不碰最近文件"
+            } else {
+                '保守清理：未发现超过 7 天的旧临时文件'
+            }
+            $script:BtnAgedClean.Enabled = ($agedCleanMB -gt 0)
 
             # --- 与上次对比 ---
             $script:LblHealthCompare.Text = if ($prev) {
@@ -398,6 +409,60 @@
         }
     })
     $page.Controls.Add($script:BtnHealthApplyTips)
+
+    # 保守清理：只删 7 天前旧临时文件，最近写入的文件和运行中程序不动
+    $script:LblAgedClean = New-Label "保守清理：体检后显示旧临时文件数量" 20 1040 760 24 $Fonts.Small $Theme.TextDim
+    $script:LblAgedClean.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+    $script:BtnAgedClean = New-Button "清理旧文件" 20 1074 150 40 $Theme.Success 11
+    $script:BtnAgedClean.Enabled = $false
+    $script:BtnAgedClean.Add_Click({
+        try {
+            if (-not $script:HealthReport -or -not $script:HealthAgedClean) {
+                [System.Windows.Forms.MessageBox]::Show("请先点击「开始体检」。", "提示", `
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+                return
+            }
+            $preview = @()
+            $totalMB = 0.0
+            foreach ($c in @($script:HealthAgedClean.clean)) {
+                $totalMB += [double]$c.mb
+                $preview += ("{0}`n    {1:N1} MB`n    {2}`n" -f $c.name, [double]$c.mb, $c.path)
+            }
+            if ($preview.Count -eq 0) {
+                [System.Windows.Forms.MessageBox]::Show("当前没有可安全清理的旧临时文件。", "提示", `
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+                return
+            }
+            $ans = [System.Windows.Forms.MessageBox]::Show(
+                "将只清理超过 7 天的旧临时文件（约 $($totalMB.ToString('N1')) MB），最近文件与正在使用的程序不会被删除。`n`n$($preview -join "`n")是否继续？",
+                "确认保守清理",
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Warning)
+            if ($ans -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+
+            $this.Enabled = $false
+            $this.Text = "清理中..."
+            Invoke-UIRefresh
+            $ar = Invoke-SmartRecommendations -Report $script:HealthReport -BackupDir $script:BackupDir `
+                                              -CleanOlderThanDays 7 -Top 3
+            foreach ($n in @($ar.applied)) { Write-Log "[保守清理] $n" "SUCCESS" }
+            foreach ($f in @($ar.failed))  { Write-Log "[失败] $($f.name) —— $($f.reason)" "ERROR" }
+            $msg = if ($ar.ok) { "旧文件清理完成。`n$($ar.applied -join "`n")" }
+                   elseif ($ar.error) { $ar.error }
+                   else { "部分项目处理失败，详情见日志。" }
+            [System.Windows.Forms.MessageBox]::Show($msg, "保守清理", `
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            $this.Enabled = $true
+            $this.Text = "清理旧文件"
+            $script:BtnHealthScan.PerformClick()
+        } catch {
+            Write-Log "保守清理出错: $($_.Exception.Message)" "ERROR"
+            $this.Enabled = $true
+            $this.Text = "清理旧文件"
+        }
+    })
+    $page.Controls.Add($script:LblAgedClean)
+    $page.Controls.Add($script:BtnAgedClean)
 
     # 对比结果提示：从操作行挪到操作行下方独占一行（原先 x=340 与 515 的复选框、350 的导出按钮互相压字）
     $script:LblHealthCompare = New-Label "点击「开始体检」后，这里会显示与上一次体检的对比。" 20 762 760 24 $Fonts.Small $Theme.TextDim

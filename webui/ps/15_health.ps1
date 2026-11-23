@@ -29,6 +29,7 @@ param(
     [int]$DnsOption = 1,
     [string]$PowerPlanGuid = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c",
     [int]$Top = 3,
+    [int]$OlderThanDays = 0,
     [int]$Days = 30,
     [ValidateSet("html", "md", "Html", "Markdown")][string]$Format = "html",
     [string]$From = "",
@@ -121,7 +122,9 @@ try {
         # 没有历史报告时才临时扫一次（跳过慢的可清理空间统计）。
         $tipsReport = Get-PreviousHealthReport -BackupDir $backupDir
         if (-not $tipsReport) { $tipsReport = Get-SystemHealthReport -SkipCleanScan }
-        $tips = Get-SmartRecommendations -Report $tipsReport -Top 3
+        $tipsArgs = @{ Report = $tipsReport; Top = 3 }
+        if ($OlderThanDays -gt 0) { $tipsArgs['CleanOlderThanDays'] = $OlderThanDays }
+        $tips = Get-SmartRecommendations @tipsArgs
         Out-Json ([PSCustomObject]@{
             ok      = $true
             startup = @($tips.startup)
@@ -139,11 +142,19 @@ try {
         # 与 -Action tips 同源：优先用最近一次体检报告判断该不该给建议
         $tipsReport = Get-PreviousHealthReport -BackupDir $backupDir
         if (-not $tipsReport) { $tipsReport = Get-SystemHealthReport -SkipCleanScan }
-        $r = Invoke-SmartRecommendations -Report $tipsReport -Top $Top -BackupDir $backupDir `
-                                          -WhatIf:$WhatIf -CreateRestorePoint:$rpOn
+        $applyArgs = @{
+            Report = $tipsReport
+            Top = $Top
+            BackupDir = $backupDir
+            WhatIf = [bool]$WhatIf
+            CreateRestorePoint = $rpOn
+        }
+        if ($OlderThanDays -gt 0) { $applyArgs['CleanOlderThanDays'] = $OlderThanDays }
+        $r = Invoke-SmartRecommendations @applyArgs
         Out-Json ([PSCustomObject]@{
             ok           = $r.ok
             whatIf       = $r.whatIf
+            startupOnly  = $r.startupOnly
             applied      = @($r.applied)
             failed       = @($r.failed | ForEach-Object { [PSCustomObject]@{ name = $_.name; reason = $_.reason } })
             backup       = $r.backup

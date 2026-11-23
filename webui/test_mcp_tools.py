@@ -56,3 +56,22 @@ def test_guided_apply_tool_dry_run_is_side_effect_free():
     result = registered["guided_apply"](dry_run=True, skip_clean_scan=True)
     assert result.get("dryRun") is True, result
     assert len(result.get("results") or []) > 0, result
+
+
+def test_conservative_clean_tools_are_registered():
+    registered = {}
+
+    class FakeServer:
+        def tool(self):
+            def deco(fn):
+                registered[fn.__name__] = fn
+                return fn
+
+            return deco
+
+    app._register_mcp_tools(FakeServer())
+    assert "clean_old" in registered
+    assert "health_aged_clean" in registered
+    result = registered["clean_old"](days=7, items="usertemp", what_if=True)
+    assert result.get("ok") is True, result
+    assert result.get("olderThanDays") == 7, result

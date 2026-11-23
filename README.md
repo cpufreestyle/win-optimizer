@@ -620,6 +620,15 @@ Compact.exe /CompactOS:never
 
 
 
+### v3.11.6 (2026-11-23)
+
+- **新增保守清理与僵尸启动项禁用**
+
+  - 体检页新增「清理旧文件」：只删除超过 7 天的旧临时文件，最近写入的文件不动，执行前确认并列出目录与体积。
+  - 启动项页新增「禁用僵尸项」：只处理目标文件已不存在的启动项，执行前自动备份。
+  - WebUI / MCP 新增 `clean_old`、`health_aged_clean`，`health_apply_tips` 支持 `older_than_days`。
+  - 回归：Pester 308/308、pytest 4/4、PSScriptAnalyzer 0 Error、布局审计 13 页 × 4 尺寸 `FINDINGS=0`。
+
 ### v3.11.5 (2026-11-18)
 
 - **PS7 启动与向导执行稳定性修复**
