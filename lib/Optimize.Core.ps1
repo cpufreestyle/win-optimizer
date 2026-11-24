@@ -43,11 +43,11 @@ function Get-OptConfig {
     }
 }
 
-# 版本号单一来源：优先取 config/optimization.json 的 version，缺失时回退 3.1.0
+# 版本号单一来源：优先取 config/optimization.json 的 version，缺失时回退一个已知版本
 function Get-OptVersion {
     $cfg = Get-OptConfig
     if ($cfg -and $cfg.version) { return [string]$cfg.version }
-    return "3.1.0"
+    return "3.11.7"
 }
 
 # 取本机名：优先环境变量 COMPUTERNAME，缺失时回退 .NET MachineName
@@ -458,9 +458,9 @@ function Get-ServiceDependents {
             try {
                 $svc = Get-Service -Name $d.Name -ErrorAction SilentlyContinue
                 if ($svc -and $svc.Status -eq 'Running') { $running += $d.Name }
-            } catch { }
+            } catch { Write-OptLog ("[服务依赖] 查询失败 {0}: {1}" -f $d.Name, $_.Exception.Message) 'WARN' }
         }
-    } catch { }
+    } catch { Write-OptLog ("[服务依赖] WMI 查询失败 {0}: {1}" -f $Name, $_.Exception.Message) 'WARN' }
     return $running
 }
 
@@ -648,7 +648,7 @@ function Remove-FolderContent {
                         Remove-Item -LiteralPath $dir.FullName -Force -ErrorAction Stop
                         $result.dirs++
                     }
-                } catch { }
+                } catch { Write-OptLog ("[清理] 空目录移除失败 {0}: {1}" -f $dir.FullName, $_.Exception.Message) 'WARN' }
             }
         }
     } catch {
@@ -863,7 +863,7 @@ function Get-StartupItems {
                 Path   = $app.Location
             }
         }
-    } catch { }
+    } catch { Write-OptLog ("[启动项] Win32_StartupCommand 枚举失败: {0}" -f $_.Exception.Message) 'WARN' }
 
     # 统一编号
     $i = 0
