@@ -351,6 +351,64 @@ Describe 'Optimize.Core conservative clean and startup zero-risk paths' {
             Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
+
+    It 'aged mode reuses the report measurement when it was recorded for the same age' {
+        $missing = Join-Path $env:TEMP ('nosuch_' + (New-Guid).ToString('N'))
+        Mock Get-CleanTargets { @([PSCustomObject]@{ key = 'usertemp'; name = '用户临时文件'; path = $missing; web = $true }) }
+        $rep = [PSCustomObject]@{
+            issues  = @([PSCustomObject]@{ id = 'disk.cleanable'; severity = 'Medium' })
+            metrics = [PSCustomObject]@{ cleanTargets = @([PSCustomObject]@{ name = '用户临时文件'; mb = 999.0; agedMb = 42.5; agedDays = 7 }) }
+        }
+        $aged = Get-SmartRecommendations -Report $rep -Top 3 -CleanOlderThanDays 7
+        @($aged.clean).Count | Should -Be 1
+        $aged.clean[0].mb   | Should -Be 42.5
+        $aged.clean[0].name | Should -Match '仅旧文件'
+    }
+
+    It 'aged mode rescans when the report has no aged measurement for that age' {
+        $tmp = Join-Path $env:TEMP ('agedfallback_' + (New-Guid).ToString('N'))
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        $oldFile = Join-Path $tmp 'old.bin'
+        [System.IO.File]::WriteAllBytes($oldFile, (New-Object byte[] (2MB)))
+        (Get-Item $oldFile).LastWriteTime = (Get-Date).AddDays(-30)
+        try {
+            Mock Get-CleanTargets { @([PSCustomObject]@{ key = 'usertemp'; name = '用户临时文件'; path = $tmp; web = $true }) }
+            $rep = [PSCustomObject]@{
+                issues  = @([PSCustomObject]@{ id = 'disk.cleanable'; severity = 'Medium' })
+                metrics = [PSCustomObject]@{ cleanTargets = @([PSCustomObject]@{ name = '用户临时文件'; mb = 999.0 }) }
+            }
+            $aged = Get-SmartRecommendations -Report $rep -Top 3 -CleanOlderThanDays 7
+            $aged.clean[0].mb | Should -Be 2.0
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'CleanOnly never disables startup items even when the report flags them' {
+        $tmp = Join-Path $env:TEMP ('cleanonly_' + (New-Guid).ToString('N'))
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        [System.IO.File]::WriteAllBytes((Join-Path $tmp 'old.bin'), (New-Object byte[] (2MB)))
+        (Get-Item (Join-Path $tmp 'old.bin')).LastWriteTime = (Get-Date).AddDays(-30)
+        try {
+            Mock Get-CleanTargets { @([PSCustomObject]@{ key = 'usertemp'; name = '用户临时文件'; path = $tmp; web = $true }) }
+            Mock Get-StartupItems { @([PSCustomObject]@{ Index=1; Name='ZedUpdater'; Value='"C:\gone\ZedUpdater.exe"'; Scope='当前用户'; Source='注册表'; Path='HKCU:\Run' }) }
+            Mock Disable-StartupItems { throw 'startup must not be touched in CleanOnly mode' }
+            $rep = [PSCustomObject]@{
+                issues  = @(
+                    [PSCustomObject]@{ id = 'startup.many';   severity = 'Medium' },
+                    [PSCustomObject]@{ id = 'disk.cleanable'; severity = 'Medium' }
+                )
+                metrics = [PSCustomObject]@{ cleanTargets = @() }
+            }
+            $r = Invoke-SmartRecommendations -Report $rep -CleanOlderThanDays 7 -CleanOnly -WhatIf -SkipBackup -CreateRestorePoint:$false
+            $r.error | Should -BeNullOrEmpty
+            @($r.applied | Where-Object { $_ -like '*ZedUpdater*' }).Count | Should -Be 0
+            @($r.applied | Where-Object { $_ -like '*用户临时文件*' }).Count | Should -Be 1
+            Assert-MockCalled -CommandName 'Disable-StartupItems' -Times 0 -Scope It
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 Describe 'Optimize.Core startup items (shared by CLI/GUI/WebUI)' {
