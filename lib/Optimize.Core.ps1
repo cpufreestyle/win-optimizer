@@ -1029,7 +1029,10 @@ function Backup-VisualEffects {
     }
     try {
         ($backup | ConvertTo-Json -Depth 3) | Set-Content -Path $file -Encoding UTF8
-    } catch { }
+    } catch {
+        Write-OptLog ("[备份] 视觉效果备份写入失败 {0}: {1}" -f $file, $_.Exception.Message) 'WARN'
+        return $null
+    }
     Write-BackupManifest -BackupFile $file -Domain 'visual' -ItemCount $backup.Keys.Count | Out-Null
     return $file
 }
@@ -1092,7 +1095,7 @@ function Set-VisualEffectProfile {
             try {
                 Set-ItemProperty -Path $perfKey -Name 'UserPreferencesMask' `
                     -Value ([byte[]](0x90, 0x12, 0x01, 0x80, 0x10, 0x00, 0x00, 0x00)) -ErrorAction Stop
-            } catch { }
+            } catch { Write-OptLog ("[视觉效果] UserPreferencesMask 写入失败，最佳性能可能未完全生效: {0}" -f $_.Exception.Message) 'WARN' }
         }
         Set-VisualRegValue $advKey 'TaskbarAnimations'   0 'DWord' -WhatIf:$WhatIf | Out-Null
         Set-VisualRegValue $advKey 'ListviewAlphaSelect' 0 'DWord' -WhatIf:$WhatIf | Out-Null
@@ -1221,7 +1224,10 @@ function Backup-PowerPlan {
             activeName = $activeName
             query      = $query
         } | ConvertTo-Json -Depth 4 | Out-File -FilePath $file -Encoding UTF8
-    } catch { }
+    } catch {
+        Write-OptLog ("[备份] 电源计划备份写入失败 {0}: {1}" -f $file, $_.Exception.Message) 'WARN'
+        return $null
+    }
     Write-BackupManifest -BackupFile $file -Domain 'power' -ItemCount 1 | Out-Null
     return $file
 }
@@ -3305,7 +3311,7 @@ function Backup-DomainState {
             'network'   { return (Backup-NetworkSettings  -BackupDir $BackupDir) }
             'telemetry' { return (Backup-TelemetryTaskStates -BackupDir $BackupDir) }
         }
-    } catch { }
+    } catch { Write-OptLog ("[备份] 回滚前备份 {0} 失败: {1}" -f $Domain, $_.Exception.Message) 'WARN' }
     return $null
 }
 
@@ -3447,7 +3453,7 @@ function Restore-VisualEffects {
             if (-not $section) { continue }
             $regPath = $keyMap[$k]
             if (-not (Test-Path -LiteralPath $regPath)) {
-                try { New-Item -Path $regPath -Force | Out-Null } catch { }
+                try { New-Item -Path $regPath -Force | Out-Null } catch { Write-OptLog ("[恢复] 创建注册表键失败 {0}: {1}" -f $regPath, $_.Exception.Message) 'WARN' }
             }
             foreach ($p in ($section.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' })) {
                 try {
@@ -3763,7 +3769,7 @@ function Get-Profiles {
             $src = [ordered]@{}
             foreach ($p in @($cfg.profiles.PSObject.Properties)) { $src[$p.Name] = $p.Value }
         }
-    } catch { }
+    } catch { Write-OptLog ("[组合包] 读取 config profiles 失败，回退内置默认: {0}" -f $_.Exception.Message) 'WARN' }
 
     $out = @()
     foreach ($k in @($src.Keys)) {

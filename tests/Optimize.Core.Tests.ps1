@@ -411,6 +411,44 @@ Describe 'Optimize.Core conservative clean and startup zero-risk paths' {
     }
 }
 
+Describe 'Optimize.Core backup write failures are reported' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+
+    It 'Backup-VisualEffects returns null and skips the manifest when the write fails' {
+        $dir = Join-Path $env:TEMP ('visbk_' + (New-Guid).ToString('N'))
+        try {
+            Mock Set-Content { throw 'disk full' }
+            Mock Write-OptLog { }
+            Mock Write-BackupManifest { 'manifest' }
+            $r = Backup-VisualEffects -BackupDir $dir
+            $r | Should -BeNullOrEmpty
+            Assert-MockCalled -CommandName 'Write-BackupManifest' -Times 0 -Scope It
+            Assert-MockCalled -CommandName 'Write-OptLog' -Times 1 -Scope It -ParameterFilter { $Message -like '*视觉效果备份写入失败*' }
+        } finally {
+            Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Backup-PowerPlan returns null and skips the manifest when the write fails' {
+        $dir = Join-Path $env:TEMP ('pwrbk_' + (New-Guid).ToString('N'))
+        try {
+            Mock Get-ActivePowerPlan { '381b4222-f694-41f0-9685-ff5bb260df2e' }
+            Mock Get-PowerPlanCatalog { @() }
+            Mock Out-File { throw 'disk full' }
+            Mock Write-OptLog { }
+            Mock Write-BackupManifest { 'manifest' }
+            $r = Backup-PowerPlan -BackupDir $dir
+            $r | Should -BeNullOrEmpty
+            Assert-MockCalled -CommandName 'Write-BackupManifest' -Times 0 -Scope It
+            Assert-MockCalled -CommandName 'Write-OptLog' -Times 1 -Scope It -ParameterFilter { $Message -like '*电源计划备份写入失败*' }
+        } finally {
+            Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 Describe 'Optimize.Core startup items (shared by CLI/GUI/WebUI)' {
     BeforeAll {
         . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')

@@ -37,7 +37,11 @@ Write-Host "  $plans" -ForegroundColor Gray
 # --- 备份（统一走共享库）---
 $backupDir = Join-Path (Split-Path -Parent $PSScriptRoot) "backups"
 $backupFile = Backup-PowerPlan -BackupDir $backupDir
-Write-Host "`n  备份已保存: $backupFile" -ForegroundColor Green
+if ($backupFile) {
+    Write-Host "`n  备份已保存: $backupFile" -ForegroundColor Green
+} else {
+    Write-Host "`n  备份失败（详见日志），继续操作将无法自动回滚" -ForegroundColor Red
+}
 
 # --- 显示选项 ---
 Write-Host "`n[2/3] 选择优化方案:" -ForegroundColor Yellow

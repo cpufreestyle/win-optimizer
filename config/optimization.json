@@ -1,6 +1,6 @@
 {
   "version": "3.11.8",
-    "description": "7代CPU老电脑优化配置文件",
+    "description": "老电脑优化配置文件",
     "services": {
         "safe_to_disable": [
             { "name": "DiagTrack",         "desc": "诊断跟踪服务（遥测）" },
