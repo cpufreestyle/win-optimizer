@@ -29,7 +29,11 @@ $backupDir = Join-Path (Split-Path -Parent $PSScriptRoot) "backups"
 
 Write-Host "`n[1/3] 备份当前视觉效果设置..." -ForegroundColor Yellow
 $backupFile = Backup-VisualEffects -BackupDir $backupDir
-Write-Host "  备份已保存: $backupFile" -ForegroundColor Green
+if ($backupFile) {
+    Write-Host "  备份已保存: $backupFile" -ForegroundColor Green
+} else {
+    Write-Host "  备份失败（详见日志），继续操作将无法自动回滚" -ForegroundColor Red
+}
 
 # --- 显示选项 ---
 Write-Host "`n[2/3] 选择优化级别:" -ForegroundColor Yellow
