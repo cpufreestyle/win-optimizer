@@ -7,7 +7,7 @@
 #>
 param(
     [ValidateSet("scan", "clean")]$Action = "scan",
-    [string]$Items = "all",  # 逗号分隔索引，或 "all"
+    [string]$Items = "all",  # 逗号分隔的 key（temp/usertemp/…）或序号，或 "all"
     [int]$OlderThanDays = 0  # >0 时只清理指定天数之前的旧文件
 )
 
@@ -72,11 +72,11 @@ try {
         if ($Items -eq "all") {
             $targets = $cleanDefs
         } else {
-            $idxs = $Items -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ -match "^\d+$" }
+            $selectors = @($Items -split "," | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ -ne "" })
             $i = 0
             foreach ($d in $cleanDefs) {
                 $i++
-                if ($idxs -contains [string]$i) { $targets += $d }
+                if (($selectors -contains [string]$i) -or ($selectors -contains ([string]$d.Key).ToLower())) { $targets += $d }
             }
         }
         $totalFreed = 0

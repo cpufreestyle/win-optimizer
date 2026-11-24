@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    7代CPU老电脑 Windows 系统优化工具
+    老电脑 Windows 系统优化工具
 .DESCRIPTION
     专为老电脑设计的系统优化脚本。
     包含临时文件清理、服务优化、启动项管理、视觉效果调整、电源计划优化、
@@ -96,7 +96,7 @@ function Show-Banner {
  |  __/|  _ <| |_| | |_| | |___ / ___ \ |___ 
  |_|   |_| \_\\___/|____/|_____/_/   \_\____|
                                               
-   7代CPU老电脑 Windows 优化工具 v$Version
+   老电脑 Windows 优化工具 v$Version
    专为老电脑打造 | Windows 10/11
 "@
     Write-Host $banner -ForegroundColor Cyan

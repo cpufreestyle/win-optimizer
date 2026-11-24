@@ -1,6 +1,6 @@
 ﻿@echo off
 chcp 65001 >nul 2>&1
-title PC-Optimizer-7thGen - 7代CPU老电脑优化工具
+title PC-Optimizer-7thGen - 老电脑优化工具
 
 REM ============================================================
 REM  优先使用 PowerShell 7，未安装时回退到 Windows PowerShell 5.1
@@ -39,7 +39,7 @@ set "APP_VER=%APP_VER: =%"
 echo.
 echo   ================================================================
 echo     PC-Optimizer-7thGen  v%APP_VER%
-    echo     7代CPU老电脑 Windows 优化工具  (Michaelqiu 出品)
+    echo     老电脑 Windows 优化工具  (Michaelqiu 出品)
 echo   ================================================================
 echo.
 

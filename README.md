@@ -4,7 +4,7 @@
 
 > **Michaelqiu 出品**
 >
-> 专为 **7 代及更老 CPU** 的 Windows 10/11 电脑设计的系统优化工具集
+> 专为 **老电脑**（Intel 7 代及更早 CPU）的 Windows 10/11 电脑设计的系统优化工具集
 
 > v2.0 已合并 `windows-utils` 仓库的所有实用工具
 
