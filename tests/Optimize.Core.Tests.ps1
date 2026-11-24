@@ -214,7 +214,44 @@ Describe 'Optimize.Core conservative clean and startup zero-risk paths' {
         . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
     }
 
-    It 'Remove-OldFolderContent removes only stale files and reports bytes in WhatIf' {
+    It 'Remove-FolderContent counts a locked file as failed instead of deleted' {
+        $tmp = Join-Path $env:TEMP ('lockclean_' + (New-Guid).ToString('N'))
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        $locked = Join-Path $tmp 'locked.tmp'
+        Set-Content -Path $locked -Value ('L' * 40) -NoNewline
+        $stream = [System.IO.File]::Open($locked, 'Open', 'Read', 'None')
+        try {
+            $r = Remove-FolderContent -Path $tmp
+            $r.failed  | Should -Be 1
+            $r.deleted | Should -Be 0
+            Test-Path -LiteralPath $locked | Should -BeTrue
+        } finally {
+            $stream.Dispose()
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Remove-FolderContent stops when the progress callback asks to cancel' {
+        $tmp = Join-Path $env:TEMP ('tickclean_' + (New-Guid).ToString('N'))
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        1..60 | ForEach-Object { Set-Content -Path (Join-Path $tmp "f$_.tmp") -Value 'x' -NoNewline }
+        try {
+            $r = Remove-FolderContent -Path $tmp -Tick { param($done, $total) $false }
+            $r.cancelled | Should -BeTrue
+            $r.deleted   | Should -Be 50
+            @(Get-ChildItem -LiteralPath $tmp -File).Count | Should -Be 10
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Describe 'Optimize.Core conservative clean and startup zero-risk paths' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+
+    It 'Remove-FolderContent removes only stale files and reports bytes in WhatIf' {
         $tmp = Join-Path $env:TEMP ('agedclean_' + (New-Guid).ToString('N'))
         $oldDir = Join-Path $tmp 'old'
         New-Item -ItemType Directory -Path $oldDir -Force | Out-Null
@@ -224,12 +261,12 @@ Describe 'Optimize.Core conservative clean and startup zero-risk paths' {
         Set-Content -Path $newFile -Value ('B' * 100) -NoNewline
         (Get-Item $oldFile).LastWriteTime = (Get-Date).AddDays(-30)
         try {
-            $preview = Remove-OldFolderContent -Path $tmp -OlderThanDays 7 -WhatIf
+            $preview = Remove-FolderContent -Path $tmp -OlderThanDays 7 -WhatIf
             $preview.deleted | Should -Be 1
             $preview.bytes   | Should -Be 100
             Test-Path $oldFile | Should -BeTrue
 
-            $applied = Remove-OldFolderContent -Path $tmp -OlderThanDays 7
+            $applied = Remove-FolderContent -Path $tmp -OlderThanDays 7
             $applied.deleted | Should -Be 1
             Test-Path $oldFile | Should -BeFalse
             Test-Path $newFile | Should -BeTrue

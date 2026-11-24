@@ -594,52 +594,52 @@ function Restore-AutoUpdate {
 }
 
 # 删除文件夹内的所有内容（保留文件夹本身），返回成功删除的条目数
+# 清空文件夹内容（保留文件夹本身），三端（CLI / GUI / WebUI / 体检修复）共用这一份实现。
+#   OlderThanDays  >0 时只删除 LastWriteTime 早于该天数的普通文件（最近文件与运行中程序不动）
+#   Tick           可选回调 { param($done, $total) ... }，每 50 个文件及结束时调用；返回 $false 即取消
+# 只删普通文件，再移除变空的子目录；文件被占用或无权限时计入 failed，
+# 绝不把删不掉的文件算成「已删除」，否则界面会报出一个虚假的释放量。
+# 返回 @{ deleted; bytes; failed; dirs; cancelled; error }；-AsCount 时仅返回整数 deleted（兼容旧调用方）。
 function Remove-FolderContent {
-    param([string]$Path, [switch]$WhatIf)
-    $cnt = 0
-    if ([string]::IsNullOrWhiteSpace($Path)) { return $cnt }
-    try {
-        if (-not (Test-Path -LiteralPath $Path)) { return $cnt }
-        Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
-            if ($WhatIf) { $cnt++; return }
-            try { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue; $cnt++ } catch {}
-        }
-    } catch {}
-    return $cnt
-}
-
-# 按文件年龄清理文件夹内容：只删除 LastWriteTime 早于截止时间的普通文件，
-# 默认还会移走因此变空的目录；正在使用/最近写入的文件不动，避免误伤运行中的程序。
-# 返回 @{ deleted; bytes; skipped; dirs; error }，WhatIf 时只统计不落盘。
-function Remove-OldFolderContent {
     param(
         [string]$Path,
-        [int]$OlderThanDays = 7,
-        [int]$MaxBytes = 0,
-        [switch]$WhatIf
+        [switch]$WhatIf,
+        [switch]$AsCount,
+        [int]$OlderThanDays = 0,
+        [scriptblock]$Tick
     )
-    $result = [PSCustomObject]@{ deleted = 0; bytes = [double]0; skipped = 0; dirs = 0; error = $null }
-    if ([string]::IsNullOrWhiteSpace($Path) -or $OlderThanDays -lt 0) { return $result }
+    $result = [PSCustomObject]@{ deleted = 0; bytes = [double]0; failed = 0; dirs = 0; cancelled = $false; error = $null }
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        if ($AsCount) { return 0 }
+        return $result
+    }
     try {
-        if (-not (Test-Path -LiteralPath $Path)) { return $result }
-        $cutoff = (Get-Date).AddDays(-$OlderThanDays)
-        $files = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -File -ErrorAction SilentlyContinue |
-                   Where-Object { $_.LastWriteTime -lt $cutoff })
-        $files = @($files | Sort-Object @{Expression = { $_.LastWriteTime }; Descending = $true})
-        foreach ($file in $files) {
-            $length = [double]$file.Length
-            if ($MaxBytes -gt 0 -and ($result.bytes + $length) -gt $MaxBytes) {
-                $result.skipped++
-                continue
-            }
-            if (-not $WhatIf) {
-                try { Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop }
-                catch { $result.skipped++; continue }
-            }
-            $result.deleted++
-            $result.bytes += $length
+        $files = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -File -ErrorAction SilentlyContinue)
+        if ($OlderThanDays -gt 0) {
+            $cutoff = (Get-Date).AddDays(-$OlderThanDays)
+            $files = @($files | Where-Object { $_.LastWriteTime -lt $cutoff })
         }
-        if (-not $WhatIf) {
+        $total = $files.Count
+        $done = 0
+        foreach ($file in $files) {
+            $done++
+            if ($WhatIf) {
+                $result.deleted++
+                $result.bytes += [double]$file.Length
+            } else {
+                try {
+                    Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop
+                    $result.deleted++
+                    $result.bytes += [double]$file.Length
+                } catch {
+                    $result.failed++
+                }
+            }
+            if ($Tick -and ((($done % 50) -eq 0) -or ($done -eq $total))) {
+                if (-not (& $Tick $done $total)) { $result.cancelled = $true; break }
+            }
+        }
+        if (-not $WhatIf -and -not $result.cancelled) {
             $dirs = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -Directory -ErrorAction SilentlyContinue |
                       Sort-Object @{Expression = { $_.FullName.Length }; Descending = $true})
             foreach ($dir in $dirs) {
@@ -654,8 +654,10 @@ function Remove-OldFolderContent {
     } catch {
         $result.error = $_.Exception.Message
     }
+    if ($AsCount) { return $result.deleted }
     return $result
 }
+
 
 # ============================================================
 #  清理目标清单（CLI / WebUI 共享的单一数据源）
@@ -2185,19 +2187,24 @@ function Get-SystemHealthReport {
     # --- 可清理空间（递归统计，较慢，可用 -SkipCleanScan 跳过）---
     if (-not $SkipCleanScan) {
         $cleanable = 0
+        $safeCleanable = [double]0
         $perTarget = @()
         foreach ($t in @(Get-CleanTargets)) {
             $b = Get-FolderSize $t.path
+            $aged = Remove-FolderContent -Path $t.path -OlderThanDays 7 -WhatIf
+            $safeCleanable += [double]$aged.bytes
             if ($b -gt 0) {
                 $perTarget += [PSCustomObject]@{ name = $t.name; mb = [math]::Round($b / 1MB, 1) }
                 $cleanable += $b
             }
         }
         $metrics.cleanableMB = [math]::Round($cleanable / 1MB, 1)
+        $metrics.cleanableSafeMB = [math]::Round($safeCleanable / 1MB, 1)
         $metrics.cleanTargets = $perTarget
         if ($metrics.cleanableMB -gt 500) {
             $issues += New-HealthIssue 'disk.cleanable' 'Medium' "可回收约 $($metrics.cleanableMB) MB" `
-                '临时文件/缓存/更新下载缓存等占用较多空间' '使用菜单 [2] 临时文件清理' 'disk.clean'
+                ("临时文件/缓存等共占用 {0} MB，其中超过 7 天的旧文件约 {1} MB 可安全清理" -f $metrics.cleanableMB, $metrics.cleanableSafeMB) `
+                '使用菜单 [2] 临时文件清理，或体检页「清理旧文件」' 'disk.clean'
         }
     }
 
@@ -2593,12 +2600,21 @@ function Invoke-HealthRemediation {
             $step.summary = "电源计划已切换为 $(if ($r.appliedGuid) { $r.appliedGuid } else { $PowerPlanGuid })"
         }
         elseif ($item.actionKey -eq 'disk.clean') {
-            $freed = 0
+            $deleted = 0
+            $failed = 0
+            $freedBytes = [double]0
             foreach ($t in @(Get-CleanTargets -Web)) {
-                $freed += [int](Remove-FolderContent -Path $t.path -WhatIf:$WhatIf)
+                $cleaned = Remove-FolderContent -Path $t.path -WhatIf:$WhatIf
+                $deleted += [int]$cleaned.deleted
+                $failed += [int]$cleaned.failed
+                $freedBytes += [double]$cleaned.bytes
             }
-            $step.ok      = $true
-            $step.summary = "清理 $(@(Get-CleanTargets -Web).Count) 个目标，删除 $freed 个条目"
+            $step.ok      = ($failed -eq 0)
+            $freedMB = [math]::Round($freedBytes / 1MB, 1)
+            if ($failed -gt 0) {
+                $step.error = "$failed 个文件被占用或无权限，未能删除"
+            }
+            $step.summary = "清理 $(@(Get-CleanTargets -Web).Count) 个目标，删除 $deleted 个文件（${freedMB} MB）" + $(if ($failed -gt 0) { "，$failed 个失败" } else { '' })
         }
         elseif ($item.actionKey -eq 'network.dns') {
             $r = Invoke-NetworkOptimization -BackupDir $bdirOrNil -DnsOption $DnsOption `
@@ -4740,7 +4756,7 @@ function Get-SmartRecommendations {
                 $measurePath = $t.path
                 $measureName = $t.name
                 if ($CleanOlderThanDays -gt 0) {
-                    $aged = Remove-OldFolderContent -Path $t.path -OlderThanDays $CleanOlderThanDays -WhatIf
+                    $aged = Remove-FolderContent -Path $t.path -OlderThanDays $CleanOlderThanDays -WhatIf
                     if ($aged.error) { continue }
                     $measurePath = "$($t.path) (>$($CleanOlderThanDays)天)"
                     $measureName = "$($t.name)（仅旧文件）"
@@ -4905,7 +4921,7 @@ function Invoke-SmartRecommendations {
     }
     foreach ($c in $cleanRecs) {
         $basePath = [string]$c.path -replace '\s*\(>\d+天\)$', ''
-        $aged = Remove-OldFolderContent -Path $basePath -OlderThanDays $CleanOlderThanDays -WhatIf:$WhatIf
+        $aged = Remove-FolderContent -Path $basePath -OlderThanDays $CleanOlderThanDays -WhatIf:$WhatIf
         if ($aged.error) {
             $failedItems += [PSCustomObject]@{ name = [string]$c.name; reason = $aged.error }
         } else {
