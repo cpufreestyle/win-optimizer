@@ -185,7 +185,7 @@
 
             # --- 智能降级建议（只读；复用本次报告，不重复扫盘）---
             $script:HealthTips = Get-SmartRecommendations -Report $r -Top 3
-            $script:HealthAgedClean = Get-SmartRecommendations -Report $r -Top 3 -CleanOlderThanDays 7
+            $script:HealthAgedClean = Get-SmartRecommendations -Report $r -Top 3 -CleanOlderThanDays 7 -CleanOnly
             $script:BtnHealthApplyTips.Enabled = (@($script:HealthTips.startup).Count -gt 0)
             $script:LblAgedClean.Text = "保守清理：体检后显示旧临时文件数量"
             $script:BtnAgedClean.Enabled = $false
@@ -444,7 +444,7 @@
             $this.Text = "清理中..."
             Invoke-UIRefresh
             $ar = Invoke-SmartRecommendations -Report $script:HealthReport -BackupDir $script:BackupDir `
-                                              -CleanOlderThanDays 7 -Top 3
+                                              -CleanOlderThanDays 7 -CleanOnly -Top 3
             foreach ($n in @($ar.applied)) { Write-Log "[保守清理] $n" "SUCCESS" }
             foreach ($f in @($ar.failed))  { Write-Log "[失败] $($f.name) —— $($f.reason)" "ERROR" }
             $msg = if ($ar.ok) { "旧文件清理完成。`n$($ar.applied -join "`n")" }

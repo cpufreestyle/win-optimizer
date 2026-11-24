@@ -2194,7 +2194,7 @@ function Get-SystemHealthReport {
             $aged = Remove-FolderContent -Path $t.path -OlderThanDays 7 -WhatIf
             $safeCleanable += [double]$aged.bytes
             if ($b -gt 0) {
-                $perTarget += [PSCustomObject]@{ name = $t.name; mb = [math]::Round($b / 1MB, 1) }
+                $perTarget += [PSCustomObject]@{ name = $t.name; mb = [math]::Round($b / 1MB, 1); agedMb = [math]::Round([double]$aged.bytes / 1MB, 1); agedDays = 7 }
                 $cleanable += $b
             }
         }
@@ -4662,13 +4662,14 @@ function Get-SmartRecommendations {
         [switch]$IncludeStartup,
         [switch]$IncludeClean,
         [switch]$SkipCleanMeasure,
+        [switch]$CleanOnly,
         [int]$CleanOlderThanDays = 0
     )
     if ($Top -lt 1) { $Top = 1 }
 
     $ids = @()
     if ($Report) { foreach ($i in @($Report.issues)) { $ids += [string]$i.id } }
-    $wantStartup = ($IncludeStartup -or ($ids -contains 'memory.low') -or ($ids -contains 'startup.many'))
+    $wantStartup = (-not $CleanOnly) -and ($IncludeStartup -or ($ids -contains 'memory.low') -or ($ids -contains 'startup.many'))
     $wantClean   = ($IncludeClean   -or ($ids -contains 'disk.space')   -or ($ids -contains 'disk.cleanable'))
 
     # --- 启动项建议 ---
@@ -4742,11 +4743,18 @@ function Get-SmartRecommendations {
             if ($Report.metrics.PSObject.Properties.Name -contains 'cleanTargets') {
                 $mc = @($Report.metrics.cleanTargets)
             }
-            if ($mc.Count -gt 0 -and -not $agedMode) {
+            $canReuse = if ($agedMode) {
+                @($mc | Where-Object { $_.PSObject.Properties.Name -contains 'agedMb' -and [int]$_.agedDays -eq $CleanOlderThanDays }).Count -gt 0
+            } else { $mc.Count -gt 0 }
+            if ($canReuse) {
                 $reused = $true
                 foreach ($t in @(Get-CleanTargets)) {
                     $hit = @($mc | Where-Object { $_.name -eq $t.name })[0]
-                    if ($hit) {
+                    if ($hit -and $agedMode) {
+                        if ([double]$hit.agedMb -gt 0) {
+                            $measured += [PSCustomObject]@{ key = $t.key; name = "$($t.name)（仅旧文件）"; path = "$($t.path) (>$($CleanOlderThanDays)天)"; mb = [double]$hit.agedMb }
+                        }
+                    } elseif ($hit) {
                         $measured += [PSCustomObject]@{ key = $t.key; name = $t.name; path = $t.path; mb = [double]$hit.mb }
                     }
                 }
@@ -4846,6 +4854,7 @@ function Invoke-SmartRecommendations {
         [int]$Top = 3,
         [string]$BackupDir,
         [int]$CleanOlderThanDays = 0,
+        [switch]$CleanOnly,
         [switch]$SkipBackup,
         [switch]$WhatIf,
         [bool]$CreateRestorePoint = (Get-RestorePointDefault)
@@ -4870,7 +4879,10 @@ function Invoke-SmartRecommendations {
         CleanOlderThanDays  = $CleanOlderThanDays
         SkipCleanMeasure    = ($CleanOlderThanDays -le 0)
     }
-    if ($CleanOlderThanDays -gt 0) {
+    if ($CleanOnly) {
+        $getTipsArgs['CleanOnly'] = $true
+        $getTipsArgs['IncludeClean'] = $true
+    } elseif ($CleanOlderThanDays -gt 0) {
         $getTipsArgs['IncludeStartup'] = $true
         $getTipsArgs['IncludeClean'] = $true
     }
