@@ -63,7 +63,7 @@ def _register_mcp_tools(server):
 
     @server.tool()
     def clean(items: str = "all") -> dict:
-        """清理垃圾文件。items: 'all' 或逗号分隔的 key（temp/usertemp/prefetch/wsus/thumb/wer）。"""
+        """清理垃圾文件。items: 'all' 或逗号分隔的 key（temp/usertemp/prefetch/wsus/thumb/wer）或序号。"""
         return run_ps("02_clean.ps1", "-Action", "clean", "-Items", str(items))
 
     @server.tool()
