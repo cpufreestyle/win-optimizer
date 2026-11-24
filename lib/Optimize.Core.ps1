@@ -4734,6 +4734,7 @@ function Get-SmartRecommendations {
     $recClean = @()
     if ($wantClean) {
         $measured = @()
+        $agedMode = ($CleanOlderThanDays -gt 0)
         # 优先复用体检已经量好的体积：同一轮里不再扫一遍盘
         $reused = $false
         if ($Report -and ($Report.PSObject.Properties.Name -contains 'metrics')) {
@@ -4741,7 +4742,7 @@ function Get-SmartRecommendations {
             if ($Report.metrics.PSObject.Properties.Name -contains 'cleanTargets') {
                 $mc = @($Report.metrics.cleanTargets)
             }
-            if ($mc.Count -gt 0) {
+            if ($mc.Count -gt 0 -and -not $agedMode) {
                 $reused = $true
                 foreach ($t in @(Get-CleanTargets)) {
                     $hit = @($mc | Where-Object { $_.name -eq $t.name })[0]
@@ -4755,7 +4756,7 @@ function Get-SmartRecommendations {
             foreach ($t in @(Get-CleanTargets)) {
                 $measurePath = $t.path
                 $measureName = $t.name
-                if ($CleanOlderThanDays -gt 0) {
+                if ($agedMode) {
                     $aged = Remove-FolderContent -Path $t.path -OlderThanDays $CleanOlderThanDays -WhatIf
                     if ($aged.error) { continue }
                     $measurePath = "$($t.path) (>$($CleanOlderThanDays)天)"
@@ -4861,11 +4862,13 @@ function Invoke-SmartRecommendations {
     }
 
     $res.startupOnly = ($CleanOlderThanDays -le 0)
+    # 保守清理模式下体检报告里没有「旧文件」体积（只存了总大小），必须现场扫描；
+    # 仅在纯启动项模式才跳过测量，否则 cleanRecs 恒为空、清理按钮永远提示无可处理项。
     $getTipsArgs = @{
         Report              = $Report
         Top                 = $Top
         CleanOlderThanDays  = $CleanOlderThanDays
-        SkipCleanMeasure    = $true
+        SkipCleanMeasure    = ($CleanOlderThanDays -le 0)
     }
     if ($CleanOlderThanDays -gt 0) {
         $getTipsArgs['IncludeStartup'] = $true

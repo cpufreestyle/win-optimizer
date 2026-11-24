@@ -295,6 +295,62 @@ Describe 'Optimize.Core conservative clean and startup zero-risk paths' {
         $r.startupOnly | Should -BeTrue
         $r.ok | Should -BeFalse
     }
+
+    It 'Get-SmartRecommendations aged mode rescans instead of reusing report totals' {
+        $tmp = Join-Path $env:TEMP ('agedtips_' + (New-Guid).ToString('N'))
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        $oldFile = Join-Path $tmp 'old.bin'
+        $newFile = Join-Path $tmp 'new.bin'
+        [System.IO.File]::WriteAllBytes($oldFile, (New-Object byte[] (2MB)))
+        [System.IO.File]::WriteAllBytes($newFile, (New-Object byte[] (3MB)))
+        (Get-Item $oldFile).LastWriteTime = (Get-Date).AddDays(-30)
+        try {
+            Mock Get-CleanTargets { @([PSCustomObject]@{ key = 'usertemp'; name = '用户临时文件'; path = $tmp; web = $true }) }
+            $rep = [PSCustomObject]@{
+                issues  = @([PSCustomObject]@{ id = 'disk.cleanable'; severity = 'Medium' })
+                metrics = [PSCustomObject]@{ cleanTargets = @([PSCustomObject]@{ name = '用户临时文件'; mb = 999.0 }) }
+            }
+            # 总大小模式：复用报告里的 999 MB
+            $total = Get-SmartRecommendations -Report $rep -Top 3
+            $total.clean[0].mb | Should -Be 999.0
+            # 保守模式：必须现场扫描，只计超过 7 天的 2 MB
+            $aged = Get-SmartRecommendations -Report $rep -Top 3 -CleanOlderThanDays 7
+            @($aged.clean).Count | Should -Be 1
+            $aged.clean[0].mb    | Should -Be 2.0
+            $aged.clean[0].name  | Should -Match '仅旧文件'
+            $aged.clean[0].aged  | Should -BeTrue
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Invoke-SmartRecommendations aged mode measures and previews old files only' {
+        $tmp = Join-Path $env:TEMP ('agedapply_' + (New-Guid).ToString('N'))
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        $oldFile = Join-Path $tmp 'old.bin'
+        $newFile = Join-Path $tmp 'new.bin'
+        [System.IO.File]::WriteAllBytes($oldFile, (New-Object byte[] (2MB)))
+        [System.IO.File]::WriteAllBytes($newFile, (New-Object byte[] (1MB)))
+        (Get-Item $oldFile).LastWriteTime = (Get-Date).AddDays(-30)
+        try {
+            Mock Get-CleanTargets { @([PSCustomObject]@{ key = 'usertemp'; name = '用户临时文件'; path = $tmp; web = $true }) }
+            Mock Get-StartupItems { @() }
+            $rep = [PSCustomObject]@{
+                issues  = @([PSCustomObject]@{ id = 'disk.cleanable'; severity = 'Medium' })
+                metrics = [PSCustomObject]@{ cleanTargets = @([PSCustomObject]@{ name = '用户临时文件'; mb = 999.0 }) }
+            }
+            $r = Invoke-SmartRecommendations -Report $rep -CleanOlderThanDays 7 -WhatIf -SkipBackup -CreateRestorePoint:$false
+            $r.startupOnly | Should -BeFalse
+            $r.error       | Should -BeNullOrEmpty
+            @($r.applied).Count | Should -Be 1
+            $r.applied[0]  | Should -Match '1 个文件'
+            $r.ok          | Should -BeTrue
+            Test-Path $oldFile | Should -BeTrue    # WhatIf 零副作用
+            Test-Path $newFile | Should -BeTrue
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 Describe 'Optimize.Core startup items (shared by CLI/GUI/WebUI)' {
