@@ -57,7 +57,8 @@
     $lblH = 24
     $listBottom = $script:CleanListBox.Bottom
     $chkTop = $listBottom + 14
-    $btnTop = $chkTop + $chkH + 16
+    $agedTop = $chkTop + $chkH + 8
+    $btnTop = $agedTop + $chkH + 16
     $lblTop = $btnTop + $btnH + 12
 
     $script:ChkRecycle = New-Object System.Windows.Forms.CheckBox
@@ -91,6 +92,17 @@
     $script:ChkDump.BackColor = $Theme.BgDark
     $page.Controls.Add($script:ChkDump)
 
+    $script:ChkAgedOnly = New-Object System.Windows.Forms.CheckBox
+    $script:ChkAgedOnly.Location = New-Object System.Drawing.Point(20, $agedTop)
+    $script:ChkAgedOnly.Size = New-Object System.Drawing.Size(420, $chkH)
+    $script:ChkAgedOnly.Text = "只清理 7 天前的旧文件（保留最近写入的文件）"
+    $script:ChkAgedOnly.Checked = $false
+    $script:ChkAgedOnly.Font = $Fonts.Body
+    $script:ChkAgedOnly.ForeColor = $Theme.TextMain
+    $script:ChkAgedOnly.BackColor = $Theme.BgDark
+    $script:ChkAgedOnly.Add_CheckedChanged({ Update-CleanSizes })
+    $page.Controls.Add($script:ChkAgedOnly)
+
     # 执行按钮
     $script:BtnClean = New-Button "开始清理" 20 $btnTop 200 $btnH $Theme.Success 11
     # 取消按钮：仅在清理进行中可用，解决大目录清理时界面长时间无响应且无法中断的问题
@@ -116,6 +128,8 @@
 
         $totalFreed = 0
         $filesDeleted = 0
+        $filesFailed = 0
+        $ageDays = if ($script:ChkAgedOnly.Checked) { 7 } else { 0 }
         $cancelled = $false
 
         # 先统计本次勾选的项目，用于整体进度 [n/m]
@@ -133,28 +147,19 @@
             $script:LblCleanProgress.Text = "[$doneItems/$totalItems] 正在统计 $($item.Name) ..."
             Invoke-UIRefresh
 
-            $before = Get-FolderSize $item.Path
-            if (Test-Path $item.Path) {
-                # 先收集条目得到真实总数，才能给出百分比进度（保持原删除行为不变）
-                $entries = @(Get-ChildItem -Path $item.Path -Recurse -Force -ErrorAction SilentlyContinue)
-                $entryTotal = $entries.Count
-                $entryDone = 0
-                foreach ($e in $entries) {
-                    if ($script:CleanCancel) { $cancelled = $true; break }
-                    try { Remove-Item $e.FullName -Recurse -Force -ErrorAction SilentlyContinue; $filesDeleted++ } catch {}
-                    $entryDone++
-                    if ((($entryDone % 50) -eq 0) -or ($entryDone -eq $entryTotal)) {
-                        $pct = if ($entryTotal -gt 0) { [math]::Round(($entryDone / $entryTotal) * 100) } else { 100 }
-                        $script:LblCleanProgress.Text = "[$doneItems/$totalItems] $($item.Name)：$entryDone/$entryTotal（$pct%）"
-                        Invoke-UIRefresh
-                    }
-                }
-                if ($cancelled) { break }
-                $after = Get-FolderSize $item.Path
-                $freed = $before - $after
-                $totalFreed += $freed
-                Write-Log "[清理] $($item.Name): 释放 $([math]::Round($freed/1MB,2)) MB" "SUCCESS"
+            $tick = {
+                param($done, $total)
+                $pct = if ($total -gt 0) { [math]::Round(($done / $total) * 100) } else { 100 }
+                $script:LblCleanProgress.Text = "[$doneItems/$totalItems] $($item.Name)：$done/$total（$pct%）"
+                Invoke-UIRefresh
+                return (-not $script:CleanCancel)
             }
+            $res = Remove-FolderContent -Path $item.Path -OlderThanDays $ageDays -Tick $tick
+            $filesDeleted += $res.deleted
+            $filesFailed += $res.failed
+            $totalFreed += $res.bytes
+            if ($res.cancelled) { $cancelled = $true; break }
+            Write-Log "[清理] $($item.Name): 释放 $([math]::Round($res.bytes/1MB,2)) MB，删除 $($res.deleted) 个，失败 $($res.failed) 个" "SUCCESS"
             Invoke-UIRefresh
         }
 
@@ -190,13 +195,14 @@
         $totalMB = [math]::Round($totalFreed / 1MB, 2)
         $totalGB = [math]::Round($totalFreed / 1GB, 2)
         $msg = if ($totalGB -ge 1) { "共释放 ${totalGB} GB 空间" } else { "共释放 ${totalMB} MB 空间" }
-        Write-Log "清理完成！$msg，删除 $filesDeleted 个文件" "SUCCESS"
+        $failedNote = if ($filesFailed -gt 0) { "，$filesFailed 个被占用未能删除" } else { "" }
+        Write-Log "清理完成！$msg，删除 $filesDeleted 个文件$failedNote" "SUCCESS"
         $script:LblCleanProgress.Text = "清理完成"
 
         $this.Enabled = $true
         $this.Text = "开始清理"
 
-        [System.Windows.Forms.MessageBox]::Show("清理完成！`n$msg`n删除 $filesDeleted 个文件", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        [System.Windows.Forms.MessageBox]::Show("清理完成！`n$msg`n删除 $filesDeleted 个文件$failedNote", "完成", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } catch {
             Write-Log "清理出错: $($_.Exception.Message)" "ERROR"
             $script:BtnCancelClean.Enabled = $false
@@ -235,7 +241,8 @@ function Update-CleanSizes {
     for ($i = 0; $i -lt $script:CleanItems.Count; $i++) {
         if ($i -ge $script:CleanListBox.Items.Count) { break }
         try {
-            $size = Get-FolderSize $script:CleanItems[$i].Path
+        $ageDays = if ($script:ChkAgedOnly -and $script:ChkAgedOnly.Checked) { 7 } else { 0 }
+        $size = (Remove-FolderContent -Path $script:CleanItems[$i].Path -OlderThanDays $ageDays -WhatIf).bytes
             $sizeMB = [math]::Round($size / 1MB, 2)
             $script:CleanListBox.Items[$i] = "$($script:CleanItems[$i].Name) — ${sizeMB} MB"
         } catch {

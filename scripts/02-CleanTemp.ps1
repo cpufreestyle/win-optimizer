@@ -21,6 +21,7 @@ Write-Host "============================================" -ForegroundColor Cyan
 
 $totalFreed = 0
 $filesDeleted = 0
+$filesFailed = 0
 
 # 复用共享核心库（Get-FolderSize / Remove-FolderContent 等）
 $coreLib = Join-Path $PSScriptRoot "..\lib\Optimize.Core.ps1"
@@ -32,21 +33,17 @@ function Clean-Folder {
         Write-Host "  [跳过] $Label (路径不存在)" -ForegroundColor Gray
         return
     }
-    $beforeSize = Get-FolderSize $Path
-    try {
-        Get-ChildItem -Path $Path -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
-            try {
-                Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-                $script:filesDeleted++
-            } catch {}
-        }
-        $afterSize = Get-FolderSize $Path
-        $freed = $beforeSize - $afterSize
-        $script:totalFreed += $freed
-        $freedMB = [math]::Round($freed / 1MB, 2)
+    $r = Remove-FolderContent -Path $Path
+    $script:filesDeleted += $r.deleted
+    $script:filesFailed += $r.failed
+    $script:totalFreed += $r.bytes
+    $freedMB = [math]::Round($r.bytes / 1MB, 2)
+    if ($r.error) {
+        Write-Host "  [错误] $Label : $($r.error)" -ForegroundColor Red
+    } elseif ($r.failed -gt 0) {
+        Write-Host "  [部分] $Label : 释放 ${freedMB} MB，$($r.failed) 个文件被占用未能删除" -ForegroundColor Yellow
+    } else {
         Write-Host "  [完成] $Label : 释放 ${freedMB} MB" -ForegroundColor Green
-    } catch {
-        Write-Host "  [错误] $Label : $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 
@@ -149,4 +146,7 @@ if ($totalGB -ge 1) {
     Write-Host "  清理完成！共释放 ${totalMB} MB 空间" -ForegroundColor Green
 }
 Write-Host "  删除文件数: $script:filesDeleted" -ForegroundColor Green
+if ($script:filesFailed -gt 0) {
+    Write-Host "  未能删除（被占用/无权限）: $script:filesFailed" -ForegroundColor Yellow
+}
 Write-Host "============================================" -ForegroundColor Cyan

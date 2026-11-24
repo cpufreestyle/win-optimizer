@@ -45,11 +45,7 @@ try {
         $i = 0
         foreach ($d in $cleanDefs) {
             $i++
-            $sizeMB = if ($OlderThanDays -gt 0) {
-                [math]::Round((Remove-OldFolderContent -Path $d.Path -OlderThanDays $OlderThanDays -WhatIf).bytes / 1MB, 2)
-            } else {
-                Get-FolderSizeMB $d.Path
-            }
+            $sizeMB = [math]::Round((Remove-FolderContent -Path $d.Path -OlderThanDays $OlderThanDays -WhatIf).bytes / 1MB, 2)
             $list += [PSCustomObject]@{
                 index = $i
                 key   = $d.Key
@@ -85,25 +81,21 @@ try {
         }
         $totalFreed = 0
         $files = 0
+        $failedTotal = 0
         $details = @()
         foreach ($d in $targets) {
-            if ($OlderThanDays -gt 0) {
-                $r = Remove-OldFolderContent -Path $d.Path -OlderThanDays $OlderThanDays
-                $files += $r.deleted
-                $freed = [double]$r.bytes
-            } else {
-                $before = (Get-FolderSizeMB $d.Path) * 1MB
-                $files += (Remove-FolderContent $d.Path)
-                $after  = (Get-FolderSizeMB $d.Path) * 1MB
-                $freed  = [math]::Max(0, $before - $after)
-            }
+            $r = Remove-FolderContent -Path $d.Path -OlderThanDays $OlderThanDays
+            $files += $r.deleted
+            $failedTotal += $r.failed
+            $freed = [double]$r.bytes
             $totalFreed += $freed
-            $details += [PSCustomObject]@{ name = $d.Name; freedMB = [math]::Round($freed/1MB, 2); olderThanDays = $OlderThanDays }
+            $details += [PSCustomObject]@{ name = $d.Name; freedMB = [math]::Round($freed/1MB, 2); deleted = $r.deleted; failed = $r.failed; olderThanDays = $OlderThanDays }
         }
         Out-Json ([PSCustomObject]@{
             ok = $true
             freedMB = [math]::Round($totalFreed/1MB, 2)
             filesDeleted = $files
+            failed = $failedTotal
             olderThanDays = $OlderThanDays
             details = $details
         })
