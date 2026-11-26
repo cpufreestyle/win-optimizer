@@ -47,7 +47,7 @@ function Get-OptConfig {
 function Get-OptVersion {
     $cfg = Get-OptConfig
     if ($cfg -and $cfg.version) { return [string]$cfg.version }
-    return "3.11.11"
+    return "3.11.12"
 }
 
 # 取本机名：优先环境变量 COMPUTERNAME，缺失时回退 .NET MachineName
@@ -608,7 +608,15 @@ function Remove-FolderContent {
         [int]$OlderThanDays = 0,
         [scriptblock]$Tick
     )
-    $result = [PSCustomObject]@{ deleted = 0; bytes = [double]0; failed = 0; dirs = 0; cancelled = $false; error = $null }
+    $result = [PSCustomObject]@{
+        deleted     = 0
+        bytes       = [double]0
+        failed      = 0
+        dirs        = 0
+        cancelled   = $false
+        error       = $null
+        failedPaths = [System.Collections.Generic.List[string]]::new()
+    }
     if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
         if ($AsCount) { return 0 }
         return $result
@@ -633,6 +641,7 @@ function Remove-FolderContent {
                     $result.bytes += [double]$file.Length
                 } catch {
                     $result.failed++
+                    $result.failedPaths.Add($file.FullName) | Out-Null
                 }
             }
             if ($Tick -and ((($done % 50) -eq 0) -or ($done -eq $total))) {
@@ -655,6 +664,112 @@ function Remove-FolderContent {
         $result.error = $_.Exception.Message
     }
     if ($AsCount) { return $result.deleted }
+    return $result
+}
+
+# ============================================================
+#  占用文件处理（清理「N 个被占用未能删除」之后的一键重试）
+#  用 Win32_MappedNameFile 查持有者进程；系统关键进程与受保护名单
+#  一律拒绝结束，宁可不删也不误杀。三端共享，CLI/GUI 可调用。
+# ============================================================
+# 结束被占用文件的持有者进程，供「自动关闭占用程序后重试」使用。
+#   -LockPaths : 上一轮删除失败的文件路径数组
+#   -WhatIf    : 只报告哪些进程会被结束，不真正 Kill
+#   -Confirm   : 显式确认（默认 $false；GUI 勾选 + 二次确认弹窗后传 $true）
+# 返回 @{ ok; closed; refused; unknown; retryNeeded }
+# 安全策略：
+#   1. PID 0 拒绝
+#   2. 进程名命中保护名单（explorer、PowerShell、svchost、csrss 等）拒绝
+#   3. 本进程（$PID）自身拒绝 —— 防止清理时误杀正在运行的本工具
+#   4. 每个进程单独 try/catch，单个失败不影响其它
+function Close-CleanLockOwners {
+    param(
+        [string[]]$LockPaths,
+        [switch]$WhatIf,
+        [switch]$Confirm
+    )
+    $result = [PSCustomObject]@{ ok = $true; closed = @(); refused = @(); unknown = @(); retryNeeded = $false; error = $null }
+    $paths = @($LockPaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($paths.Count -eq 0) { return $result }
+
+    # 关键进程名单（小写比对）：出现即拒绝结束
+    $blockedNames = @(
+        'explorer','powershell','pwsh','powershell_ise','conhost','cmd',
+        'csrss','wininit','lsass','services','svchost','smss','winlogon',
+        'dwm','sihost','searchindexer','taskhostw','ctfmon','runtimebroker','spoolsv','wmi'
+    )
+    # 本工具自身可能以这些名字出现（EXE / 脚本 / 宿主 shell）
+    $blockedNames += 'pc-optimizer','pcopt','optimizegui'
+
+    # 1) 查持有者：Win32_MappedNameFile（CIM；查不到就记 unknown）
+    $holders = @()
+    $lookupFailed = $false
+    try {
+        foreach ($p in $paths) {
+            $q = $p -replace '[\\]', '\\'
+            $hits = @(Get-CimInstance Win32_MappedNameFile -Filter ("Name LIKE '" + $q + "'") -ErrorAction Stop |
+                      Select-Object -ExpandProperty ProcessId)
+            if ($hits) { $holders += $hits }
+            else { $result.unknown += $p }
+        }
+    } catch {
+        $lookupFailed = $true
+        $result.unknown += @($paths | Where-Object { $result.unknown -notcontains $_ })
+        Write-OptLog ("[占用] Win32_MappedNameFile 查询失败：{0}" -f $_.Exception.Message) 'WARN'
+    }
+    $holders = @($holders | Sort-Object -Unique)
+    if ($lookupFailed -and $holders.Count -eq 0) {
+        $result.ok = $false
+        $result.error = '无法查询文件持有者（CIM 不可用或权限不足），请手动关闭占用程序后重试'
+        return $result
+    }
+
+    # 2) 解析进程 + 安全校验
+    $targets = @()
+    foreach ($ownerPid in $holders) {
+        if ([string]::IsNullOrWhiteSpace($ownerPid)) { continue }
+        $ownerPid = [int]$ownerPid
+        if ($ownerPid -eq 0) { $result.refused += 'System（拒绝）'; continue }
+        try {
+            $proc = Get-Process -Id $ownerPid -ErrorAction Stop
+        } catch {
+            $result.unknown += ('PID {0}（进程已退出）' -f $ownerPid)
+            continue
+        }
+        $nm = [string]$proc.ProcessName
+        if ($ownerPid -eq $PID) {
+            $result.refused += ('{0}（本工具自身，拒绝结束）' -f $nm)
+            continue
+        }
+        if ($blockedNames -contains $nm.ToLower()) {
+            $result.refused += $nm
+            continue
+        }
+        $targets += $proc
+    }
+
+    # 3) 结束（未显式 -Confirm 时只报告，不真正 Kill，防止误调用）
+    if (-not $WhatIf -and -not $Confirm) {
+        $result.ok = $false
+        $result.error = '需要 -Confirm 显式确认才会结束进程'
+        return $result
+    }
+    foreach ($proc in $targets) {
+        try {
+            if (-not $WhatIf) {
+                [void]$proc.CloseMainWindow()
+                [void]$proc.WaitForExit(3000)
+                if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction Stop }
+            }
+            $result.closed += $proc.ProcessName
+            if (-not $WhatIf) {
+                Write-OptLog ("[占用] 已结束占用进程 {0}（PID {1}）" -f $proc.ProcessName, $proc.Id) 'INFO'
+            }
+        } catch {
+            $result.refused += ('{0}（结束失败：{1}）' -f $proc.ProcessName, $_.Exception.Message)
+        }
+    }
+    $result.retryNeeded = ($result.closed.Count -gt 0)
     return $result
 }
 

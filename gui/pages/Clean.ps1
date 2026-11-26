@@ -15,18 +15,9 @@
     $page.Controls.Add($lblScan)
 
     # 用 script 作用域保存变量供事件处理器使用
-    # 环境变量兜底：PS2EXE 编译 EXE 或某些 session 下 $env:TEMP/LOCALAPPDATA/PROGRAMDATA 可能为空，会导致后续 Get-FolderSize 抛"无法将参数绑定到 Path"
-    $_t = if ([string]::IsNullOrWhiteSpace($env:TEMP))         { "C:\Users\Public" } else { $env:TEMP }
-    $_la = if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { "$env:SystemDrive\Users\Public\AppData\Local" } else { $env:LOCALAPPDATA }
-    $_pd = if ([string]::IsNullOrWhiteSpace($env:PROGRAMDATA))  { "$env:SystemDrive\Users\Public\AppData\Roaming" }  else { $env:PROGRAMDATA }
-    $script:CleanItems = @(
-        @{Path="C:\Windows\Temp";                    Name="Windows 系统临时文件"}
-        @{Path=$_t;                                    Name="用户临时文件"}
-        @{Path="C:\Windows\Prefetch";                Name="预读取文件"}
-        @{Path="C:\Windows\SoftwareDistribution\Download"; Name="Windows Update 下载缓存"}
-        @{Path="$_la\Microsoft\Windows\Explorer";     Name="缩略图缓存"}
-        @{Path="$_pd\Microsoft\Windows\WER";          Name="Windows 错误报告"}
-    )
+    # 清理清单与 CLI/WebUI 走同一份数据源（config/optimization.json + lib/Optimize.Core.ps1 回退），
+    # 配置增删目标时三端自动生效，不再各自维护硬编码清单。
+    $script:CleanItems = @(Get-CleanTargets -All)
 
     $script:CleanListBox = New-Object System.Windows.Forms.CheckedListBox
     $script:CleanListBox.Location = New-Object System.Drawing.Point(20, 156)
@@ -103,6 +94,18 @@
     $script:ChkAgedOnly.Add_CheckedChanged({ Update-CleanSizes })
     $page.Controls.Add($script:ChkAgedOnly)
 
+    # 自动关闭占用程序：清理后有文件被占用时，询问是否结束持有者进程并重试
+    # 仅作用于用户勾选的清理项，系统关键进程（explorer / 本工具自身等）一律拒绝
+    $script:ChkAutoClose = New-Object System.Windows.Forms.CheckBox
+    $script:ChkAutoClose.Location = New-Object System.Drawing.Point(440, $agedTop)
+    $script:ChkAutoClose.Size = New-Object System.Drawing.Size(340, $chkH)
+    $script:ChkAutoClose.Text = "被占用时自动关闭占用程序并清空重试"
+    $script:ChkAutoClose.Checked = $true
+    $script:ChkAutoClose.Font = $Fonts.Body
+    $script:ChkAutoClose.ForeColor = $Theme.TextMain
+    $script:ChkAutoClose.BackColor = $Theme.BgDark
+    $page.Controls.Add($script:ChkAutoClose)
+
     # 执行按钮
     $script:BtnClean = New-Button "开始清理" 20 $btnTop 200 $btnH $Theme.Success 11
     # 取消按钮：仅在清理进行中可用，解决大目录清理时界面长时间无响应且无法中断的问题
@@ -131,6 +134,9 @@
         $filesFailed = 0
         $ageDays = if ($script:ChkAgedOnly.Checked) { 7 } else { 0 }
         $cancelled = $false
+        $script:CleanFailedPaths = [System.Collections.Generic.List[string]]::new()
+        $failedItemIdx = [System.Collections.Generic.List[int]]::new()
+        $script:itemFirstFailed = @{}
 
         # 先统计本次勾选的项目，用于整体进度 [n/m]
         $checkedIdx = @()
@@ -158,12 +164,68 @@
             $filesDeleted += $res.deleted
             $filesFailed += $res.failed
             $totalFreed += $res.bytes
+            $script:itemFirstFailed[$i] = $res.failed
+            if ($res.failedPaths) {
+                foreach ($fp in @($res.failedPaths)) {
+                    $script:CleanFailedPaths.Add($fp) | Out-Null
+                    $failedItemIdx.Add($i) | Out-Null
+                }
+            }
             if ($res.cancelled) { $cancelled = $true; break }
             Write-Log "[清理] $($item.Name): 释放 $([math]::Round($res.bytes/1MB,2)) MB，删除 $($res.deleted) 个，失败 $($res.failed) 个" "SUCCESS"
             Invoke-UIRefresh
         }
 
         $script:BtnCancelClean.Enabled = $false
+
+        # 被占用文件：预览可关闭的持有者进程，用户确认后结束并重试失败过的清理项
+        if (-not $cancelled -and ($script:CleanFailedPaths.Count -gt 0) -and $script:ChkAutoClose.Checked) {
+            $lockPaths = @($script:CleanFailedPaths | Select-Object -Unique)
+            $probe = Close-CleanLockOwners -LockPaths $lockPaths -WhatIf
+            $willClose = @($probe.closed)
+            if ($willClose.Count -gt 0) {
+                $names = ($willClose | ForEach-Object { $_ }) -join '、'
+                $yes = [System.Windows.Forms.MessageBox]::Show(
+                    ("检测到占用文件，将关闭以下程序后重试清理：`n" + $names + "`n`n确定继续吗？"),
+                    "自动关闭占用程序",
+                    [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                    [System.Windows.Forms.MessageBoxIcon]::Question)
+                if ($yes -eq [System.Windows.Forms.MessageBoxResult]::Yes) {
+                    $kill = Close-CleanLockOwners -LockPaths $lockPaths -Confirm
+                    if (@($kill.closed).Count -gt 0) {
+                        Start-Sleep -Milliseconds 1500
+                        $retrySet = @($failedItemIdx | Sort-Object -Unique)
+                        $retriedFirstFailed = 0
+                        $retryStillFailed = 0
+                        foreach ($ri in $retrySet) {
+                            $ritem = $script:CleanItems[$ri]
+                            $script:LblCleanProgress.Text = "重试清理 $($ritem.Name) ..."
+                            Invoke-UIRefresh
+                            $rres = Remove-FolderContent -Path $ritem.Path -OlderThanDays $ageDays
+                            $retriedFirstFailed += $script:itemFirstFailed[$ri]
+                            $retryStillFailed  += $rres.failed
+                            $totalFreed   += $rres.bytes
+                            $filesDeleted += $rres.deleted
+                            Write-Log ("[清理] 重试 $($ritem.Name)：补删 $($rres.deleted) 个，释放 $([math]::Round($rres.bytes/1MB,2)) MB，仍失败 $($rres.failed) 个") "SUCCESS"
+                            Invoke-UIRefresh
+                        }
+                        # 首次失败数被「重试后仍失败数」替换
+                        $filesFailed = [math]::Max(0, $filesFailed - $retriedFirstFailed + $retryStillFailed)
+                    } else {
+                        $refuseText = @($kill.refused) -join '、'
+                        Write-Log ("[清理] 占用文件无法自动关闭（保护进程/结束失败）：$refuseText") "WARN"
+                        $script:LblCleanProgress.Text = ("$($script:CleanFailedPaths.Count) 个文件被占用且无法自动关闭")
+                    }
+                } else {
+                    Write-Log "[清理] 用户取消自动关闭占用程序，跳过重试" "WARN"
+                }
+            } else {
+                $refuseText = @($probe.refused) -join '、'
+                Write-Log ("[清理] 占用文件无法自动关闭（系统关键程序/无主文件）$refuseText") "WARN"
+                $script:LblCleanProgress.Text = ("$($script:CleanFailedPaths.Count) 个文件被系统关键程序占用，无法自动关闭")
+            }
+        }
+
 
         if ($cancelled) {
             $script:LblCleanProgress.Text = "已取消（已删除 $filesDeleted 个文件）"
