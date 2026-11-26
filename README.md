@@ -100,9 +100,9 @@ v2.0 合并了原 `windows-utils` 仓库的 4 个实用工具（C盘清理、剪
 
 |----------|------------------|
 
-| PC优化工具 | 走一键向导：自动体检 → 推荐 → 执行 → 复检（就是下面的方式一） |
+| 老电脑优化工具 | 走一键向导：自动体检 → 推荐 → 执行 → 复检（就是下面的方式一） |
 
-| PC优化工具-图形界面 | 直接打开图形界面，鼠标点点就能用 |
+| 老电脑优化工具-图形界面 | 直接打开图形界面，鼠标点点就能用（无黑窗，优先 PowerShell 7） |
 
 
 
@@ -146,7 +146,7 @@ v2.0 合并了原 `windows-utils` 仓库的 4 个实用工具（C盘清理、剪
 
 |------------|----------|
 
-| 图形界面（鼠标点点就行） | `Start.bat` → 输入 `2`（或双击 `StartGUI.bat`） |
+| 图形界面（鼠标点点就行） | 双击桌面「老电脑优化工具-图形界面」，或 `Start.bat` → 输入 `2`（也可双击 `StartGUI.bat`） |
 
 | 命令行菜单（想逐项自己挑） | `Start.bat` → 输入 `3`；或管理员 PowerShell 里 `cd <项目根目录>` 后执行 `.\Optimize.ps1` |
 
@@ -617,6 +617,24 @@ Compact.exe /CompactOS:never
 
 
 ## 📝 更新日志
+
+
+
+### v3.11.11 (2026-11-26)
+
+- **桌面快捷方式双击打不开：根治换行漂移**
+
+  - `StartGUI.vbs` 被存成裸 LF 后，VBScript 的 `_` 续行解析失败（800A0409「未结束的字符串常量」），桌面图标直接报错。已归一 CRLF。
+
+  - 新增 `.gitattributes`：`*.ps1/*.vbs/*.bat/*.cmd/*.reg` 钉死 CRLF，`*.exe/*.ico` 标记 binary，不再依赖各克隆的 `core.autocrlf`。
+
+  - 安装器「图形界面」快捷方式改为 `wscript + StartGUI.vbs`（无黑窗、PS7 优先，缺文件才回退 EXE），图标统一 `assets/app.ico`；`MakeDesktopShortcuts.bat` 改 PS7 优先并修正过时名称。
+
+  - 新增 7 条启动链路回归用例（全仓裸 LF 扫描 / `.ps1` 单 BOM / VBS 纯 ASCII + CRLF + 不强制提权 / 快捷方式接线）。
+
+  - 版本号统一：config / Start.bat / lib 回退值对齐后升版本，EXE 重建。
+
+  - 回归：Pester 324/324、pytest 4/4、PSScriptAnalyzer 0 Error、布局审计 FINDINGS=0。
 
 
 

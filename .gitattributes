@@ -1,0 +1,19 @@
+# Windows shell / PowerShell files must stay CRLF.
+# StartGUI.vbs uses "_" line continuations: VBScript fails to parse them when the
+# file is saved with bare LF (800A0409 "unterminated string constant"), which
+# silently breaks the desktop shortcut. Pin the convention in the repo so it no
+# longer depends on each clone's core.autocrlf setting.
+*.ps1  text eol=crlf
+*.psm1 text eol=crlf
+*.psd1 text eol=crlf
+*.vbs  text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.reg  text eol=crlf
+
+# Binaries must never be newline-converted.
+*.exe  binary
+*.ico  binary
+*.png  binary
+*.jpg  binary
+*.zip  binary

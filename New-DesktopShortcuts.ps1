@@ -14,7 +14,9 @@
 
     - 一键向导：指向 Start.bat（脚本自己请求管理员权限，默认项即向导）
 
-    - 图形界面：指向 PC-Optimizer.exe（PS2EXE 打包版，自带管理员请求）
+    - 图形界面：指向 wscript.exe + StartGUI.vbs（无黑窗、优先 PowerShell 7，
+
+      由 OptimizeGUI.ps1 自己请求管理员权限；不再走冷启动更慢的打包 EXE）
 
 
 
@@ -94,6 +96,8 @@ function New-AppShortcut {
 
         [Parameter(Mandatory=$true)][string]$TargetPath,
 
+        [string]$Arguments = '',
+
         [Parameter(Mandatory=$true)][string]$WorkingDirectory,
 
         [Parameter(Mandatory=$true)][string]$IconLocation,
@@ -123,6 +127,8 @@ function New-AppShortcut {
         $sc = $shell.CreateShortcut($Path)
 
         $sc.TargetPath       = $TargetPath
+
+        $sc.Arguments        = $Arguments
 
         $sc.WorkingDirectory = $WorkingDirectory
 
@@ -174,6 +180,14 @@ $exe     = Join-Path $root 'PC-Optimizer.exe'
 
 $start   = Join-Path $root 'Start.bat'
 
+$vbs     = Join-Path $root 'StartGUI.vbs'
+
+$wscript = Join-Path $env:SystemRoot 'System32\wscript.exe'
+
+$guiTarget = if ((Test-Path -LiteralPath $vbs) -and (Test-Path -LiteralPath $wscript)) { $wscript } else { $exe }
+
+$guiArgs   = if ($guiTarget -eq $wscript) { '"' + $vbs + '"' } else { '' }
+
 $iconIco = Join-Path $root 'assets\app.ico'
 
 $icon    = if (Test-Path -LiteralPath $iconIco) { ($iconIco + ',0') } else { ($exe + ',0') }
@@ -202,7 +216,7 @@ $results = @()
 
 $results += New-AppShortcut -Path (Join-Path $desktop '老电脑优化工具.lnk') -TargetPath $start -WorkingDirectory $root -IconLocation $icon -Description '老电脑优化工具（体检 - 推荐 - 执行 - 复检）'
 
-$results += New-AppShortcut -Path (Join-Path $desktop '老电脑优化工具-图形界面.lnk') -TargetPath $exe -WorkingDirectory $root -IconLocation ($exe + ',0') -Description '老电脑优化工具 - 图形界面'
+$results += New-AppShortcut -Path (Join-Path $desktop '老电脑优化工具-图形界面.lnk') -TargetPath $guiTarget -Arguments $guiArgs -WorkingDirectory $root -IconLocation $icon -Description '老电脑优化工具 - 图形界面'
 
 
 

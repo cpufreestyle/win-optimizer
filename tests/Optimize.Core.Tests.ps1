@@ -4082,6 +4082,102 @@ Describe 'Desktop shortcut installer (New-DesktopShortcuts.ps1)' {
 }
 
 # ============================================================
+#  启动器与换行约定（桌面双击链路）
+#  背景：StartGUI.vbs 用 "_" 续行，一旦被存成裸 LF，VBScript 会报
+#  800A0409「未结束的字符串常量」，桌面快捷方式直接打不开。
+# ============================================================
+Describe 'Launcher encoding and newline hygiene (desktop double-click path)' {
+    BeforeAll {
+        $script:RepoRoot = $PWD.Path
+        if (-not (Test-Path -LiteralPath (Join-Path $script:RepoRoot 'StartGUI.vbs'))) {
+            $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+        }
+        $script:TextExt = @('.ps1', '.psm1', '.psd1', '.vbs', '.bat', '.cmd', '.reg',
+                            '.json', '.md', '.py', '.yml', '.yaml', '.txt', '.css', '.js', '.html')
+        $installer = Join-Path $script:RepoRoot 'New-DesktopShortcuts.ps1'
+        $script:InstallerSource = if (Test-Path -LiteralPath $installer) {
+            [System.IO.File]::ReadAllText($installer, [System.Text.Encoding]::UTF8)
+        } else { '' }
+        $script:TrackedText = @()
+        foreach ($rel in (& git -C $script:RepoRoot ls-files)) {
+            if ([string]::IsNullOrWhiteSpace($rel)) { continue }
+            if ($script:TextExt -notcontains [System.IO.Path]::GetExtension($rel).ToLower()) { continue }
+            $full = Join-Path $script:RepoRoot $rel
+            if (Test-Path -LiteralPath $full) {
+                $script:TrackedText += [PSCustomObject]@{ Rel = $rel; Full = $full }
+            }
+        }
+    }
+
+    It 'the repository pins CRLF for Windows script files via .gitattributes' {
+        $ga = Join-Path $script:RepoRoot '.gitattributes'
+        Test-Path -LiteralPath $ga | Should -BeTrue
+        $t = [System.IO.File]::ReadAllText($ga)
+        foreach ($ext in '*.ps1', '*.vbs', '*.bat', '*.cmd') {
+            $t | Should -Match ([regex]::Escape($ext) + '\s+text\s+eol=crlf')
+        }
+    }
+
+    It 'no tracked text file mixes bare LF into the working tree' {
+        if (@($script:TrackedText).Count -eq 0) { Set-ItResult -Skipped -Because 'no tracked text files resolved' }
+        $offenders = @()
+        foreach ($f in $script:TrackedText) {
+            $text = [System.IO.File]::ReadAllText($f.Full)
+            if (([regex]::Matches($text, "(?<!`r)`n")).Count -gt 0) { $offenders += $f.Rel }
+        }
+        ($offenders -join ', ') | Should -Be ''
+    }
+
+    It 'every PowerShell file keeps a single UTF-8 BOM so PS 5.1 reads Chinese correctly' {
+        $bad = @()
+        foreach ($f in $script:TrackedText) {
+            if ([System.IO.Path]::GetExtension($f.Rel).ToLower() -notin '.ps1', '.psm1', '.psd1') { continue }
+            $bytes = [System.IO.File]::ReadAllBytes($f.Full)
+            if ($bytes.Length -lt 3) { $bad += ($f.Rel + ' (too short)'); continue }
+            $hasBom = ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+            $doubleBom = ($bytes.Length -ge 6 -and $hasBom -and $bytes[3] -eq 0xEF -and $bytes[4] -eq 0xBB -and $bytes[5] -eq 0xBF)
+            if (-not $hasBom) { $bad += ($f.Rel + ' (no BOM)') }
+            elseif ($doubleBom) { $bad += ($f.Rel + ' (double BOM)') }
+        }
+        ($bad -join ', ') | Should -Be ''
+    }
+
+    It 'StartGUI.vbs stays pure ASCII so code page 936 cannot corrupt it' {
+        $vbs = Join-Path $script:RepoRoot 'StartGUI.vbs'
+        if (-not (Test-Path -LiteralPath $vbs)) { Set-ItResult -Skipped -Because 'launcher missing' }
+        $bytes = [System.IO.File]::ReadAllBytes($vbs)
+        @($bytes | Where-Object { $_ -gt 127 }).Count | Should -Be 0
+        ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) | Should -BeFalse
+    }
+
+    It 'StartGUI.vbs uses CRLF so VBScript line continuations still parse' {
+        $vbs = Join-Path $script:RepoRoot 'StartGUI.vbs'
+        if (-not (Test-Path -LiteralPath $vbs)) { Set-ItResult -Skipped -Because 'launcher missing' }
+        $text = [System.IO.File]::ReadAllText($vbs)
+        ([regex]::Matches($text, "(?<!`r)`n")).Count | Should -Be 0
+        ([regex]::Matches($text, "`r`n")).Count | Should -BeGreaterThan 0
+    }
+
+    It 'StartGUI.vbs launches the GUI without forcing elevation or a console window' {
+        $vbs = Join-Path $script:RepoRoot 'StartGUI.vbs'
+        if (-not (Test-Path -LiteralPath $vbs)) { Set-ItResult -Skipped -Because 'launcher missing' }
+        $text = [System.IO.File]::ReadAllText($vbs)
+        $text | Should -Match 'OptimizeGUI\.ps1'
+        $text | Should -Match 'ShellExecute'
+        $text | Should -Not -Match 'runas'
+        $text | Should -Match 'pwsh\.exe'
+    }
+
+    It 'the GUI shortcut is wired to wscript + StartGUI.vbs, falling back to the EXE' {
+        if (-not $script:InstallerSource) { Set-ItResult -Skipped -Because 'installer script missing' }
+        $script:InstallerSource | Should -Match 'StartGUI\.vbs'
+        $script:InstallerSource | Should -Match 'wscript\.exe'
+        $script:InstallerSource | Should -Match '\$guiTarget'
+        $script:InstallerSource | Should -Match '-Arguments\s+\$guiArgs'
+    }
+}
+
+# ============================================================
 #  CLI 菜单极简 / 高级双模式（Optimize.ps1 Show-Menu）
 #  目的：新手只看到 4 个高频入口，按 A 才展开全部 16 项，降低学习成本
 # ============================================================
