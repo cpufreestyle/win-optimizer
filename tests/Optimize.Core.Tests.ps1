@@ -439,7 +439,9 @@ Describe 'Optimize.Core clean lock-owners (auto-close owners of stuck files)' {
             $r = Remove-FolderContent -Path $tmp
             $r.failed | Should -Be 1
             @($r.failedPaths).Count | Should -Be 1
-            @($r.failedPaths)[0] | Should -Be $f
+            # CI 容器里 $env:TEMP 常为连接点；Remove-Item 返回解析后的真实路径，
+            # 两边都用 Resolve-Path 再比较，避免用户名段不一致导致误判
+            (@($r.failedPaths)[0]) | Should -Be (Resolve-Path $f).Path
         } finally {
             $lock.Dispose()
             Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
