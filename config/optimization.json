@@ -1,5 +1,5 @@
 {
-  "version": "3.11.11",
+  "version": "3.11.12",
     "description": "老电脑优化配置文件",
     "services": {
         "safe_to_disable": [
@@ -119,6 +119,8 @@
         { "key": "prefetch", "name": "预读取文件",               "path": "C:\\Windows\\Prefetch",                               "web": true },
         { "key": "wsus",     "name": "Windows Update 下载缓存",  "path": "C:\\Windows\\SoftwareDistribution\\Download",         "web": true },
         { "key": "thumb",    "name": "缩略图缓存",               "path": "%LOCALAPPDATA%\\Microsoft\\Windows\\Explorer",        "web": true },
-        { "key": "wer",      "name": "Windows 错误报告",         "path": "%PROGRAMDATA%\\Microsoft\\Windows\\WER",              "web": true }
+        { "key": "wer",      "name": "Windows 错误报告",         "path": "%PROGRAMDATA%\\Microsoft\\Windows\\WER",              "web": true },
+        { "key": "cbs",      "name": "CBS 组件日志",             "path": "C:\\Windows\\Logs\\CBS",                              "web": true },
+        { "key": "delivery", "name": "传递优化缓存",             "path": "C:\\Windows\\SoftwareDistribution\\DeliveryOptimization", "web": true }
     ]
 }

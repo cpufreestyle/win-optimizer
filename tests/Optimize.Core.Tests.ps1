@@ -411,6 +411,114 @@ Describe 'Optimize.Core conservative clean and startup zero-risk paths' {
     }
 }
 
+Describe 'Optimize.Core clean lock-owners (auto-close owners of stuck files)' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+    # 桩进程对象：真实 .NET 方法形态（CloseMainWindow / WaitForExit / HasExited），
+    # 用于验证「单个进程结束失败不影响其它进程」
+    class OptLockProcStub {
+        [int]$Id
+        [string]$ProcessName
+        [bool]$HasExited = $false
+        [int]$RefuseClose = 0
+        [bool]CloseMainWindow() {
+            if ($this.RefuseClose -gt 0) { $this.RefuseClose--; throw 'close refused by user' }
+            return $true
+        }
+        [bool]WaitForExit([int]$ms) { $this.HasExited = $true; return $true }
+    }
+
+    It 'Remove-FolderContent records failedPaths for files that could not be deleted' {
+        $tmp = Join-Path $env:TEMP ('lockowners_' + (New-Guid).ToString('N'))
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        $f = Join-Path $tmp 'locked.txt'
+        Set-Content -Path $f -Value 'x' -NoNewline
+        $lock = [System.IO.File]::Open($f, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        try {
+            $r = Remove-FolderContent -Path $tmp
+            $r.failed | Should -Be 1
+            @($r.failedPaths).Count | Should -Be 1
+            @($r.failedPaths)[0] | Should -Be $f
+        } finally {
+            $lock.Dispose()
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Close-CleanLockOwners with no lock paths succeeds without touching anything' {
+        $r = Close-CleanLockOwners -LockPaths @()
+        $r.ok | Should -BeTrue
+        @($r.closed).Count | Should -Be 0
+    }
+
+    It 'Close-CleanLockOwners refuses to kill anything without -Confirm' {
+        Mock Get-CimInstance { [PSCustomObject]@{ ProcessId = 123 } }
+        Mock Get-Process { [PSCustomObject]@{ Id = 123; ProcessName = 'notepad' } }
+        $r = Close-CleanLockOwners -LockPaths @('C:\temp\a.txt')
+        $r.ok | Should -BeFalse
+        $r.error | Should -Match 'Confirm'
+        @($r.closed).Count | Should -Be 0
+        Assert-MockCalled -CommandName 'Get-Process' -Times 1
+    }
+
+    It 'Close-CleanLockOwners -WhatIf previews owners without killing' {
+        Mock Get-CimInstance { [PSCustomObject]@{ ProcessId = 123 } }
+        Mock Get-Process { [PSCustomObject]@{ Id = 123; ProcessName = 'notepad' } }
+        $r = Close-CleanLockOwners -LockPaths @('C:\temp\a.txt') -WhatIf
+        $r.ok | Should -BeTrue
+        @($r.closed) | Should -Contain 'notepad'
+        $r.retryNeeded | Should -BeTrue
+    }
+
+    It 'Close-CleanLockOwners refuses system-protected process names' {
+        Mock Get-CimInstance { [PSCustomObject]@{ ProcessId = 456 } }
+        Mock Get-Process { [PSCustomObject]@{ Id = 456; ProcessName = 'explorer' } }
+        $r = Close-CleanLockOwners -LockPaths @('C:\temp\a.txt') -WhatIf
+        @($r.refused) | Should -Contain 'explorer'
+        @($r.closed).Count | Should -Be 0
+        $r.retryNeeded | Should -BeFalse
+    }
+
+    It 'Close-CleanLockOwners never kills the host tool itself' {
+        Mock Get-CimInstance { [PSCustomObject]@{ ProcessId = $PID } }
+        Mock Get-Process { [PSCustomObject]@{ Id = $PID; ProcessName = 'pc-self' } }
+        $r = Close-CleanLockOwners -LockPaths @('C:\temp\a.txt') -WhatIf
+        @($r.refused) | Should -Match '本工具自身'
+        @($r.closed).Count | Should -Be 0
+    }
+
+    It 'Close-CleanLockOwners isolates per-process failures instead of aborting' {
+        Mock Get-CimInstance {
+            [PSCustomObject]@{ ProcessId = 111 }, [PSCustomObject]@{ ProcessId = 222 }
+        }
+        Mock Get-Process {
+            param([int[]]$Id)
+            $want = $Id[0]
+            if ($want -eq 111) {
+                $s = [OptLockProcStub]::new(); $s.Id = 111; $s.ProcessName = 'badproc';  $s.RefuseClose = 1; $s
+            } else {
+                $s = [OptLockProcStub]::new(); $s.Id = 222; $s.ProcessName = 'goodproc'; $s
+            }
+        }
+        $r = Close-CleanLockOwners -LockPaths @('C:\temp\a.txt') -Confirm
+        $r.ok | Should -BeTrue
+        @($r.closed) | Should -Contain 'goodproc'
+        @($r.refused) | Should -Match 'badproc'
+        $r.retryNeeded | Should -BeTrue
+    }
+
+    It 'a dead holder process is reported, not fatal' {
+        $sp = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','exit 0' -PassThru
+        Start-Sleep -Milliseconds 400
+        Mock Get-CimInstance { [PSCustomObject]@{ ProcessId = $sp.Id } }
+        $r = Close-CleanLockOwners -LockPaths @('C:\temp\a.txt') -WhatIf
+        $r.ok | Should -BeTrue
+        @($r.unknown) | Should -Match 'PID'
+        @($r.closed).Count | Should -Be 0
+    }
+}
+
 Describe 'Optimize.Core backup write failures are reported' {
     BeforeAll {
         . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
