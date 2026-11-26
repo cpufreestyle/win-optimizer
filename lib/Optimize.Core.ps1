@@ -47,7 +47,7 @@ function Get-OptConfig {
 function Get-OptVersion {
     $cfg = Get-OptConfig
     if ($cfg -and $cfg.version) { return [string]$cfg.version }
-    return "3.11.9"
+    return "3.11.11"
 }
 
 # 取本机名：优先环境变量 COMPUTERNAME，缺失时回退 .NET MachineName

@@ -772,6 +772,23 @@ v3.10.0（667,648 字节，构建于 PR #26）。`Start.bat` 的 `[E] EXE 程序
     于是验证脚本读到上一次运行的残留值、又把 `A` 键写进真实状态文件，表现为「断言随机失败」。
     **规则：桩要么按注入值直接应答，要么在桩内把空目录替换成临时目录；绝不把空 `-StateDir` 透传给真实函数。**
 
+28. **`StartGUI.vbs` 被存成裸 LF 会让桌面快捷方式直接打不开**（2026-11-26）：
+    VBS 用 `_` 续行拼 `Array(...)`，文件一旦变成 LF 换行，VBScript 报
+    `800A0409 未结束的字符串常量`（报错行号落在续行之后的那一行，容易误判成引号/编码问题）。
+    该文件必须**纯 ASCII、无 BOM、CRLF**：中文 Windows 代码页 936 下加 BOM 或混入非 ASCII 同样会解析失败。
+    **根因防护**：仓库已加 `.gitattributes`，把 `*.ps1/*.psm1/*.psd1/*.vbs/*.bat/*.cmd/*.reg`
+    钉成 `text eol=crlf`，不再依赖各人克隆的 `core.autocrlf`；
+    `tests/Optimize.Core.Tests.ps1` 新增「Launcher encoding and newline hygiene」7 条用例，
+    扫描全部已跟踪文本文件的裸 LF、`.ps1` 的单 BOM、VBS 的 ASCII/CRLF/无强制提权。
+
+29. **桌面「图形界面」快捷方式走 `wscript.exe + StartGUI.vbs`，不再直指 EXE**（2026-11-26）：
+    `New-DesktopShortcuts.ps1` 原来把图形界面指向 `PC-Optimizer.exe`，与真机在用的
+    `wscript + VBS` 不一致——重跑安装器会把无黑窗、PS7 优先的链路退回冷启动更慢的打包 EXE。
+    现在安装器优先 `wscript + StartGUI.vbs`（缺任一文件才回退 EXE），图标统一 `assets/app.ico`，
+    `New-AppShortcut` 新增 `-Arguments`。提权仍由 `OptimizeGUI.ps1` 自己做，VBS 不写 `runas`。
+    另注：本机 `qm081` **在管理员组内**，只是 UAC 分裂令牌（Medium 完整性 + deny-only），
+    `ConsentPromptBehaviorAdmin=0` 会静默提权；`Test-Administrator` 返回 False 属正常，别据此判定「非管理员」。
+
 ---
 
 ## 6. 如何验证改动
