@@ -47,7 +47,7 @@ function Get-OptConfig {
 function Get-OptVersion {
     $cfg = Get-OptConfig
     if ($cfg -and $cfg.version) { return [string]$cfg.version }
-    return "3.11.12"
+    return "3.11.13"
 }
 
 # 取本机名：优先环境变量 COMPUTERNAME，缺失时回退 .NET MachineName
@@ -669,9 +669,102 @@ function Remove-FolderContent {
 
 # ============================================================
 #  占用文件处理（清理「N 个被占用未能删除」之后的一键重试）
-#  用 Win32_MappedNameFile 查持有者进程；系统关键进程与受保护名单
-#  一律拒绝结束，宁可不删也不误杀。三端共享，CLI/GUI 可调用。
+#  查持有者进程：主用 Restart Manager（rstrtmgr.dll，Win Vista+ 系统 API，
+#  不依赖 WMI 类）；Win32_MappedNameFile 仅作兜底（部分系统缺此类）。
+#  系统关键进程与受保护名单一律拒绝结束，宁可不删也不误杀。
+#  三端共享，CLI/GUI 可调用。
 # ============================================================
+# Restart Manager P/Invoke：按文件路径查询正在占用它的进程列表。
+# 类型只编译一次（进程内缓存），失败时返回 $null 由调用方走 CIM 兜底。
+function Initialize-RestartManagerInterop {
+    if ('OptRestartManager.Interop' -as [type]) { return $true }
+    try {
+        Add-Type -Namespace 'OptRestartManager' -Name 'Interop' -MemberDefinition @'
+[StructLayout(LayoutKind.Sequential)]
+public struct RM_UNIQUE_PROCESS { public int dwProcessId; public System.Runtime.InteropServices.ComTypes.FILETIME ProcessStartTime; }
+
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+public struct RM_PROCESS_INFO {
+    public RM_UNIQUE_PROCESS Process;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string strAppName;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string strServiceShortName;
+    public int ApplicationType;
+    public uint AppStatus;
+    public uint TSSessionId;
+    [MarshalAs(UnmanagedType.Bool)] public bool bRestartable;
+}
+
+[DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
+public static extern int RmStartSession(out uint pSessionHandle, int dwSessionFlags, string strSessionKey);
+
+[DllImport("rstrtmgr.dll")]
+public static extern int RmEndSession(uint pSessionHandle);
+
+[DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
+public static extern int RmRegisterResources(uint pSessionHandle, uint nFiles, string[] rgsFilenames, uint nApplications, RM_UNIQUE_PROCESS[] rgApplications, uint nServices, string[] rgsServiceNames);
+
+[DllImport("rstrtmgr.dll")]
+public static extern int RmGetList(uint dwSessionHandle, out uint pnProcInfoNeeded, ref uint pnProcInfo, [In, Out] RM_PROCESS_INFO[] rgAffectedApps, ref uint lpdwRebootReasons);
+'@ -ErrorAction Stop
+        return $true
+    } catch {
+        Write-OptLog ("[占用] Restart Manager 互操作类型编译失败：{0}" -f $_.Exception.Message) 'WARN'
+        return $false
+    }
+}
+
+# 用 Restart Manager 查询一批文件的持有者 PID。
+# 返回 @{ ok; pids }；ok=$false 表示 API 不可用/会话失败，调用方应走兜底。
+function Get-FileLockOwnerPids {
+    param([string[]]$Paths)
+    $out = @{ ok = $false; pids = @() }
+    $files = @($Paths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+    if ($files.Count -eq 0) { $out.ok = $true; return $out }
+    if (-not (Initialize-RestartManagerInterop)) { return $out }
+    $session = 0
+    try {
+        $key = [guid]::NewGuid().ToString('N')
+        $rc = [OptRestartManager.Interop]::RmStartSession([ref]$session, 0, $key)
+        if ($rc -ne 0) {
+            Write-OptLog ("[占用] RmStartSession 失败（错误码 {0}）" -f $rc) 'WARN'
+            return $out
+        }
+        # RM 单次注册资源过多会变慢，按 64 个一批注册
+        $pids = @()
+        for ($off = 0; $off -lt $files.Count; $off += 64) {
+            $batch = @($files[$off..([math]::Min($off + 63, $files.Count - 1))])
+            $rc = [OptRestartManager.Interop]::RmRegisterResources($session, [uint32]$batch.Count, $batch, 0, $null, 0, $null)
+            if ($rc -ne 0) {
+                Write-OptLog ("[占用] RmRegisterResources 失败（错误码 {0}）" -f $rc) 'WARN'
+                continue
+            }
+            [uint32]$needed = 0
+            [uint32]$count = 0
+            [uint32]$reasons = 0
+            $rc = [OptRestartManager.Interop]::RmGetList($session, [ref]$needed, [ref]$count, $null, [ref]$reasons)
+            if ($rc -eq 234) {
+                # ERROR_MORE_DATA：按需要的数量再取一次
+                $count = $needed
+                $arr = New-Object 'OptRestartManager.Interop+RM_PROCESS_INFO[]' ([int]$count)
+                $rc = [OptRestartManager.Interop]::RmGetList($session, [ref]$needed, [ref]$count, $arr, [ref]$reasons)
+                if ($rc -eq 0) {
+                    for ($idx = 0; $idx -lt [int]$count; $idx++) { $pids += $arr[$idx].Process.dwProcessId }
+                }
+            } elseif ($rc -ne 0) {
+                Write-OptLog ("[占用] RmGetList 失败（错误码 {0}）" -f $rc) 'WARN'
+            }
+        }
+        $out.ok = $true
+        $out.pids = @($pids | Sort-Object -Unique)
+        return $out
+    } catch {
+        Write-OptLog ("[占用] Restart Manager 查询异常：{0}" -f $_.Exception.Message) 'WARN'
+        return $out
+    } finally {
+        if ($session -ne 0) { [void][OptRestartManager.Interop]::RmEndSession($session) }
+    }
+}
+
 # 结束被占用文件的持有者进程，供「自动关闭占用程序后重试」使用。
 #   -LockPaths : 上一轮删除失败的文件路径数组
 #   -WhatIf    : 只报告哪些进程会被结束，不真正 Kill
@@ -701,27 +794,36 @@ function Close-CleanLockOwners {
     # 本工具自身可能以这些名字出现（EXE / 脚本 / 宿主 shell）
     $blockedNames += 'pc-optimizer','pcopt','optimizegui'
 
-    # 1) 查持有者：Win32_MappedNameFile（CIM；查不到就记 unknown）
+    # 1) 查持有者：Restart Manager 为主，Win32_MappedNameFile 兜底
     $holders = @()
-    $lookupFailed = $false
-    try {
-        foreach ($p in $paths) {
-            $q = $p -replace '[\\]', '\\'
-            $hits = @(Get-CimInstance Win32_MappedNameFile -Filter ("Name LIKE '" + $q + "'") -ErrorAction Stop |
-                      Select-Object -ExpandProperty ProcessId)
-            if ($hits) { $holders += $hits }
-            else { $result.unknown += $p }
+    $rm = Get-FileLockOwnerPids -Paths $paths
+    if ($rm.ok) {
+        $holders = @($rm.pids)
+        if ($holders.Count -eq 0) {
+            # RM 正常运行但没查到持有者：多为内核/系统缓存占用，无用户态进程可关
+            $result.unknown += $paths
         }
-    } catch {
-        $lookupFailed = $true
-        $result.unknown += @($paths | Where-Object { $result.unknown -notcontains $_ })
-        Write-OptLog ("[占用] Win32_MappedNameFile 查询失败：{0}" -f $_.Exception.Message) 'WARN'
-    }
-    $holders = @($holders | Sort-Object -Unique)
-    if ($lookupFailed -and $holders.Count -eq 0) {
-        $result.ok = $false
-        $result.error = '无法查询文件持有者（CIM 不可用或权限不足），请手动关闭占用程序后重试'
-        return $result
+    } else {
+        $lookupFailed = $false
+        try {
+            foreach ($p in $paths) {
+                $q = $p -replace '[\\]', '\\'
+                $hits = @(Get-CimInstance Win32_MappedNameFile -Filter ("Name LIKE '" + $q + "'") -ErrorAction Stop |
+                          Select-Object -ExpandProperty ProcessId)
+                if ($hits) { $holders += $hits }
+                else { $result.unknown += $p }
+            }
+        } catch {
+            $lookupFailed = $true
+            $result.unknown += @($paths | Where-Object { $result.unknown -notcontains $_ })
+            Write-OptLog ("[占用] Win32_MappedNameFile 查询失败：{0}" -f $_.Exception.Message) 'WARN'
+        }
+        $holders = @($holders | Sort-Object -Unique)
+        if ($lookupFailed -and $holders.Count -eq 0) {
+            $result.ok = $false
+            $result.error = '无法查询文件持有者（Restart Manager 与 CIM 均不可用），请手动关闭占用程序后重试'
+            return $result
+        }
     }
 
     # 2) 解析进程 + 安全校验
@@ -5292,4 +5394,311 @@ function Format-OptimizePlan {
         $lines += ("       影响  : {0}（风险 {1}）" -f $s.impact, $s.risk)
     }
     return $lines
+}
+
+# ============================================================
+#  C 盘程序迁移到 D 盘（robocopy + NTFS 目录联接 junction）
+#  原路径（如 C:\Program Files\Foo）保持不变，访问时透明重定向到 D 盘副本；
+#  注册表、快捷方式、卸载信息均无需改动，C 盘空间立即释放。
+#  安全策略：拒绝 C:\ / C:\Windows / C:\ProgramData / C:\Users 及子关键目录；
+#  拒绝当前正在运行的程序目录；robocopy 失败则不删源、不建联接。
+# ============================================================
+function Get-MigratablePrograms {
+    param([string]$Root1 = "C:\Program Files", [string]$Root2 = "C:\Program Files (x86)")
+    $blockedNames = @("windows","programdata","users")
+    $results = @()
+    # 进程列表只取一次（此前每个目录都重新 Get-Process，几十个目录时扫描明显变慢）
+    $running = @()
+    try { $running = @(Get-Process -ErrorAction SilentlyContinue | ForEach-Object { ([string]$_.ProcessName).ToLower() } | Sort-Object -Unique) } catch {}
+    foreach ($root in @($Root1, $Root2)) {
+        if (-not (Test-Path $root -PathType Container)) { continue }
+        try {
+            $dirs = @(Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue)
+        } catch { continue }
+        foreach ($d in $dirs) {
+            # 已迁移的目录联接（重解析点）不再列为可迁移，由 Get-MigratedPrograms 负责列出/还原
+            if ($d.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { continue }
+            $name = $d.Name
+            $low = $name.ToLower()
+            if ($blockedNames -contains $low) { continue }
+            # 迁移/还原过程中的临时目录（改名备份、还原暂存）不是程序，不列出
+            if ($low -match '\.pcopt-(old|restore)$') { continue }
+            # 跳过当前正在运行的程序目录（进程名匹配）
+            if ($running -contains $low) { continue }
+            # 计算目录大小
+            $size = 0
+            try {
+                $sum = @(Get-ChildItem -Path $d.FullName -File -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
+                if ($null -ne $sum) { $size = [double]$sum }
+            } catch {}
+            if ($size -le 0) { continue }
+            $results += [PSCustomObject]@{
+                Name   = $name
+                Path   = $d.FullName
+                SizeMB = [math]::Round($size / 1MB, 2)
+                SizeGB = [math]::Round($size / 1GB, 2)
+            }
+        }
+    }
+    return @($results | Sort-Object SizeMB -Descending)
+}
+
+# 迁移失败回滚用：删除目标盘上的半成品副本。
+# 安全护栏：只删父目录名为 "Program Files Migrated" 的路径，其它路径一律拒绝，防止误删。
+function Remove-MigrationCopy {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+    try {
+        $full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+        $parent = [System.IO.Path]::GetFileName([System.IO.Path]::GetDirectoryName($full))
+        if ($parent -ne 'Program Files Migrated') {
+            Write-OptLog ("[迁移] 拒绝回滚删除非迁移目录：{0}" -f $full) 'WARN'
+            return
+        }
+        if (Test-Path -LiteralPath $full) {
+            cmd /c "rmdir /s /q `"$full`"" 2>&1 | Out-Null
+        }
+    } catch {
+        Write-OptLog ("[迁移] 回滚删除副本失败 {0}: {1}" -f $Path, $_.Exception.Message) 'WARN'
+    }
+}
+
+function Move-ProgramToDrive {
+    param(
+        [string]$SourcePath,
+        [string]$TargetDrive = "D:",
+        [switch]$WhatIf,
+        [switch]$Confirm
+    )
+    $result = [PSCustomObject]@{
+        ok       = $false
+        moved    = $false
+        skipped  = $false
+        reason   = $null
+        error    = $null
+        junction = $null
+        freedMB  = 0
+        leftover = $null
+    }
+    if (-not (Test-Path $SourcePath -PathType Container)) {
+        $result.reason = "源路径不存在"; return $result
+    }
+    # 安全：拒绝系统关键目录（完整路径前缀匹配，不拦 C:\Program Files*）
+    $srcLower = ([System.IO.Path]::GetFullPath($SourcePath)).TrimEnd('\').ToLower()
+    $blockedPrefixes = @("c:\windows","c:\programdata","c:\users")
+    foreach ($bp in $blockedPrefixes) {
+        if ($srcLower -eq $bp -or $srcLower.StartsWith($bp + '\')) {
+        $result.skipped = $true
+        $result.reason = "系统关键目录，拒绝迁移"
+        return $result
+        }
+    }
+    # 拒绝正在运行的程序目录
+    $dirNameLower = [System.IO.Path]::GetFileName($SourcePath).ToLower()
+    try {
+        $running = @(Get-Process | Select-Object -ExpandProperty ProcessName -Unique -ErrorAction SilentlyContinue | ForEach-Object { $_.ToLower() })
+        if ($running -contains $dirNameLower) {
+            $result.skipped = $true
+            $result.reason = "程序正在运行，拒绝迁移"
+            return $result
+        }
+    } catch {}
+    # 目标盘符必须存在
+    if (-not (Test-Path $TargetDrive)) {
+        $result.reason = "目标盘符 $TargetDrive 不存在"; return $result
+    }
+    $targetRoot = Join-Path $TargetDrive "Program Files Migrated"
+    $junctionTarget = Join-Path $targetRoot ([System.IO.Path]::GetFileName($SourcePath))
+    if (Test-Path $junctionTarget) {
+        $result.reason = "目标已存在同名迁移项：$junctionTarget"; return $result
+    }
+    # 计算源目录大小（用于报告释放空间）
+    $size = 0
+    try {
+        $sum = @(Get-ChildItem -Path $SourcePath -File -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
+        if ($null -ne $sum) { $size = [double]$sum }
+    } catch {}
+
+    if (-not $WhatIf) {
+        # 0) 目标盘剩余空间检查（留 10% + 200MB 余量）；只在真正执行时检查，预演不受影响
+        try {
+            $drv = New-Object System.IO.DriveInfo($TargetDrive.TrimEnd('\'))
+            $needBytes = [double]$size * 1.1 + 200MB
+            if ($drv.AvailableFreeSpace -lt $needBytes) {
+                $result.reason = ("{0} 剩余空间不足：需要约 {1} MB，可用 {2} MB" -f $TargetDrive, [math]::Round($needBytes / 1MB), [math]::Round($drv.AvailableFreeSpace / 1MB))
+                return $result
+            }
+        } catch {}
+        # 1) robocopy 复制到 D 盘副本。退出码必须取 $LASTEXITCODE（& robocopy 的返回值是输出文本），
+        #    0-7 成功、>=8 失败。/COPY:DAT 不带审核信息（/COPYALL 需「管理审核」特权，常整体失败）；
+        #    /XJ 不跟随源目录内的联接，避免循环复制。
+        & robocopy $SourcePath $junctionTarget /E /COPY:DAT /DCOPY:DAT /XJ /R:2 /W:2 /NP /NDL /NFL /NJH /NJS 2>&1 | Out-Null
+        $rc = $LASTEXITCODE
+        if ($rc -ge 8) {
+            Remove-MigrationCopy -Path $junctionTarget
+            $result.error = "复制到 $TargetDrive 失败（robocopy 退出码 $rc），C 盘原目录未改动"
+            return $result
+        }
+        # 2) 原目录先改名而不是直接删：有文件被占用时改名会整体失败，原目录完好无损；
+        #    此前直接 Remove-Item -Recurse，删到一半失败会把程序弄坏。
+        $backupPath = $SourcePath.TrimEnd('\') + '.pcopt-old'
+        try {
+            [System.IO.Directory]::Move($SourcePath, $backupPath)
+        } catch {
+            Remove-MigrationCopy -Path $junctionTarget
+            $result.error = "原目录有文件被占用，未迁移（请先退出该程序再试）：$($_.Exception.Message)"
+            return $result
+        }
+        # 3) 建立 NTFS 目录联接：源路径 -> D 盘副本；失败则把原目录改回去
+        $out = cmd /c "mklink /J `"$SourcePath`" `"$junctionTarget`"" 2>&1
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $SourcePath -PathType Container)) {
+            try { [System.IO.Directory]::Move($backupPath, $SourcePath) } catch {}
+            Remove-MigrationCopy -Path $junctionTarget
+            $result.error = "创建目录联接失败，已恢复原目录：$out"
+            return $result
+        }
+        # 4) 删除改名后的旧目录（rmdir /s 不跟随内部联接）；删不干净不影响程序，只记录残留
+        cmd /c "rmdir /s /q `"$backupPath`"" 2>&1 | Out-Null
+        if (Test-Path -LiteralPath $backupPath) {
+            $result.leftover = $backupPath
+            Write-OptLog ("[迁移] 旧目录未删干净，可重启后手动删除：{0}" -f $backupPath) 'WARN'
+        }
+    }
+
+    $result.ok = $true
+    $result.moved = (-not $WhatIf)
+    $result.junction = $junctionTarget
+    $result.freedMB = [math]::Round($size / 1MB, 2)
+    $result.reason = if ($WhatIf) { "预演：将迁移并建立目录联接" } else { "已迁移并建立目录联接" }
+    return $result
+}
+
+# ============================================================
+#  C 盘程序迁移：已迁移项管理（还原用）
+#  Get-MigratedPrograms：列出 D:\Program Files Migrated\ 下已迁移的副本，
+#  并标记 C 盘原路径是否仍为指向它的目录联接。
+#  Restore-MigratedProgram：删除 C 盘目录联接，把 D 盘副本拷回 C 盘原路径，
+#  还原到迁移前的状态。
+# ============================================================
+function Get-MigratedPrograms {
+    param([string]$TargetDrive = "D:")
+    $targetRoot = Join-Path $TargetDrive "Program Files Migrated"
+    if (-not (Test-Path $targetRoot -PathType Container)) { return @() }
+    $items = @()
+    try {
+        $dirs = @(Get-ChildItem -Path $targetRoot -Directory -ErrorAction SilentlyContinue)
+    } catch { return @() }
+    foreach ($d in $dirs) {
+        $name = $d.Name
+        $junctionPath = Join-Path "C:\Program Files" $name
+        $junctionPathX86 = Join-Path "C:\Program Files (x86)" $name
+        $cPath = $null
+        $isJunction = $false
+        foreach ($cand in @($junctionPath, $junctionPathX86)) {
+            if (Test-Path $cand -PathType Container) {
+                try {
+                    $attr = (Get-Item $cand).Attributes
+                    if ($attr -band [System.IO.FileAttributes]::ReparsePoint) {
+                        $cPath = $cand
+                        $isJunction = $true
+                    }
+                } catch {}
+                if ($cPath) { break }
+            }
+        }
+        $size = 0
+        try {
+            $sum = @(Get-ChildItem -Path $d.FullName -File -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
+            if ($null -ne $sum) { $size = [double]$sum }
+        } catch {}
+        $items += [PSCustomObject]@{
+            Name        = $name
+            Junction    = $cPath
+            JunctionTarget = $d.FullName
+            IsJunction  = $isJunction
+            SizeMB      = [math]::Round($size / 1MB, 2)
+            SizeGB      = [math]::Round($size / 1GB, 2)
+        }
+    }
+    return @($items | Sort-Object SizeMB -Descending)
+}
+
+function Restore-MigratedProgram {
+    param([string]$JunctionPath, [string]$TargetDrive = "D:", [switch]$WhatIf, [switch]$Confirm)
+    $result = [PSCustomObject]@{ ok = $false; restored = $false; skipped = $false; reason = $null; error = $null }
+    if (-not (Test-Path $JunctionPath -PathType Container)) {
+        $result.reason = "C 盘路径不存在"; return $result
+    }
+    try {
+        $attr = (Get-Item $JunctionPath).Attributes
+        if (-not ($attr -band [System.IO.FileAttributes]::ReparsePoint)) {
+            $result.skipped = $true
+            $result.reason = "该路径不是目录联接，无法还原"
+            return $result
+        }
+    } catch {
+        $result.reason = "无法读取路径属性：$($_.Exception.Message)"; return $result
+    }
+    # 反解联接指向的 D 盘副本
+    # （此前用 dir /AL <联接>，列出的是联接内部内容而不是联接本身，取不到目标）
+    $junctionTarget = $null
+    try { $junctionTarget = [string](@((Get-Item -LiteralPath $JunctionPath -Force).Target)[0]) } catch {}
+    if (-not [string]::IsNullOrWhiteSpace($junctionTarget)) { $junctionTarget = $junctionTarget -replace '^\\\?\?\\', '' }
+    if ([string]::IsNullOrWhiteSpace($junctionTarget)) {
+        $junctionTarget = Join-Path (Join-Path $TargetDrive "Program Files Migrated") ([System.IO.Path]::GetFileName($JunctionPath))
+    }
+    if (-not $junctionTarget -or -not (Test-Path $junctionTarget -PathType Container)) {
+        $result.reason = "找不到 D 盘迁移副本，无法还原"; return $result
+    }
+    # 拒绝正在运行的程序（避免正在用的目录被拷回/删除）
+    $dirName = [System.IO.Path]::GetFileName($JunctionPath).ToLower()
+    try {
+        $running = @(Get-Process | Select-Object -ExpandProperty ProcessName -Unique -ErrorAction SilentlyContinue | ForEach-Object { $_.ToLower() })
+        if ($running -contains $dirName) {
+            $result.skipped = $true
+            $result.reason = "程序正在运行，拒绝还原"
+            return $result
+        }
+    } catch {}
+    if (-not $WhatIf) {
+        # 顺序：联接还在时先复制到 C 盘临时目录 → 复制成功才删联接 → 临时目录改名为原路径。
+        # 此前先删联接再复制，复制失败时程序路径直接消失。
+        $staging = $JunctionPath.TrimEnd('\') + '.pcopt-restore'
+        try {
+            $size = 0
+            $sum = @(Get-ChildItem -LiteralPath $junctionTarget -File -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+            if ($null -ne $sum) { $size = [double]$sum }
+            $cDrv = New-Object System.IO.DriveInfo(([System.IO.Path]::GetPathRoot($JunctionPath)).TrimEnd('\'))
+            $needBytes = $size * 1.1 + 200MB
+            if ($cDrv.AvailableFreeSpace -lt $needBytes) {
+                $result.reason = ("C 盘剩余空间不足：需要约 {0} MB，可用 {1} MB" -f [math]::Round($needBytes / 1MB), [math]::Round($cDrv.AvailableFreeSpace / 1MB))
+                return $result
+            }
+        } catch {}
+        # 1) 复制 D 盘副本到 C 盘临时目录（$LASTEXITCODE 才是 robocopy 退出码）
+        & robocopy $junctionTarget $staging /E /COPY:DAT /DCOPY:DAT /XJ /R:2 /W:2 /NP /NDL /NFL /NJH /NJS 2>&1 | Out-Null
+        $rc = $LASTEXITCODE
+        if ($rc -ge 8) {
+            cmd /c "rmdir /s /q `"$staging`"" 2>&1 | Out-Null
+            $result.error = "还原复制失败（robocopy 退出码 $rc），目录联接保持不变"; return $result
+        }
+        # 2) 删除 C 盘目录联接：rmdir 不带 /s 只删联接本身，不碰 D 盘副本
+        cmd /c "rmdir `"$JunctionPath`"" 2>&1 | Out-Null
+        if (Test-Path -LiteralPath $JunctionPath) {
+            cmd /c "rmdir /s /q `"$staging`"" 2>&1 | Out-Null
+            $result.error = "删除目录联接失败，目录联接保持不变"; return $result
+        }
+        # 3) 临时目录改名为原路径；失败则重建联接，保证程序路径始终可用
+        try {
+            [System.IO.Directory]::Move($staging, $JunctionPath)
+        } catch {
+            cmd /c "mklink /J `"$JunctionPath`" `"$junctionTarget`"" 2>&1 | Out-Null
+            $result.error = "还原改名失败，已重建目录联接：$($_.Exception.Message)"; return $result
+        }
+        # 4) 可选：删除 D 盘副本（释放 D 盘空间）。此处保留副本，由用户手动删除，更安全。
+    }
+    $result.ok = $true
+    $result.restored = (-not $WhatIf)
+    $result.reason = if ($WhatIf) { "预演：将删除联接并把 D 盘副本拷回 C 盘" } else { "已还原：删除联接并把 D 盘副本拷回 C 盘" }
+    return $result
 }

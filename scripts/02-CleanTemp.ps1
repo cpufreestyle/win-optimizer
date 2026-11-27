@@ -22,6 +22,8 @@ Write-Host "============================================" -ForegroundColor Cyan
 $totalFreed = 0
 $filesDeleted = 0
 $filesFailed = 0
+$script:CleanFailedPaths = [System.Collections.Generic.List[string]]::new()
+$script:CleanFailedFolders = @{}
 
 # 复用共享核心库（Get-FolderSize / Remove-FolderContent 等）
 $coreLib = Join-Path $PSScriptRoot "..\lib\Optimize.Core.ps1"
@@ -37,6 +39,13 @@ function Clean-Folder {
     $script:filesDeleted += $r.deleted
     $script:filesFailed += $r.failed
     $script:totalFreed += $r.bytes
+    if ($r.failed -gt 0 -and $r.failedPaths) {
+        foreach ($fp in @($r.failedPaths)) { $script:CleanFailedPaths.Add($fp) | Out-Null }
+        if (-not $script:CleanFailedFolders.ContainsKey($Path)) {
+            $script:CleanFailedFolders[$Path] = @{ label = $Label; failed = 0 }
+        }
+        $script:CleanFailedFolders[$Path].failed += $r.failed
+    }
     $freedMB = [math]::Round($r.bytes / 1MB, 2)
     if ($r.error) {
         Write-Host "  [错误] $Label : $($r.error)" -ForegroundColor Red
@@ -134,6 +143,38 @@ try {
         Write-Host "         如需删除，请运行: 系统设置 -> 存储 -> 临时文件 -> 删除以前版本的 Windows" -ForegroundColor Gray
     }
 } catch {}
+
+# --- 被占用文件：询问是否自动关闭占用程序后重试（与 GUI 清理页同一核心逻辑） ---
+if ($script:CleanFailedPaths.Count -gt 0) {
+    $lockPaths = @($script:CleanFailedPaths | Select-Object -Unique)
+    $probe = Close-CleanLockOwners -LockPaths $lockPaths -WhatIf
+    $willClose = @($probe.closed)
+    if ($willClose.Count -gt 0) {
+        Write-Host ""
+        Write-Host "  检测到 $($lockPaths.Count) 个文件被占用，可关闭以下程序后重试：" -ForegroundColor Yellow
+        Write-Host ("    " + ($willClose -join '、')) -ForegroundColor Yellow
+        $answer = Read-Host "  自动关闭这些程序并重试清理？(Y=是 / N=否)"
+        if ($answer -match '^[Yy]') {
+            $kill = Close-CleanLockOwners -LockPaths $lockPaths -Confirm
+            if (@($kill.closed).Count -gt 0) {
+                Start-Sleep -Milliseconds 1500
+                foreach ($entry in $script:CleanFailedFolders.GetEnumerator()) {
+                    $rres = Remove-FolderContent -Path $entry.Key
+                    $script:filesFailed = [math]::Max(0, $script:filesFailed - $entry.Value.failed + $rres.failed)
+                    $script:filesDeleted += $rres.deleted
+                    $script:totalFreed += $rres.bytes
+                    Write-Host "  [重试] $($entry.Value.label) : 补删 $($rres.deleted) 个，释放 $([math]::Round($rres.bytes / 1MB, 2)) MB，仍失败 $($rres.failed) 个" -ForegroundColor Green
+                }
+            } else {
+                Write-Host ("  [跳过] 占用程序结束失败：" + (@($kill.refused) -join '、')) -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "  [跳过] 用户取消自动关闭占用程序" -ForegroundColor Gray
+        }
+    } else {
+        Write-Host "  [提示] 被占用文件由系统关键程序持有或无主，无法自动关闭，可稍后手动重试" -ForegroundColor Gray
+    }
+}
 
 # --- 总结 ---
 Write-Host ""

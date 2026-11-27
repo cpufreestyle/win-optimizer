@@ -125,4 +125,191 @@
         }
     })
     $page.Controls.Add($script:btnDiskOpt)
+
+    # ==================== C 盘程序迁移到 D 盘 ====================
+    # 上方「开始优化」按钮高 44，标题必须落在按钮底边之下（此前只 +20，标题压住按钮）
+    $yDisk += 64
+    $script:lblMigTitle = New-Label "C 盘程序迁移到 D 盘" 20 $yDisk 760 24 $Fonts.Sub $Theme.Accent
+    $page.Controls.Add($script:lblMigTitle)
+    $yDisk += 26
+    $script:lblMigDesc = New-Label "扫描 C:\Program Files* 下的大型程序，复制到 D 盘并在原位建立目录联接；原路径继续有效、注册表无需改动。" 20 $yDisk 760 24 $Fonts.Small $Theme.TextDim
+    $page.Controls.Add($script:lblMigDesc)
+    $yDisk += 30
+    # 勾选列表：单击即勾选（普通 ListBox 无法多选，也无法「全选」）
+    $script:lstMigratable = New-Object System.Windows.Forms.CheckedListBox
+    $script:lstMigratable.Location = New-Object System.Drawing.Point(20, $yDisk)
+    $script:lstMigratable.Size = New-Object System.Drawing.Size(720, 130)
+    $script:lstMigratable.Font = $Fonts.Body
+    $script:lstMigratable.CheckOnClick = $true
+    $script:lstMigratable.IntegralHeight = $false
+    $script:lstMigratable.HorizontalScrollbar = $true
+    $page.Controls.Add($script:lstMigratable)
+    $yDisk += 140
+
+    # 与列表行一一对应的数据：@{ Kind = 'cand'（可迁移）| 'migrated'（已迁移，可还原）; Data = 扫描对象 }
+    # 迁移/还原直接按勾选行号取对象，不再从显示文字反解程序名
+    # （此前大小带小数如 9798.06 MB，正则只认整数，导致「找不到该程序的扫描信息」）
+    $script:MigItems = @()
+    $script:RefreshMigList = {
+        $items = @()
+        $script:lstMigratable.BeginUpdate()
+        try {
+            $script:lstMigratable.Items.Clear()
+            foreach ($m in @(Get-MigratedPrograms -TargetDrive "D:" | Where-Object { $_.IsJunction })) {
+                $items += [PSCustomObject]@{ Kind = 'migrated'; Data = $m }
+                $script:lstMigratable.Items.Add(("[已迁移] {0}  ({1} MB)  → {2}" -f $m.Name, $m.SizeMB, $m.JunctionTarget)) | Out-Null
+            }
+            foreach ($c in @(Get-MigratablePrograms)) {
+                $items += [PSCustomObject]@{ Kind = 'cand'; Data = $c }
+                $script:lstMigratable.Items.Add(("{0}  ({1} MB)" -f $c.Name, $c.SizeMB)) | Out-Null
+            }
+        } finally {
+            $script:lstMigratable.EndUpdate()
+        }
+        $script:MigItems = $items
+        $script:BtnMigAll.Text = "全选"
+        Write-Log ("[迁移] 扫描完成：可迁移 {0} 个，已迁移 {1} 个" -f @($items | Where-Object { $_.Kind -eq 'cand' }).Count, @($items | Where-Object { $_.Kind -eq 'migrated' }).Count) "INFO"
+    }
+    # 取勾选行中指定类型的扫描对象
+    $script:GetCheckedMig = {
+        param([string]$Kind)
+        foreach ($idx in @($script:lstMigratable.CheckedIndices)) {
+            if ($idx -lt $script:MigItems.Count -and $script:MigItems[$idx].Kind -eq $Kind) { $script:MigItems[$idx].Data }
+        }
+    }
+
+    $script:BtnScanMig = New-Button "扫描可迁移程序" 20 $yDisk 165 44 $Theme.Accent 10
+    $script:BtnScanMig.Add_Click({
+        try {
+            $this.Enabled = $false
+            $this.Text = "扫描中..."
+            Invoke-UIRefresh
+            & $script:RefreshMigList
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show("扫描失败: $($_.Exception.Message)", "错误", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        } finally {
+            $this.Enabled = $true
+            $this.Text = "扫描可迁移程序"
+        }
+    })
+    $page.Controls.Add($script:BtnScanMig)
+
+    $script:BtnMigAll = New-Button "全选" 200 $yDisk 100 44 $Theme.AccentDark 10
+    $script:BtnMigAll.Add_Click({
+        $n = $script:lstMigratable.Items.Count
+        if ($n -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show("列表为空，请先点击「扫描可迁移程序」。", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+            return
+        }
+        # 未全部勾选 → 全选；已全部勾选 → 取消全选
+        $check = ($script:lstMigratable.CheckedIndices.Count -lt $n)
+        for ($i = 0; $i -lt $n; $i++) { $script:lstMigratable.SetItemChecked($i, $check) }
+        $this.Text = if ($check) { "取消全选" } else { "全选" }
+    })
+    $page.Controls.Add($script:BtnMigAll)
+
+    $script:BtnMigrate = New-Button "迁移勾选到 D 盘" 315 $yDisk 180 44 $Theme.Success 10
+    $script:BtnMigrate.Add_Click({
+        $sel = @(& $script:GetCheckedMig 'cand')
+        if ($sel.Count -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show("请先勾选要迁移的程序（「[已迁移]」项只能还原）。", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+            return
+        }
+        $totalMB = [math]::Round([double](@($sel | Measure-Object -Property SizeMB -Sum).Sum), 2)
+        $names = (@($sel | Select-Object -First 10) | ForEach-Object { "· {0}  ({1} MB)" -f $_.Name, $_.SizeMB }) -join "`n"
+        if ($sel.Count -gt 10) { $names += "`n……共 $($sel.Count) 个" }
+        $yes = [System.Windows.Forms.MessageBox]::Show(
+            ("将把以下 {0} 个程序（约 {1} MB）迁移到 D 盘，并在原位置建立目录联接，原路径继续有效：`n{2}`n`n请先退出这些程序。继续吗？" -f $sel.Count, $totalMB, $names),
+            "迁移到 D 盘",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question)
+        if ($yes -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+
+        $btnText = $this.Text
+        $this.Enabled = $false
+        $okCount = 0; $freed = 0; $fails = @(); $leftovers = @()
+        try {
+            for ($k = 0; $k -lt $sel.Count; $k++) {
+                $c = $sel[$k]
+                $this.Text = ("迁移中 {0}/{1}" -f ($k + 1), $sel.Count)
+                Invoke-UIRefresh
+                try {
+                    $r = Move-ProgramToDrive -SourcePath $c.Path -TargetDrive "D:" -Confirm
+                    if ($r.ok -and $r.moved) {
+                        $okCount++
+                        $freed += $r.freedMB
+                        if ($r.leftover) { $leftovers += $r.leftover }
+                        Write-Log ("[迁移] {0} -> {1}，释放约 {2} MB" -f $c.Path, $r.junction, $r.freedMB) "SUCCESS"
+                    } else {
+                        $why = if ($r.error) { $r.error } else { $r.reason }
+                        $fails += ("{0}：{1}" -f $c.Name, $why)
+                        Write-Log ("[迁移] 未迁移 {0}：{1}" -f $c.Path, $why) "WARN"
+                    }
+                } catch {
+                    $fails += ("{0}：{1}" -f $c.Name, $_.Exception.Message)
+                    Write-Log ("[迁移] 迁移出错 {0}：{1}" -f $c.Path, $_.Exception.Message) "ERROR"
+                }
+            }
+        } finally {
+            $this.Text = $btnText
+            $this.Enabled = $true
+        }
+        $msg = "迁移结束：成功 {0} 个，未迁移 {1} 个，C 盘释放约 {2} MB" -f $okCount, $fails.Count, [math]::Round($freed, 2)
+        if ($fails.Count -gt 0) { $msg += "`n`n未迁移：`n" + ((@($fails | Select-Object -First 8)) -join "`n") }
+        if ($leftovers.Count -gt 0) { $msg += "`n`n以下旧目录未删干净，重启后可手动删除：`n" + ($leftovers -join "`n") }
+        $icon = if ($fails.Count -gt 0) { [System.Windows.Forms.MessageBoxIcon]::Warning } else { [System.Windows.Forms.MessageBoxIcon]::Information }
+        [System.Windows.Forms.MessageBox]::Show($msg, "迁移结果", [System.Windows.Forms.MessageBoxButtons]::OK, $icon) | Out-Null
+        try { & $script:RefreshMigList } catch {}
+    })
+    $page.Controls.Add($script:BtnMigrate)
+
+    $script:BtnRestore = New-Button "还原勾选到 C 盘" 510 $yDisk 180 44 $Theme.Warning 10
+    $script:BtnRestore.Add_Click({
+        $sel = @(& $script:GetCheckedMig 'migrated')
+        if ($sel.Count -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show("请先勾选列表中「[已迁移]」开头的项目再还原。", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+            return
+        }
+        $names = (@($sel | Select-Object -First 10) | ForEach-Object { "· {0}  ({1} MB)" -f $_.Name, $_.SizeMB }) -join "`n"
+        $yes = [System.Windows.Forms.MessageBox]::Show(
+            ("将把以下 {0} 个程序从 D 盘拷回 C 盘原路径，复制成功后才删除目录联接（D 盘副本保留，可手动删除）：`n{1}`n`n继续吗？" -f $sel.Count, $names),
+            "还原到 C 盘",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question)
+        if ($yes -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+
+        $btnText = $this.Text
+        $this.Enabled = $false
+        $okCount = 0; $fails = @()
+        try {
+            for ($k = 0; $k -lt $sel.Count; $k++) {
+                $m = $sel[$k]
+                $this.Text = ("还原中 {0}/{1}" -f ($k + 1), $sel.Count)
+                Invoke-UIRefresh
+                try {
+                    $r = Restore-MigratedProgram -JunctionPath $m.Junction -TargetDrive "D:" -Confirm
+                    if ($r.ok -and $r.restored) {
+                        $okCount++
+                        Write-Log ("[迁移] 已还原 {0}" -f $m.Junction) "SUCCESS"
+                    } else {
+                        $why = if ($r.error) { $r.error } else { $r.reason }
+                        $fails += ("{0}：{1}" -f $m.Name, $why)
+                        Write-Log ("[迁移] 未还原 {0}：{1}" -f $m.Junction, $why) "WARN"
+                    }
+                } catch {
+                    $fails += ("{0}：{1}" -f $m.Name, $_.Exception.Message)
+                    Write-Log ("[迁移] 还原出错 {0}：{1}" -f $m.Junction, $_.Exception.Message) "ERROR"
+                }
+            }
+        } finally {
+            $this.Text = $btnText
+            $this.Enabled = $true
+        }
+        $msg = "还原结束：成功 {0} 个，未还原 {1} 个" -f $okCount, $fails.Count
+        if ($fails.Count -gt 0) { $msg += "`n`n未还原：`n" + ((@($fails | Select-Object -First 8)) -join "`n") }
+        $icon = if ($fails.Count -gt 0) { [System.Windows.Forms.MessageBoxIcon]::Warning } else { [System.Windows.Forms.MessageBoxIcon]::Information }
+        [System.Windows.Forms.MessageBox]::Show($msg, "还原结果", [System.Windows.Forms.MessageBoxButtons]::OK, $icon) | Out-Null
+        try { & $script:RefreshMigList } catch {}
+    })
+    $page.Controls.Add($script:BtnRestore)
 }

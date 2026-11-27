@@ -21,5 +21,6 @@ For Each strCand In arrPaths
 Next
 If strPs = "" Then strPs = "powershell.exe"
 
-strArgs = "-NoProfile -ExecutionPolicy Bypass -File " & Chr(34) & strDir & "\OptimizeGUI.ps1" & Chr(34)
-objShell.ShellExecute strPs, strArgs, strDir, "", 1
+' Hide the pwsh console window: the GUI is the only window the user should see.
+strArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File " & Chr(34) & strDir & "\OptimizeGUI.ps1" & Chr(34)
+objShell.ShellExecute strPs, strArgs, strDir, "", 0
