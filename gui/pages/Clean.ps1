@@ -190,7 +190,8 @@
                     "自动关闭占用程序",
                     [System.Windows.Forms.MessageBoxButtons]::YesNo,
                     [System.Windows.Forms.MessageBoxIcon]::Question)
-                if ($yes -eq [System.Windows.Forms.MessageBoxResult]::Yes) {
+                # WinForms 的 MessageBox 返回 DialogResult（MessageBoxResult 是 WPF 类型，WinForms 下不存在）
+                if ($yes -eq [System.Windows.Forms.DialogResult]::Yes) {
                     $kill = Close-CleanLockOwners -LockPaths $lockPaths -Confirm
                     if (@($kill.closed).Count -gt 0) {
                         Start-Sleep -Milliseconds 1500

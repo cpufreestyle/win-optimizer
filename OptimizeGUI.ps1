@@ -745,11 +745,37 @@ if ($args) {
 if ($script:HeadlessRender) { $env:PCOPT_HEADLESS_RENDER = "1" }
 if ($script:RenderOutDir) { $env:PCOPT_RENDER_OUT = $script:RenderOutDir }
 
+# 隐藏宿主控制台黑窗口（pwsh 托管 GUI 时会多出一个空白控制台，关掉它 GUI 也会退出）。
+# 只在控制台仅属于本进程时隐藏（GetConsoleProcessList <= 1）：
+# 从已有终端里手动运行 .\OptimizeGUI.ps1 时控制台还属于父 shell，不动用户的终端。
+if (-not $script:HeadlessRender) {
+    try {
+        if (-not ("PCOpt.ConsoleNative" -as [type])) {
+            Add-Type -Namespace PCOpt -Name ConsoleNative -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern System.IntPtr GetConsoleWindow();
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern uint GetConsoleProcessList(uint[] processList, uint processCount);
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
+'@ -ErrorAction Stop
+        }
+        $hCon = [PCOpt.ConsoleNative]::GetConsoleWindow()
+        if ($hCon -ne [System.IntPtr]::Zero) {
+            $conProcs = New-Object 'uint32[]' 8
+            $conCount = [PCOpt.ConsoleNative]::GetConsoleProcessList($conProcs, 8)
+            if ($conCount -le 1) { [void][PCOpt.ConsoleNative]::ShowWindow($hCon, 0) }
+        }
+    } catch { }
+}
+
 if (-not (Test-Administrator) -and -not $script:HeadlessRender) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = 'pwsh.exe'
     if (-not (Get-Command pwsh.exe -ErrorAction SilentlyContinue)) { $psi.FileName = 'powershell.exe' }
-    $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $MyInvocation.MyCommand.Path + '"'
+    # 提权重启同样隐藏控制台，否则管理员 pwsh 会留下一个空白黑窗口
+    $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $MyInvocation.MyCommand.Path + '"'
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
     $psi.Verb = 'RunAs'
     $psi.WorkingDirectory = $script:ProjectRoot
     $psi.UseShellExecute = $true

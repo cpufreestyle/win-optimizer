@@ -456,6 +456,7 @@ Describe 'Optimize.Core clean lock-owners (auto-close owners of stuck files)' {
     }
 
     It 'Close-CleanLockOwners refuses to kill anything without -Confirm' {
+        Mock Get-FileLockOwnerPids { @{ ok = $false; pids = @() } }
         Mock Get-CimInstance { [PSCustomObject]@{ ProcessId = 123 } }
         Mock Get-Process { [PSCustomObject]@{ Id = 123; ProcessName = 'notepad' } }
         $r = Close-CleanLockOwners -LockPaths @('C:\temp\a.txt')
@@ -466,6 +467,7 @@ Describe 'Optimize.Core clean lock-owners (auto-close owners of stuck files)' {
     }
 
     It 'Close-CleanLockOwners -WhatIf previews owners without killing' {
+        Mock Get-FileLockOwnerPids { @{ ok = $false; pids = @() } }
         Mock Get-CimInstance { [PSCustomObject]@{ ProcessId = 123 } }
         Mock Get-Process { [PSCustomObject]@{ Id = 123; ProcessName = 'notepad' } }
         $r = Close-CleanLockOwners -LockPaths @('C:\temp\a.txt') -WhatIf
@@ -475,6 +477,7 @@ Describe 'Optimize.Core clean lock-owners (auto-close owners of stuck files)' {
     }
 
     It 'Close-CleanLockOwners refuses system-protected process names' {
+        Mock Get-FileLockOwnerPids { @{ ok = $false; pids = @() } }
         Mock Get-CimInstance { [PSCustomObject]@{ ProcessId = 456 } }
         Mock Get-Process { [PSCustomObject]@{ Id = 456; ProcessName = 'explorer' } }
         $r = Close-CleanLockOwners -LockPaths @('C:\temp\a.txt') -WhatIf
@@ -484,6 +487,7 @@ Describe 'Optimize.Core clean lock-owners (auto-close owners of stuck files)' {
     }
 
     It 'Close-CleanLockOwners never kills the host tool itself' {
+        Mock Get-FileLockOwnerPids { @{ ok = $false; pids = @() } }
         Mock Get-CimInstance { [PSCustomObject]@{ ProcessId = $PID } }
         Mock Get-Process { [PSCustomObject]@{ Id = $PID; ProcessName = 'pc-self' } }
         $r = Close-CleanLockOwners -LockPaths @('C:\temp\a.txt') -WhatIf
@@ -492,6 +496,7 @@ Describe 'Optimize.Core clean lock-owners (auto-close owners of stuck files)' {
     }
 
     It 'Close-CleanLockOwners isolates per-process failures instead of aborting' {
+        Mock Get-FileLockOwnerPids { @{ ok = $false; pids = @() } }
         Mock Get-CimInstance {
             [PSCustomObject]@{ ProcessId = 111 }, [PSCustomObject]@{ ProcessId = 222 }
         }
@@ -514,11 +519,48 @@ Describe 'Optimize.Core clean lock-owners (auto-close owners of stuck files)' {
     It 'a dead holder process is reported, not fatal' {
         $sp = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','exit 0' -PassThru
         Start-Sleep -Milliseconds 400
+        Mock Get-FileLockOwnerPids { @{ ok = $false; pids = @() } }
         Mock Get-CimInstance { [PSCustomObject]@{ ProcessId = $sp.Id } }
         $r = Close-CleanLockOwners -LockPaths @('C:\temp\a.txt') -WhatIf
         $r.ok | Should -BeTrue
         @($r.unknown) | Should -Match 'PID'
         @($r.closed).Count | Should -Be 0
+    }
+
+    It 'Get-FileLockOwnerPids finds the real holder of a locked file via Restart Manager' {
+        $tmp = Join-Path $env:TEMP ('rmlock_' + (New-Guid).ToString('N'))
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        $f = Join-Path $tmp 'locked.txt'
+        Set-Content -Path $f -Value 'x' -NoNewline
+        $lock = [System.IO.File]::Open($f, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        try {
+            $r = Get-FileLockOwnerPids -Paths @($f)
+            $r.ok | Should -BeTrue
+            @($r.pids) | Should -Contain $PID
+        } finally {
+            $lock.Dispose()
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Close-CleanLockOwners uses Restart Manager results without touching CIM' {
+        Mock Get-FileLockOwnerPids { @{ ok = $true; pids = @(123) } }
+        Mock Get-CimInstance { throw 'CIM must not be used when Restart Manager works' }
+        Mock Get-Process { [PSCustomObject]@{ Id = 123; ProcessName = 'notepad' } }
+        $r = Close-CleanLockOwners -LockPaths @('C:\temp\a.txt') -WhatIf
+        $r.ok | Should -BeTrue
+        @($r.closed) | Should -Contain 'notepad'
+        Assert-MockCalled -CommandName 'Get-CimInstance' -Times 0 -Scope It
+    }
+
+    It 'Close-CleanLockOwners reports unknown paths when Restart Manager finds no holder' {
+        Mock Get-FileLockOwnerPids { @{ ok = $true; pids = @() } }
+        Mock Get-CimInstance { throw 'CIM must not be used when Restart Manager works' }
+        $r = Close-CleanLockOwners -LockPaths @('C:\temp\a.txt') -WhatIf
+        $r.ok | Should -BeTrue
+        @($r.unknown) | Should -Contain 'C:\temp\a.txt'
+        @($r.closed).Count | Should -Be 0
+        $r.retryNeeded | Should -BeFalse
     }
 }
 
@@ -4277,6 +4319,16 @@ Describe 'Launcher encoding and newline hygiene (desktop double-click path)' {
         $text | Should -Match 'ShellExecute'
         $text | Should -Not -Match 'runas'
         $text | Should -Match 'pwsh\.exe'
+        # 不留空白控制台黑窗口：启动参数隐藏窗口，且 ShellExecute 显示方式为 0（SW_HIDE）
+        $text | Should -Match '-WindowStyle Hidden'
+        $text | Should -Match 'ShellExecute\s+strPs,\s*strArgs,\s*strDir,\s*"",\s*0'
+    }
+
+    It 'OptimizeGUI.ps1 hides its own console window and relaunches elevated hidden' {
+        $gui = [System.IO.File]::ReadAllText((Join-Path $script:RepoRoot 'OptimizeGUI.ps1'))
+        $gui | Should -Match 'GetConsoleWindow'
+        $gui | Should -Match 'GetConsoleProcessList'
+        $gui | Should -Match "ProcessWindowStyle\]::Hidden"
     }
 
     It 'the GUI shortcut is wired to wscript + StartGUI.vbs, falling back to the EXE' {
@@ -4528,5 +4580,80 @@ Describe 'CLI menu simple / advanced modes (Optimize.ps1 Show-Menu)' {
         $names | Should -Contain 'Advanced'
         $script:MenuText | Should -Match 'Get-CliMenuMode'
         $script:MenuText | Should -Match 'Set-CliMenuMode'
+    }
+}
+
+Describe 'Optimize.Core program migration to D drive' {
+    BeforeAll {
+        . (Join-Path $PWD.Path 'lib\Optimize.Core.ps1')
+    }
+
+    It 'Get-MigratablePrograms returns candidates with valid fields' {
+        $cands = Get-MigratablePrograms
+        foreach ($c in $cands) {
+            $c.Name | Should -Not -BeNullOrEmpty
+            $c.Path | Should -Match '^C:\\'
+                ($c.SizeMB -ge 0) | Should -BeTrue
+        }
+    }
+
+    It 'Get-MigratablePrograms excludes system-critical directories' {
+        $cands = Get-MigratablePrograms
+        $paths = @($cands.Path | ForEach-Object { ([System.IO.Path]::GetFullPath($_)).TrimEnd('\').ToLower() })
+        foreach ($p in $paths) {
+            $p -in @('c:\windows','c:\programdata','c:\users') | Should -BeFalse
+            $p.StartsWith('c:\windows\') | Should -BeFalse
+            $p.StartsWith('c:\programdata\') | Should -BeFalse
+            $p.StartsWith('c:\users\') | Should -BeFalse
+        }
+    }
+
+    It 'Move-ProgramToDrive rejects non-existent source' {
+        $r = Move-ProgramToDrive -SourcePath 'C:\NotExistXxxYyyZzz' -TargetDrive 'D:' -WhatIf
+        $r.ok | Should -BeFalse
+        $r.reason | Should -Be '源路径不存在'
+    }
+
+    It 'Move-ProgramToDrive rejects system-critical directory' {
+        $r = Move-ProgramToDrive -SourcePath 'C:\Windows' -TargetDrive 'D:' -WhatIf
+        $r.skipped | Should -BeTrue
+        $r.reason | Should -Be '系统关键目录，拒绝迁移'
+    }
+
+    It 'Move-ProgramToDrive rejects missing target drive' {
+        $r = Move-ProgramToDrive -SourcePath 'C:\Program Files\dummy' -TargetDrive 'Z:' -WhatIf
+        $r.ok | Should -BeFalse
+        $r.reason | Should -Match '不存在'
+    }
+
+    It 'Move-ProgramToDrive -WhatIf previews without touching the disk' {
+        $cands = Get-MigratablePrograms
+        $target = $cands | Select-Object -First 1
+        if ($target) {
+            $r = Move-ProgramToDrive -SourcePath $target.Path -TargetDrive 'D:' -WhatIf
+            $r.ok | Should -BeTrue
+            $r.moved | Should -BeFalse
+            $r.skipped | Should -BeFalse
+            $r.reason | Should -Match '预演'
+        }
+    }
+}
+
+Describe 'Optimize.ps1 exposes M menu item for program migration' {
+    BeforeAll {
+        $cliPath = Join-Path $PWD.Path 'Optimize.ps1'
+        $cliErrors = $null
+        [void][System.Management.Automation.Language.Parser]::ParseFile($cliPath, [ref]$null, [ref]$cliErrors)
+        $script:CliErrors = @($cliErrors)
+        $menuAst = [System.Management.Automation.Language.Parser]::ParseFile($cliPath, [ref]$null, [ref]$cliErrors)
+        $script:MenuAst = @($menuAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.CommandElements[0].Value -eq 'Show-Menu' }, $true))
+        $script:MenuText = Get-Content -LiteralPath $cliPath -Raw
+    }
+
+    It 'Optimize.ps1 parses cleanly and registers the M item' {
+        Test-Path -LiteralPath (Join-Path $PWD.Path 'Optimize.ps1') | Should -BeTrue
+        @($script:CliErrors).Count | Should -Be 0
+        $script:MenuText | Should -Match '17-MigratePrograms.ps1'
+        $script:MenuText | Should -Match 'C 盘程序迁移到 D 盘'
     }
 }

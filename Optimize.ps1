@@ -145,6 +145,7 @@ function Show-Menu {
             Write-Host "   [9]  一键全面优化         — 执行所有优化（有经验再用）"
             Write-Host "   [15] 一键体检（只读）     — 先看电脑状况，不改任何设置"
             Write-Host "   [16] 优化组合包           — 老机均衡/游戏/省电/最小化，一键到位"
+            Write-Host "   [M]  C 盘程序迁移到 D 盘   — 迁移大型程序并建立目录联接，释放 C 盘空间" -ForegroundColor Green
             Write-Host ""
             Write-Host "   [P]  优化预览（只读）     — 先看全面优化会改什么" -ForegroundColor Cyan
             Write-Host "   [B]/[R] 备份 / 恢复系统设置"
@@ -173,6 +174,7 @@ function Show-Menu {
             Write-Host "   [14] 恢复自动更新         — 恢复 Windows Update 服务与计划任务"
             Write-Host "   [15] 一键体检（只读）     — 体检分 + 问题清单，可优化前后对比"
             Write-Host "   [16] 优化组合包           — 老机均衡/游戏/省电/最小化预，一键到位"
+            Write-Host "   [M]  C 盘程序迁移到 D 盘   — 迁移大型程序并建立目录联接，释放 C 盘空间" -ForegroundColor Green
             Write-Host ""
             Write-Host " [工具]" -ForegroundColor Yellow
             Write-Host "   [B]  备份当前系统设置"
@@ -203,6 +205,7 @@ function Show-Menu {
             "9"  { Invoke-FullOptimization }
             "15" { Invoke-ScriptModule "15-HealthCheck.ps1" }
             "16" { Invoke-ScriptModule "16-Profiles.ps1" }
+            "M"  { Invoke-ScriptModule "17-MigratePrograms.ps1" }
             "B"  { Invoke-ScriptModule "09-BackupRestore.ps1" }
             "R"  { Invoke-ScriptModule "09-BackupRestore.ps1" }
             "P"  { Show-OptimizePlanPreview }
